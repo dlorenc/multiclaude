@@ -62,3 +62,31 @@ jobs:
 
       - name: Run e2e tests
         run: go test -v ./test/...
+
+  verify-generated-docs:
+    name: Verify Generated Docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Regenerate docs
+        run: go generate ./pkg/config/...
+
+      - name: Check for uncommitted changes
+        run: |
+          if ! git diff --quiet docs/DIRECTORY_STRUCTURE.md; then
+            echo "Error: docs/DIRECTORY_STRUCTURE.md is out of date!"
+            echo "Run 'go generate ./pkg/config/...' and commit the changes."
+            echo ""
+            echo "Diff:"
+            git diff docs/DIRECTORY_STRUCTURE.md
+            exit 1
+          fi
+          echo "Generated docs are up to date."

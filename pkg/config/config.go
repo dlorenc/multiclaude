@@ -1,3 +1,5 @@
+//go:generate go run ../../cmd/generate-docs
+
 package config
 
 import (
