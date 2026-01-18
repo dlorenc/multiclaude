@@ -9,6 +9,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
+	"github.com/dlorenc/multiclaude/internal/tmux"
 	"github.com/dlorenc/multiclaude/pkg/config"
 )
 
@@ -795,4 +796,449 @@ func TestWorkspaceAgentExcludedFromWakeLoop(t *testing.T) {
 
 	// Worker agent's LastNudge WOULD be updated if tmux succeeded, but since we don't have tmux,
 	// we can only verify the workspace was skipped (verified above)
+}
+
+func TestHealthCheckLoopWithRealTmux(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a real tmux session
+	sessionName := "mc-test-healthcheck"
+	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(sessionName)
+
+	// Create a window for the agent
+	if err := tmuxClient.CreateWindow(sessionName, "test-agent"); err != nil {
+		t.Fatalf("Failed to create window: %v", err)
+	}
+
+	// Add repo and agent
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	agent := state.Agent{
+		Type:       state.AgentTypeWorker,
+		TmuxWindow: "test-agent",
+		CreatedAt:  time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "test-agent", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	// Run health check - agent should survive (window exists)
+	d.TriggerHealthCheck()
+
+	// Verify agent still exists
+	_, exists := d.state.GetAgent("test-repo", "test-agent")
+	if !exists {
+		t.Error("Agent should still exist - window is valid")
+	}
+
+	// Kill the window
+	if err := tmuxClient.KillWindow(sessionName, "test-agent"); err != nil {
+		t.Fatalf("Failed to kill window: %v", err)
+	}
+
+	// Run health check again - agent should be cleaned up (window gone)
+	d.TriggerHealthCheck()
+
+	// Verify agent is removed
+	_, exists = d.state.GetAgent("test-repo", "test-agent")
+	if exists {
+		t.Error("Agent should be removed - window is gone")
+	}
+}
+
+func TestHealthCheckCleansUpMarkedAgents(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a real tmux session
+	sessionName := "mc-test-cleanup"
+	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(sessionName)
+
+	// Create a window for the agent
+	if err := tmuxClient.CreateWindow(sessionName, "to-cleanup"); err != nil {
+		t.Fatalf("Failed to create window: %v", err)
+	}
+
+	// Add repo and agent marked for cleanup
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	agent := state.Agent{
+		Type:            state.AgentTypeWorker,
+		TmuxWindow:      "to-cleanup",
+		CreatedAt:       time.Now(),
+		ReadyForCleanup: true, // Mark for cleanup
+	}
+	if err := d.state.AddAgent("test-repo", "to-cleanup", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	// Verify agent exists
+	_, exists := d.state.GetAgent("test-repo", "to-cleanup")
+	if !exists {
+		t.Fatal("Agent should exist before cleanup")
+	}
+
+	// Run health check - agent marked for cleanup should be removed
+	d.TriggerHealthCheck()
+
+	// Verify agent is removed (even though window existed, it was marked for cleanup)
+	_, exists = d.state.GetAgent("test-repo", "to-cleanup")
+	if exists {
+		t.Error("Agent marked for cleanup should be removed")
+	}
+
+	// Verify window is killed
+	hasWindow, _ := tmuxClient.HasWindow(sessionName, "to-cleanup")
+	if hasWindow {
+		t.Error("Window should be killed when agent is cleaned up")
+	}
+}
+
+func TestMessageRoutingWithRealTmux(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a real tmux session
+	sessionName := "mc-test-routing"
+	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(sessionName)
+
+	// Create windows for agents
+	if err := tmuxClient.CreateWindow(sessionName, "supervisor"); err != nil {
+		t.Fatalf("Failed to create supervisor window: %v", err)
+	}
+	if err := tmuxClient.CreateWindow(sessionName, "worker1"); err != nil {
+		t.Fatalf("Failed to create worker window: %v", err)
+	}
+
+	// Add repo and agents
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	supervisor := state.Agent{
+		Type:       state.AgentTypeSupervisor,
+		TmuxWindow: "supervisor",
+		CreatedAt:  time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "supervisor", supervisor); err != nil {
+		t.Fatalf("Failed to add supervisor: %v", err)
+	}
+
+	worker := state.Agent{
+		Type:       state.AgentTypeWorker,
+		TmuxWindow: "worker1",
+		Task:       "Test task",
+		CreatedAt:  time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "worker1", worker); err != nil {
+		t.Fatalf("Failed to add worker: %v", err)
+	}
+
+	// Create a message
+	msgMgr := messages.NewManager(d.paths.MessagesDir)
+	msg, err := msgMgr.Send("test-repo", "supervisor", "worker1", "Hello worker!")
+	if err != nil {
+		t.Fatalf("Failed to send message: %v", err)
+	}
+
+	// Verify message is pending
+	if msg.Status != messages.StatusPending {
+		t.Errorf("Message status = %s, want pending", msg.Status)
+	}
+
+	// Trigger message routing
+	d.TriggerMessageRouting()
+
+	// Verify message is now delivered
+	updatedMsg, err := msgMgr.Get("test-repo", "worker1", msg.ID)
+	if err != nil {
+		t.Fatalf("Failed to get message: %v", err)
+	}
+	if updatedMsg.Status != messages.StatusDelivered {
+		t.Errorf("Message status = %s, want delivered", updatedMsg.Status)
+	}
+}
+
+func TestWakeLoopUpdatesNudgeTime(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a real tmux session
+	sessionName := "mc-test-wake"
+	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(sessionName)
+
+	// Create window for agent
+	if err := tmuxClient.CreateWindow(sessionName, "supervisor"); err != nil {
+		t.Fatalf("Failed to create supervisor window: %v", err)
+	}
+
+	// Add repo and agent with zero LastNudge
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	agent := state.Agent{
+		Type:       state.AgentTypeSupervisor,
+		TmuxWindow: "supervisor",
+		CreatedAt:  time.Now(),
+		LastNudge:  time.Time{}, // Zero time - never nudged
+	}
+	if err := d.state.AddAgent("test-repo", "supervisor", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	// Trigger wake
+	beforeWake := time.Now()
+	d.TriggerWake()
+	afterWake := time.Now()
+
+	// Verify LastNudge was updated
+	updatedAgent, exists := d.state.GetAgent("test-repo", "supervisor")
+	if !exists {
+		t.Fatal("Agent should exist")
+	}
+	if updatedAgent.LastNudge.IsZero() {
+		t.Error("LastNudge should be updated after wake")
+	}
+	if updatedAgent.LastNudge.Before(beforeWake) || updatedAgent.LastNudge.After(afterWake) {
+		t.Error("LastNudge should be set to current time")
+	}
+}
+
+func TestWakeLoopSkipsRecentlyNudgedAgents(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a real tmux session
+	sessionName := "mc-test-wake-skip"
+	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(sessionName)
+
+	// Create window for agent
+	if err := tmuxClient.CreateWindow(sessionName, "worker"); err != nil {
+		t.Fatalf("Failed to create worker window: %v", err)
+	}
+
+	// Add repo and agent with recent LastNudge
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	recentNudge := time.Now().Add(-30 * time.Second) // Nudged 30 seconds ago
+	agent := state.Agent{
+		Type:       state.AgentTypeWorker,
+		TmuxWindow: "worker",
+		Task:       "Test task",
+		CreatedAt:  time.Now(),
+		LastNudge:  recentNudge,
+	}
+	if err := d.state.AddAgent("test-repo", "worker", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	// Trigger wake
+	d.TriggerWake()
+
+	// Verify LastNudge was NOT updated (too recent)
+	updatedAgent, _ := d.state.GetAgent("test-repo", "worker")
+	if !updatedAgent.LastNudge.Equal(recentNudge) {
+		t.Error("LastNudge should NOT be updated for recently nudged agent")
+	}
+}
+
+func TestHealthCheckWithMissingSession(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add repo with non-existent tmux session
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "nonexistent-session-12345",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Add agent
+	agent := state.Agent{
+		Type:       state.AgentTypeWorker,
+		TmuxWindow: "test-window",
+		CreatedAt:  time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "test-agent", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	// Verify agent exists
+	_, exists := d.state.GetAgent("test-repo", "test-agent")
+	if !exists {
+		t.Fatal("Agent should exist before health check")
+	}
+
+	// Run health check - all agents should be cleaned up since session doesn't exist
+	d.TriggerHealthCheck()
+
+	// Verify agent is removed
+	_, exists = d.state.GetAgent("test-repo", "test-agent")
+	if exists {
+		t.Error("Agent should be removed when session doesn't exist")
+	}
+}
+
+func TestDaemonStartStop(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Start daemon
+	if err := d.Start(); err != nil {
+		t.Fatalf("Failed to start daemon: %v", err)
+	}
+
+	// Give it a moment to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify we can communicate via socket
+	client := socket.NewClient(d.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{Command: "ping"})
+	if err != nil {
+		t.Fatalf("Failed to ping daemon: %v", err)
+	}
+	if !resp.Success || resp.Data != "pong" {
+		t.Error("Ping should return pong")
+	}
+
+	// Stop daemon
+	if err := d.Stop(); err != nil {
+		t.Errorf("Failed to stop daemon: %v", err)
+	}
+}
+
+func TestDaemonTriggerCleanupCommand(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Start daemon
+	if err := d.Start(); err != nil {
+		t.Fatalf("Failed to start daemon: %v", err)
+	}
+	defer d.Stop()
+
+	// Give it a moment to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Send trigger_cleanup command
+	client := socket.NewClient(d.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{Command: "trigger_cleanup"})
+	if err != nil {
+		t.Fatalf("Failed to send trigger_cleanup: %v", err)
+	}
+	if !resp.Success {
+		t.Errorf("trigger_cleanup failed: %s", resp.Error)
+	}
+}
+
+func TestDaemonRepairStateCommand(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Start daemon
+	if err := d.Start(); err != nil {
+		t.Fatalf("Failed to start daemon: %v", err)
+	}
+	defer d.Stop()
+
+	// Give it a moment to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Send repair_state command
+	client := socket.NewClient(d.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{Command: "repair_state"})
+	if err != nil {
+		t.Fatalf("Failed to send repair_state: %v", err)
+	}
+	if !resp.Success {
+		t.Errorf("repair_state failed: %s", resp.Error)
+	}
+
+	// Verify response contains expected data
+	data, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		t.Fatal("repair_state should return a map")
+	}
+	if _, ok := data["agents_removed"]; !ok {
+		t.Error("Response should contain agents_removed")
+	}
+	if _, ok := data["issues_fixed"]; !ok {
+		t.Error("Response should contain issues_fixed")
+	}
 }

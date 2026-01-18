@@ -69,6 +69,31 @@ func New() (*CLI, error) {
 	return cli, nil
 }
 
+// NewWithPaths creates a CLI with custom paths (for testing)
+// If claudePath is empty, it will be set to "claude" (useful when MULTICLAUDE_TEST_MODE=1)
+func NewWithPaths(paths *config.Paths, claudePath string) *CLI {
+	if claudePath == "" {
+		claudePath = "claude"
+	}
+
+	cli := &CLI{
+		paths:            paths,
+		claudeBinaryPath: claudePath,
+		rootCmd: &Command{
+			Name:        "multiclaude",
+			Description: "repo-centric orchestrator for Claude Code",
+			Subcommands: make(map[string]*Command),
+		},
+	}
+
+	cli.registerCommands()
+
+	// Generate documentation after commands are registered
+	cli.documentation = cli.GenerateDocumentation()
+
+	return cli
+}
+
 // Execute executes the CLI with the given arguments
 func (c *CLI) Execute(args []string) error {
 	if len(args) == 0 {

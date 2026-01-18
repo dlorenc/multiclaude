@@ -119,6 +119,31 @@ func (d *Daemon) Wait() {
 	d.wg.Wait()
 }
 
+// GetState returns the daemon's state (for testing)
+func (d *Daemon) GetState() *state.State {
+	return d.state
+}
+
+// GetPaths returns the daemon's paths (for testing)
+func (d *Daemon) GetPaths() *config.Paths {
+	return d.paths
+}
+
+// TriggerHealthCheck triggers an immediate health check (for testing)
+func (d *Daemon) TriggerHealthCheck() {
+	d.checkAgentHealth()
+}
+
+// TriggerMessageRouting triggers an immediate message routing (for testing)
+func (d *Daemon) TriggerMessageRouting() {
+	d.routeMessages()
+}
+
+// TriggerWake triggers an immediate wake cycle (for testing)
+func (d *Daemon) TriggerWake() {
+	d.wakeAgents()
+}
+
 // Stop stops the daemon
 func (d *Daemon) Stop() error {
 	d.logger.Info("Stopping daemon")
