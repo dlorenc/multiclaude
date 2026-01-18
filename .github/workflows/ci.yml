@@ -36,6 +36,9 @@ jobs:
           go-version: '1.25'
           cache: true
 
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
       - name: Run unit tests with coverage
         run: |
           go test -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/...
@@ -61,6 +64,9 @@ jobs:
         with:
           go-version: '1.25'
           cache: true
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
 
       - name: Check coverage thresholds
         run: |
