@@ -102,32 +102,28 @@ func (c *Client) SendKeys(session, windowName, text string) error {
 }
 
 // SendKeysLiteral sends text to a window without Enter (using -l for literal mode)
-// If the text contains newlines, it splits the text and sends each line separately
-// with Enter keys between them to preserve line breaks.
+// For multiline text, it uses tmux's paste buffer to send the entire message at once
+// without triggering intermediate processing.
 func (c *Client) SendKeysLiteral(session, windowName, text string) error {
 	target := fmt.Sprintf("%s:%s", session, windowName)
 
-	// Check if text contains newlines
+	// For multiline text, use paste buffer to avoid triggering processing on each line
 	if strings.Contains(text, "\n") {
-		lines := strings.Split(text, "\n")
-		for i, line := range lines {
-			// Send the line
-			cmd := exec.Command("tmux", "send-keys", "-t", target, "-l", line)
-			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("failed to send keys: %w", err)
-			}
-			// Send Enter after each line except the last
-			if i < len(lines)-1 {
-				cmd = exec.Command("tmux", "send-keys", "-t", target, "C-m")
-				if err := cmd.Run(); err != nil {
-					return fmt.Errorf("failed to send newline: %w", err)
-				}
-			}
+		// Set the buffer with the text
+		setCmd := exec.Command("tmux", "set-buffer", text)
+		if err := setCmd.Run(); err != nil {
+			return fmt.Errorf("failed to set buffer: %w", err)
+		}
+
+		// Paste the buffer to the target
+		pasteCmd := exec.Command("tmux", "paste-buffer", "-t", target)
+		if err := pasteCmd.Run(); err != nil {
+			return fmt.Errorf("failed to paste buffer: %w", err)
 		}
 		return nil
 	}
 
-	// No newlines, send the text as before
+	// No newlines, send the text using send-keys with literal mode
 	cmd := exec.Command("tmux", "send-keys", "-t", target, "-l", text)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to send keys: %w", err)
