@@ -76,13 +76,23 @@ func (m *Manager) Exists(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// Resolve symlinks for accurate comparison (important on macOS)
+	evalPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		// Path might not exist yet, use absPath
+		evalPath = absPath
+	}
 
 	for _, wt := range worktrees {
 		wtAbs, err := filepath.Abs(wt.Path)
 		if err != nil {
 			continue
 		}
-		if wtAbs == absPath {
+		wtEval, err := filepath.EvalSymlinks(wtAbs)
+		if err != nil {
+			wtEval = wtAbs
+		}
+		if wtEval == evalPath {
 			return true, nil
 		}
 	}
@@ -206,7 +216,12 @@ func CleanupOrphaned(wtRootDir string, manager *Manager) ([]string, error) {
 		if err != nil {
 			continue
 		}
-		gitPaths[absPath] = true
+		// Resolve symlinks for accurate comparison (important on macOS)
+		evalPath, err := filepath.EvalSymlinks(absPath)
+		if err != nil {
+			evalPath = absPath
+		}
+		gitPaths[evalPath] = true
 	}
 
 	// Find directories in wtRootDir that aren't in git worktrees
@@ -229,8 +244,13 @@ func CleanupOrphaned(wtRootDir string, manager *Manager) ([]string, error) {
 		if err != nil {
 			continue
 		}
+		// Resolve symlinks for accurate comparison (important on macOS)
+		evalPath, err := filepath.EvalSymlinks(absPath)
+		if err != nil {
+			evalPath = absPath
+		}
 
-		if !gitPaths[absPath] {
+		if !gitPaths[evalPath] {
 			// This is an orphaned directory
 			if err := os.RemoveAll(path); err == nil {
 				removed = append(removed, path)

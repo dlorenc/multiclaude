@@ -1,9 +1,14 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
+	"github.com/dlorenc/multiclaude/internal/daemon"
+	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/pkg/config"
 )
 
@@ -150,6 +155,12 @@ func (c *CLI) registerCommands() {
 		Run:         c.daemonLogs,
 	}
 
+	daemonCmd.Subcommands["_run"] = &Command{
+		Name:        "_run",
+		Description: "Internal: run daemon in foreground (used by daemon start)",
+		Run:         c.runDaemon,
+	}
+
 	c.rootCmd.Subcommands["daemon"] = daemonCmd
 
 	// Repository commands
@@ -251,26 +262,101 @@ func (c *CLI) registerCommands() {
 	}
 }
 
-// Placeholder command implementations (to be filled in later)
+// Daemon command implementations
 
 func (c *CLI) startDaemon(args []string) error {
-	fmt.Println("Starting daemon... (not yet implemented)")
-	return nil
+	return daemon.RunDetached()
+}
+
+func (c *CLI) runDaemon(args []string) error {
+	return daemon.Run()
 }
 
 func (c *CLI) stopDaemon(args []string) error {
-	fmt.Println("Stopping daemon... (not yet implemented)")
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "stop",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send stop command: %w", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("daemon stop failed: %s", resp.Error)
+	}
+
+	fmt.Println("Daemon stopped successfully")
 	return nil
 }
 
 func (c *CLI) daemonStatus(args []string) error {
-	fmt.Println("Checking daemon status... (not yet implemented)")
+	// Check PID file first
+	pidFile := daemon.NewPIDFile(c.paths.DaemonPID)
+	running, pid, err := pidFile.IsRunning()
+	if err != nil {
+		return fmt.Errorf("failed to check daemon status: %w", err)
+	}
+
+	if !running {
+		fmt.Println("Daemon is not running")
+		return nil
+	}
+
+	// Try to connect to daemon
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "status",
+	})
+	if err != nil {
+		fmt.Printf("Daemon PID file exists (PID: %d) but daemon is not responding\n", pid)
+		return nil
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("status check failed: %s", resp.Error)
+	}
+
+	// Pretty print status
+	fmt.Println("Daemon Status:")
+	if statusMap, ok := resp.Data.(map[string]interface{}); ok {
+		fmt.Printf("  Running: %v\n", statusMap["running"])
+		fmt.Printf("  PID: %v\n", statusMap["pid"])
+		fmt.Printf("  Repos: %v\n", statusMap["repos"])
+		fmt.Printf("  Agents: %v\n", statusMap["agents"])
+		fmt.Printf("  Socket: %v\n", statusMap["socket_path"])
+	} else {
+		// Fallback: print as JSON
+		jsonData, _ := json.MarshalIndent(resp.Data, "  ", "  ")
+		fmt.Println(string(jsonData))
+	}
+
 	return nil
 }
 
 func (c *CLI) daemonLogs(args []string) error {
-	fmt.Println("Showing daemon logs... (not yet implemented)")
-	return nil
+	flags, _ := ParseFlags(args)
+
+	// Check if we should follow logs
+	follow := flags["follow"] == "true" || flags["f"] == "true"
+
+	if follow {
+		// Use tail -f to follow logs
+		cmd := exec.Command("tail", "-f", c.paths.DaemonLog)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+
+	// Show last 50 lines
+	lines := "50"
+	if n, ok := flags["n"]; ok {
+		lines = n
+	}
+
+	cmd := exec.Command("tail", "-n", lines, c.paths.DaemonLog)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func (c *CLI) initRepo(args []string) error {

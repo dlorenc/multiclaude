@@ -56,12 +56,53 @@
 - ✅ State management: CRUD operations, persistence, atomic saves
 - ✅ Messages: Send/receive, lifecycle management, cleanup
 - ✅ Socket: Client/server communication, multiple requests, errors
-- All tests passing (go test ./...)
+- ✅ Tmux: Session/window management, send-keys, PID tracking (14 tests with real tmux integration)
+- ✅ Worktree: Git worktree operations, cleanup, uncommitted changes detection (15 tests with real git repos)
+- **67 total test functions, all passing**
 
-**Phase 1 Status: COMPLETE**
-All core infrastructure libraries implemented and tested.
+**Commits (continued):**
+14. [commit-id] - Add comprehensive tmux integration tests with real sessions
+15. [commit-id] - Add comprehensive worktree integration tests with real git operations
+16. [commit-id] - Fix symlink path resolution for macOS /var/folders compatibility
 
-**Next Steps:**
-- Implement daemon core loops (health checks, nudge, message routing)
-- Wire up CLI commands to actual daemon operations
-- Begin Phase 2: Claude Code integration
+**Phase 1 Status: ✅ COMPLETE**
+All core infrastructure libraries fully implemented with comprehensive end-to-end tests.
+Rock-solid foundation achieved with well-tested primitives.
+
+**Implementation Plan Restructured:**
+The phases have been reorganized to implement the daemon infrastructure BEFORE adding Claude:
+- Phase 2: Running daemon with core loops, repo/worker management (plain shells in tmux)
+- Phase 3: Replace shells with Claude Code instances + agent intelligence
+- Phase 4: Polish and UX refinements
+
+This allows testing the infrastructure independently before adding Claude complexity.
+
+**Next Steps (Phase 2):**
+- Implement daemon main loop and goroutines
+- Implement start/stop/status commands
+- Wire up health check loop (monitor tmux/PIDs)
+- Wire up message router loop (deliver via send-keys)
+- Implement `multiclaude init` (clone, create tmux session with plain shells)
+- Implement `multiclaude work` (create worktree + tmux window with plain shell)
+- Test full workflow: init repo → create workers → message passing → cleanup
+
+### Phase 2: Running Daemon & Infrastructure
+
+**Progress:**
+- [x] Create daemon process package (internal/daemon/daemon.go)
+  - Main daemon loop with context cancellation
+  - Socket server for CLI communication
+  - Health check loop (every 2 minutes)
+  - Message router loop (every 2 minutes)
+  - Wake/nudge loop (every 2 minutes)
+  - Request handler for socket commands (ping, status, add_repo, add_agent, etc.)
+- [x] Wire up daemon start/stop/status/logs commands in CLI
+  - `multiclaude start` or `multiclaude daemon start` - starts daemon in background
+  - `multiclaude daemon stop` - sends stop command via socket
+  - `multiclaude daemon status` - shows daemon status (repos, agents, PID)
+  - `multiclaude daemon logs [-f] [-n N]` - view daemon logs
+  - Internal `_run` command for foreground daemon execution
+- [ ] Implement 'multiclaude init' command
+- [ ] Implement 'multiclaude work' commands
+- [ ] Implement agent message commands
+- [ ] Test end-to-end

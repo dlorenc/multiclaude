@@ -702,7 +702,7 @@ These features are explicitly out of scope for the initial implementation:
 
 ## Implementation Priorities
 
-### Phase 1: Core Infrastructure & Libraries
+### Phase 1: Core Infrastructure & Libraries ✅ COMPLETE
 Build and thoroughly test the foundational components:
 - [x] Daemon process with PID file management
 - [x] Unix socket communication (request/response protocol)
@@ -714,45 +714,90 @@ Build and thoroughly test the foundational components:
 - [x] Error handling and logging infrastructure
 - [x] Comprehensive unit and integration tests for all libraries with real tmux sessions and FS operations.
 
-**Goal:** Rock-solid foundation with well-tested primitives before adding Claude.
-**Status:** ✅ COMPLETE - All libraries implemented with comprehensive tests passing.
+**Goal:** Rock-solid foundation with well-tested primitives.
+**Status:** ✅ COMPLETE - All libraries implemented with comprehensive tests passing (67 tests).
 
-### Phase 2: Claude Code Integration
-Add Claude Code session management:
-- [ ] Start Claude in tmux windows with session tracking
-- [ ] Send messages to Claude via tmux send-keys
+### Phase 2: Running Daemon & Infrastructure
+Implement the actual daemon process and wire up infrastructure WITHOUT Claude yet:
+
+**Daemon Process:**
+- [ ] Implement daemon main loop and goroutines
+- [ ] Daemon start/stop commands (check PID, claim, daemonize)
+- [ ] Daemon status command (read PID, check if running)
+- [ ] Daemon logs command (tail daemon.log)
+- [ ] State loading on startup and persistence on changes
+- [ ] Graceful shutdown (cleanup, save state)
+
+**Core Daemon Loops:**
+- [ ] Health check loop (every 5 min) - verify tmux windows/PIDs exist
+- [ ] Message router loop (event-driven) - watch messages dir, deliver via tmux send-keys
+- [ ] Cleanup loop - remove orphaned tmux windows, worktrees, dead agents from state
+- [ ] Periodic wake/nudge mechanism (configurable intervals)
+
+**Repository Management:**
+- [ ] `multiclaude init <github-url>` - clone repo, create tmux session
+- [ ] Create supervisor tmux window (run plain shell for now, not Claude)
+- [ ] Create merge-queue tmux window (run plain shell for now)
+- [ ] Register repo and agents in state
+- [ ] `multiclaude list` - show tracked repos
+
+**Worker Management:**
+- [ ] `multiclaude work -t <task>` - create worktree, tmux window (plain shell)
+- [ ] `multiclaude work -t <task> --branch <branch>` - create from specific branch
+- [ ] `multiclaude work list` - show active workers
+- [ ] `multiclaude work rm <name>` - cleanup worktree and tmux window
+- [ ] Detect uncommitted/unpushed changes on cleanup (warn user)
+
+**Agent Communication:**
+- [ ] Wire up `multiclaude agent send-message` to write message files
+- [ ] Wire up `multiclaude agent list-messages` to read from messages dir
+- [ ] Wire up `multiclaude agent ack-message` to mark messages acknowledged
+- [ ] Daemon delivers messages to tmux windows via send-keys
+
+**Testing & Validation:**
+- [ ] `multiclaude attach <agent-name>` - attach to tmux window
+- [ ] Test daemon can track multiple repos
+- [ ] Test worker lifecycle (create, run commands, cleanup)
+- [ ] Test message passing between windows
+- [ ] Test state persistence and recovery after daemon restart
+- [ ] Test orphaned resource cleanup
+
+**Goal:** Fully functional daemon that tracks repos, manages tmux sessions/worktrees, and routes messages - all running plain shells in tmux windows. This proves the infrastructure works before adding Claude.
+
+### Phase 3: Claude Code Integration
+Replace plain shells with Claude Code instances:
+
+**Claude in tmux:**
+- [ ] Start Claude Code in tmux windows with session tracking
+- [ ] Pass role-specific prompts via `--append-system-prompt-file`
 - [ ] Monitor Claude process health (PID tracking)
-- [ ] Handle Claude crashes and restarts
-- [ ] Optional hooks configuration loading
-- [ ] Repository initialization (clone, create tmux session)
-- [ ] Worker creation (worktree + Claude instance)
-- [ ] Worker cleanup and removal
-- [ ] Basic agent lifecycle without intelligence
+- [ ] Handle Claude crashes and restarts (reuse session ID)
+- [ ] Optional hooks configuration loading (.multiclaude/hooks.json)
 
-**Goal:** Ability to start/stop Claude instances in tmux with basic management.
-
-### Phase 3: Agent Prompts & Daemon Loops
-Add the intelligence layer:
-- [ ] Role-specific system prompts (supervisor, worker, merge queue)
+**Role-Specific Prompts:**
+- [ ] Default supervisor prompt (built-in)
+- [ ] Default worker prompt (built-in)
+- [ ] Default merge queue prompt (built-in)
 - [ ] Load custom prompts from .multiclaude/ directory
-- [ ] Supervisor agent with monitoring responsibilities
-- [ ] Merge queue agent with PR management responsibilities
-- [ ] Daemon health check loop (monitor agents)
-- [ ] Daemon nudge loop (send periodic check-ins)
-- [ ] Daemon message router loop (deliver messages)
-- [ ] Supervisor wake loop (periodic triggers)
-- [ ] Agent completion signaling and cleanup coordination
+- [ ] Pass task description to workers on startup
 
-**Goal:** Fully autonomous agents with coordination and monitoring.
+**Agent Intelligence:**
+- [ ] Supervisor monitoring and coordination behavior
+- [ ] Worker task execution and PR creation behavior
+- [ ] Merge queue PR management and CI coordination
+- [ ] Agent completion signaling (`multiclaude agent complete`)
+- [ ] GitHub integration (gh CLI for PRs)
+
+**Goal:** Autonomous Claude agents working collaboratively on repositories.
 
 ### Phase 4: Polish & Refinement
 - [ ] Enhanced error messages and user guidance
 - [ ] Cleanup and repair commands
-- [ ] Attach command with read-only mode
-- [ ] List commands with status information
-- [ ] Daemon logs command (tail/follow)
+- [ ] Better attach command with read-only mode
+- [ ] Rich list commands with status information
 - [ ] Documentation and usage examples
 - [ ] Edge case handling and recovery scenarios
 - [ ] Performance optimization
+- [ ] GitHub auth verification on startup
 
 **Goal:** Production-ready tool with excellent UX.
