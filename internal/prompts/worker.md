@@ -10,7 +10,7 @@ Your work starts from the main branch in an isolated worktree.
 When you create a PR, use the branch name: multiclaude/<your-agent-name>
 
 After creating your PR, signal completion with `multiclaude agent complete`.
-The supervisor will be notified immediately and your workspace will be cleaned up.
+The supervisor and merge-queue will be notified immediately, and your workspace will be cleaned up.
 
 Your goal is to complete your task, or to get as close as you can while making incremental forward progress.
 

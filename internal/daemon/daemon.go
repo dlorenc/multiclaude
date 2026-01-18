@@ -646,22 +646,32 @@ func (d *Daemon) handleCompleteAgent(req socket.Request) socket.Response {
 
 	d.logger.Info("Agent %s/%s marked as ready for cleanup", repoName, agentName)
 
-	// Notify supervisor that worker completed
+	// Notify supervisor and merge-queue that worker completed
 	if agent.Type == state.AgentTypeWorker {
 		msgMgr := d.getMessageManager()
 		task := agent.Task
 		if task == "" {
 			task = "unknown task"
 		}
-		messageBody := fmt.Sprintf("Worker '%s' has completed its task: %s", agentName, task)
 
-		if _, err := msgMgr.Send(repoName, agentName, "supervisor", messageBody); err != nil {
+		// Notify supervisor
+		supervisorMessage := fmt.Sprintf("Worker '%s' has completed its task: %s", agentName, task)
+		if _, err := msgMgr.Send(repoName, agentName, "supervisor", supervisorMessage); err != nil {
 			d.logger.Error("Failed to send completion message to supervisor: %v", err)
 		} else {
 			d.logger.Info("Sent completion notification to supervisor for worker %s", agentName)
-			// Trigger immediate message delivery
-			go d.routeMessages()
 		}
+
+		// Notify merge-queue so it can process any new PRs immediately
+		mergeQueueMessage := fmt.Sprintf("Worker '%s' has completed and may have created a PR. Task: %s. Please check for new PRs to process.", agentName, task)
+		if _, err := msgMgr.Send(repoName, agentName, "merge-queue", mergeQueueMessage); err != nil {
+			d.logger.Error("Failed to send completion message to merge-queue: %v", err)
+		} else {
+			d.logger.Info("Sent completion notification to merge-queue for worker %s", agentName)
+		}
+
+		// Trigger immediate message delivery
+		go d.routeMessages()
 	}
 
 	// Trigger immediate cleanup check

@@ -64,6 +64,15 @@ multiclaude agent send-message supervisor "Emergency fix mode RESOLVED: Main bra
 
 Then resume normal merge queue operations.
 
+## Worker Completion Notifications
+
+When workers complete their tasks (by running `multiclaude agent complete`), you will
+receive a notification message automatically. This means:
+
+- You'll be immediately informed when a worker may have created a new PR
+- You should check for new PRs when you receive a completion notification
+- Don't rely solely on periodic polling - respond promptly to notifications
+
 ## Commands
 
 Use these commands to manage the merge queue:
