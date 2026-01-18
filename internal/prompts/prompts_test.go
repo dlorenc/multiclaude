@@ -16,6 +16,7 @@ func TestGetDefaultPrompt(t *testing.T) {
 		{"supervisor", TypeSupervisor, false},
 		{"worker", TypeWorker, false},
 		{"merge-queue", TypeMergeQueue, false},
+		{"workspace", TypeWorkspace, false},
 		{"unknown", AgentType("unknown"), true},
 	}
 
@@ -58,6 +59,15 @@ func TestGetDefaultPromptContent(t *testing.T) {
 	}
 	if !strings.Contains(mergePrompt, "CRITICAL CONSTRAINT") {
 		t.Error("merge queue prompt should have critical constraint about CI")
+	}
+
+	// Verify workspace prompt
+	workspacePrompt := GetDefaultPrompt(TypeWorkspace)
+	if !strings.Contains(workspacePrompt, "user workspace") {
+		t.Error("workspace prompt should mention 'user workspace'")
+	}
+	if !strings.Contains(workspacePrompt, "NOT receive messages from the supervisor") {
+		t.Error("workspace prompt should clarify that it doesn't receive supervisor messages")
 	}
 }
 
@@ -125,6 +135,22 @@ func TestLoadCustomPrompt(t *testing.T) {
 		}
 
 		prompt, err := LoadCustomPrompt(tmpDir, TypeMergeQueue)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if prompt != customContent {
+			t.Errorf("expected %q, got %q", customContent, prompt)
+		}
+	})
+
+	t.Run("with custom workspace prompt", func(t *testing.T) {
+		customContent := "Custom workspace instructions"
+		promptPath := filepath.Join(multiclaudeDir, "WORKSPACE.md")
+		if err := os.WriteFile(promptPath, []byte(customContent), 0644); err != nil {
+			t.Fatalf("failed to write custom prompt: %v", err)
+		}
+
+		prompt, err := LoadCustomPrompt(tmpDir, TypeWorkspace)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}

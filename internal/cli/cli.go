@@ -660,12 +660,76 @@ func (c *CLI) initRepo(args []string) error {
 		return fmt.Errorf("failed to register merge-queue: %s", resp.Error)
 	}
 
+	// Create workspace worktree
+	wt := worktree.NewManager(repoPath)
+	workspacePath := c.paths.AgentWorktree(repoName, "workspace")
+	workspaceBranch := "workspace"
+
+	fmt.Printf("Creating workspace worktree at: %s\n", workspacePath)
+	if err := wt.CreateNewBranch(workspacePath, workspaceBranch, "HEAD"); err != nil {
+		return fmt.Errorf("failed to create workspace worktree: %w", err)
+	}
+
+	// Create workspace tmux window (detached so it doesn't switch focus)
+	cmd = exec.Command("tmux", "new-window", "-d", "-t", tmuxSession, "-n", "workspace", "-c", workspacePath)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to create workspace window: %w", err)
+	}
+
+	// Generate session ID for workspace
+	workspaceSessionID, err := generateSessionID()
+	if err != nil {
+		return fmt.Errorf("failed to generate workspace session ID: %w", err)
+	}
+
+	// Write prompt file for workspace
+	workspacePromptFile, err := c.writePromptFile(repoPath, prompts.TypeWorkspace, "workspace")
+	if err != nil {
+		return fmt.Errorf("failed to write workspace prompt: %w", err)
+	}
+
+	// Copy hooks configuration if it exists
+	if err := c.copyHooksConfig(repoPath, workspacePath); err != nil {
+		fmt.Printf("Warning: failed to copy hooks config to workspace: %v\n", err)
+	}
+
+	// Start Claude in workspace window (skip in test mode)
+	var workspacePID int
+	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
+		fmt.Println("Starting Claude Code in workspace window...")
+		pid, err := c.startClaudeInTmux(tmuxSession, "workspace", workspacePath, workspaceSessionID, workspacePromptFile, "")
+		if err != nil {
+			return fmt.Errorf("failed to start workspace Claude: %w", err)
+		}
+		workspacePID = pid
+	}
+
+	// Add workspace agent
+	resp, err = client.Send(socket.Request{
+		Command: "add_agent",
+		Args: map[string]interface{}{
+			"repo":          repoName,
+			"agent":         "workspace",
+			"type":          "workspace",
+			"worktree_path": workspacePath,
+			"tmux_window":   "workspace",
+			"session_id":    workspaceSessionID,
+			"pid":           workspacePID,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to register workspace: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("failed to register workspace: %s", resp.Error)
+	}
+
 	fmt.Println()
 	fmt.Println("✓ Repository initialized successfully!")
 	fmt.Printf("  Tmux session: %s\n", tmuxSession)
-	fmt.Printf("  Agents: supervisor, merge-queue\n")
+	fmt.Printf("  Agents: supervisor, merge-queue, workspace\n")
 	fmt.Printf("\nAttach to session: tmux attach -t %s\n", tmuxSession)
-	fmt.Printf("Or use: multiclaude attach supervisor\n")
+	fmt.Printf("Or attach to your workspace: multiclaude attach workspace\n")
 
 	return nil
 }
@@ -895,18 +959,33 @@ func (c *CLI) listWorkers(args []string) error {
 		return fmt.Errorf("unexpected response format")
 	}
 
-	// Filter for workers only
+	// Filter for workers and workspace
 	workers := []map[string]interface{}{}
+	var workspace map[string]interface{}
 	for _, agent := range agents {
 		if agentMap, ok := agent.(map[string]interface{}); ok {
-			if agentType, _ := agentMap["type"].(string); agentType == "worker" {
+			agentType, _ := agentMap["type"].(string)
+			if agentType == "worker" {
 				workers = append(workers, agentMap)
+			} else if agentType == "workspace" {
+				workspace = agentMap
 			}
 		}
 	}
 
+	// Show workspace first if it exists
+	if workspace != nil {
+		fmt.Printf("Workspace in '%s':\n", repoName)
+		fmt.Printf("  - workspace (user workspace)\n")
+		fmt.Println()
+	}
+
 	if len(workers) == 0 {
-		fmt.Printf("No workers in repository '%s'\n", repoName)
+		if workspace == nil {
+			fmt.Printf("No workers in repository '%s'\n", repoName)
+		} else {
+			fmt.Printf("No workers in repository '%s'\n", repoName)
+		}
 		fmt.Println("\nCreate a worker with: multiclaude work <task>")
 		return nil
 	}
