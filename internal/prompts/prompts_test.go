@@ -66,8 +66,11 @@ func TestGetDefaultPromptContent(t *testing.T) {
 	if !strings.Contains(workspacePrompt, "user workspace") {
 		t.Error("workspace prompt should mention 'user workspace'")
 	}
-	if !strings.Contains(workspacePrompt, "NOT receive messages from the supervisor") {
-		t.Error("workspace prompt should clarify that it doesn't receive supervisor messages")
+	if !strings.Contains(workspacePrompt, "multiclaude agent send-message") {
+		t.Error("workspace prompt should document inter-agent messaging capabilities")
+	}
+	if !strings.Contains(workspacePrompt, "Spawn and manage worker agents") {
+		t.Error("workspace prompt should document worker spawning capabilities")
 	}
 }
 
