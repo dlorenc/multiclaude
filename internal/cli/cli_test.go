@@ -923,3 +923,110 @@ func TestNewWithPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestInferRepoFromCwd(t *testing.T) {
+	// Create temp directories to simulate multiclaude structure
+	tmpDir := t.TempDir()
+
+	// Resolve symlinks (macOS /tmp -> /private/tmp)
+	tmpDir, err := filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to resolve tmpDir symlinks: %v", err)
+	}
+
+	worktreesDir := filepath.Join(tmpDir, "wts")
+	reposDir := filepath.Join(tmpDir, "repos")
+
+	// Create test directory structure
+	// Worktree: wts/myrepo/workspace
+	// Worktree: wts/otherrepo/worker1
+	// Repo: repos/myrepo
+	testDirs := []string{
+		filepath.Join(worktreesDir, "myrepo", "workspace"),
+		filepath.Join(worktreesDir, "myrepo", "worker1"),
+		filepath.Join(worktreesDir, "otherrepo", "agent1"),
+		filepath.Join(reposDir, "myrepo"),
+		filepath.Join(reposDir, "otherrepo"),
+	}
+	for _, d := range testDirs {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("failed to create test dir %s: %v", d, err)
+		}
+	}
+
+	cli := &CLI{
+		paths: &config.Paths{
+			Root:         tmpDir,
+			WorktreesDir: worktreesDir,
+			ReposDir:     reposDir,
+		},
+	}
+
+	// Save original working directory
+	origWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get original working directory: %v", err)
+	}
+	defer os.Chdir(origWd)
+
+	tests := []struct {
+		name      string
+		cwd       string
+		wantRepo  string
+		wantError bool
+	}{
+		{
+			name:      "worktree workspace",
+			cwd:       filepath.Join(worktreesDir, "myrepo", "workspace"),
+			wantRepo:  "myrepo",
+			wantError: false,
+		},
+		{
+			name:      "worktree worker",
+			cwd:       filepath.Join(worktreesDir, "myrepo", "worker1"),
+			wantRepo:  "myrepo",
+			wantError: false,
+		},
+		{
+			name:      "worktree other repo",
+			cwd:       filepath.Join(worktreesDir, "otherrepo", "agent1"),
+			wantRepo:  "otherrepo",
+			wantError: false,
+		},
+		{
+			name:      "main repo dir",
+			cwd:       filepath.Join(reposDir, "myrepo"),
+			wantRepo:  "myrepo",
+			wantError: false,
+		},
+		{
+			name:      "outside multiclaude",
+			cwd:       os.TempDir(),
+			wantRepo:  "",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.Chdir(tt.cwd); err != nil {
+				t.Fatalf("failed to change to test directory %s: %v", tt.cwd, err)
+			}
+
+			gotRepo, err := cli.inferRepoFromCwd()
+
+			if tt.wantError {
+				if err == nil {
+					t.Errorf("inferRepoFromCwd() expected error, got repo=%q", gotRepo)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("inferRepoFromCwd() unexpected error: %v", err)
+				}
+				if gotRepo != tt.wantRepo {
+					t.Errorf("inferRepoFromCwd() = %q, want %q", gotRepo, tt.wantRepo)
+				}
+			}
+		})
+	}
+}

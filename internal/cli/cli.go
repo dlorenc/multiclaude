@@ -1052,16 +1052,9 @@ func (c *CLI) listWorkers(args []string) error {
 	if r, ok := flags["repo"]; ok {
 		repoName = r
 	} else {
-		// List all repos
-		repos := c.getReposList()
-		if len(repos) == 0 {
-			fmt.Println("No repositories tracked")
-			return nil
-		}
-
-		// If only one repo, use it
-		if len(repos) == 1 {
-			repoName = repos[0]
+		// Try to infer repo from current working directory
+		if inferred, err := c.inferRepoFromCwd(); err == nil {
+			repoName = inferred
 		} else {
 			return errors.MultipleRepos()
 		}
@@ -1196,10 +1189,9 @@ func (c *CLI) removeWorker(args []string) error {
 	if r, ok := flags["repo"]; ok {
 		repoName = r
 	} else {
-		// Try to infer from tracked repos
-		repos := c.getReposList()
-		if len(repos) == 1 {
-			repoName = repos[0]
+		// Try to infer repo from current working directory
+		if inferred, err := c.inferRepoFromCwd(); err == nil {
+			repoName = inferred
 		} else {
 			return errors.MultipleRepos()
 		}
@@ -1473,6 +1465,41 @@ func (c *CLI) ackMessage(args []string) error {
 
 	fmt.Printf("Message %s acknowledged\n", messageID)
 	return nil
+}
+
+// inferRepoFromCwd infers just the repository name from the current working directory.
+// Unlike inferAgentContext, it doesn't require determining the specific agent.
+func (c *CLI) inferRepoFromCwd() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Check if we're in a worktree path
+	// Path format: ~/.multiclaude/wts/<repo>/<agent>
+	if strings.Contains(cwd, c.paths.WorktreesDir) {
+		rel, err := filepath.Rel(c.paths.WorktreesDir, cwd)
+		if err == nil {
+			parts := strings.SplitN(rel, string(filepath.Separator), 2)
+			if len(parts) >= 1 && parts[0] != "" && parts[0] != "." {
+				return parts[0], nil
+			}
+		}
+	}
+
+	// Check if we're in a main repo path
+	// Path format: ~/.multiclaude/repos/<repo>
+	if strings.Contains(cwd, c.paths.ReposDir) {
+		rel, err := filepath.Rel(c.paths.ReposDir, cwd)
+		if err == nil {
+			parts := strings.SplitN(rel, string(filepath.Separator), 2)
+			if len(parts) >= 1 && parts[0] != "" && parts[0] != "." {
+				return parts[0], nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("not in a multiclaude directory")
 }
 
 // inferAgentContext infers the current agent and repo from working directory
@@ -2027,13 +2054,9 @@ func (c *CLI) attachAgent(args []string) error {
 	if r, ok := flags["repo"]; ok {
 		repoName = r
 	} else {
-		// Try to infer from tracked repos
-		repos := c.getReposList()
-		if len(repos) == 0 {
-			return fmt.Errorf("no repositories tracked")
-		}
-		if len(repos) == 1 {
-			repoName = repos[0]
+		// Try to infer repo from current working directory
+		if inferred, err := c.inferRepoFromCwd(); err == nil {
+			repoName = inferred
 		} else {
 			return errors.MultipleRepos()
 		}
