@@ -352,6 +352,15 @@ func TestOrphanedMessageDirectoryCleanup(t *testing.T) {
 
 // TestDaemonCrashRecovery tests that the system can recover from a daemon crash
 func TestDaemonCrashRecovery(t *testing.T) {
+	// This test requires tmux because the daemon's restoreTrackedRepos() checks
+	// for tmux session existence. If the session doesn't exist, it tries to restore
+	// agents which would clear/recreate them. We need the session to exist so
+	// state is preserved as-is.
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available, skipping crash recovery test")
+	}
+
 	tmpDir := t.TempDir()
 	paths := &config.Paths{
 		Root:         tmpDir,
@@ -368,6 +377,22 @@ func TestDaemonCrashRecovery(t *testing.T) {
 		t.Fatalf("Failed to create directories: %v", err)
 	}
 
+	// Create a unique session name for this test to avoid conflicts
+	sessionName := "mc-recovery-test"
+
+	// Create the tmux session BEFORE starting the daemon
+	// This is critical: when d2 starts, restoreTrackedRepos() will see the session
+	// exists and skip restoration, preserving the state as-is.
+	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(sessionName)
+
+	// Create supervisor window for the agent we'll add
+	if err := tmuxClient.CreateWindow(sessionName, "supervisor"); err != nil {
+		t.Fatalf("Failed to create supervisor window: %v", err)
+	}
+
 	// Start daemon, add state, then simulate crash
 	d1, err := daemon.New(paths)
 	if err != nil {
@@ -378,10 +403,10 @@ func TestDaemonCrashRecovery(t *testing.T) {
 		t.Fatalf("Failed to start first daemon: %v", err)
 	}
 
-	// Add some state
+	// Add some state (using the session we created)
 	repo := &state.Repository{
 		GithubURL:   "https://github.com/test/repo",
-		TmuxSession: "mc-test",
+		TmuxSession: sessionName,
 		Agents:      make(map[string]state.Agent),
 	}
 	if err := d1.GetState().AddRepo("test-repo", repo); err != nil {
@@ -406,10 +431,12 @@ func TestDaemonCrashRecovery(t *testing.T) {
 	// (In real crash, the PID file would still exist but socket would be stale)
 	os.Remove(paths.DaemonSock)
 
-	// Wait a moment
-	time.Sleep(50 * time.Millisecond)
+	// Wait for socket file to be fully removed
+	time.Sleep(100 * time.Millisecond)
 
 	// Start new daemon - should recover state from disk
+	// Because the tmux session exists, restoreTrackedRepos() will skip restoration
+	// and the state will be preserved.
 	d2, err := daemon.New(paths)
 	if err != nil {
 		t.Fatalf("Failed to create second daemon: %v", err)
@@ -419,6 +446,9 @@ func TestDaemonCrashRecovery(t *testing.T) {
 		t.Fatalf("Failed to start second daemon: %v", err)
 	}
 	defer d2.Stop()
+
+	// Wait for daemon to fully initialize
+	time.Sleep(100 * time.Millisecond)
 
 	// Verify state was recovered
 	recovered, exists := d2.GetState().GetRepo("test-repo")
