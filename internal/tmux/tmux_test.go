@@ -47,6 +47,44 @@ func uniqueSessionName() string {
 	return fmt.Sprintf("test-tmux-%d", time.Now().UnixNano())
 }
 
+// waitForSession polls until a session exists or timeout is reached.
+// This handles the race condition where tmux reports success but the session
+// isn't immediately visible in subsequent queries.
+func waitForSession(client *Client, sessionName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	pollInterval := 10 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		exists, err := client.HasSession(sessionName)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return nil
+		}
+		time.Sleep(pollInterval)
+	}
+	return fmt.Errorf("session %s did not appear within %v", sessionName, timeout)
+}
+
+// waitForNoSession polls until a session no longer exists or timeout is reached.
+func waitForNoSession(client *Client, sessionName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	pollInterval := 10 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		exists, err := client.HasSession(sessionName)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+		time.Sleep(pollInterval)
+	}
+	return fmt.Errorf("session %s still exists after %v", sessionName, timeout)
+}
+
 func TestIsTmuxAvailable(t *testing.T) {
 	client := NewClient()
 	if !client.IsTmuxAvailable() {
@@ -73,6 +111,11 @@ func TestHasSession(t *testing.T) {
 	}
 	defer client.KillSession(sessionName)
 
+	// Wait for session to be visible (handles tmux timing race)
+	if err := waitForSession(client, sessionName, 2*time.Second); err != nil {
+		t.Fatalf("Session not visible after creation: %v", err)
+	}
+
 	// Session should now exist
 	exists, err = client.HasSession(sessionName)
 	if err != nil {
@@ -92,6 +135,11 @@ func TestCreateSession(t *testing.T) {
 		t.Fatalf("Failed to create session: %v", err)
 	}
 	defer client.KillSession(sessionName)
+
+	// Wait for session to be visible (handles tmux timing race)
+	if err := waitForSession(client, sessionName, 2*time.Second); err != nil {
+		t.Fatalf("Session not visible after creation: %v", err)
+	}
 
 	// Verify session exists
 	exists, err := client.HasSession(sessionName)
@@ -221,9 +269,19 @@ func TestKillSession(t *testing.T) {
 		t.Fatalf("Failed to create session: %v", err)
 	}
 
+	// Wait for session to be visible before killing
+	if err := waitForSession(client, sessionName, 2*time.Second); err != nil {
+		t.Fatalf("Session not visible after creation: %v", err)
+	}
+
 	// Kill session
 	if err := client.KillSession(sessionName); err != nil {
 		t.Fatalf("Failed to kill session: %v", err)
+	}
+
+	// Wait for session to be gone (handles tmux timing race)
+	if err := waitForNoSession(client, sessionName, 2*time.Second); err != nil {
+		t.Fatalf("Session still visible after killing: %v", err)
 	}
 
 	// Verify session no longer exists
@@ -308,12 +366,6 @@ func TestSendKeysLiteral(t *testing.T) {
 func TestListSessions(t *testing.T) {
 	client := NewClient()
 
-	// Get initial sessions
-	initialSessions, err := client.ListSessions()
-	if err != nil {
-		t.Fatalf("Failed to list sessions: %v", err)
-	}
-
 	// Create a test session
 	sessionName := uniqueSessionName()
 	if err := client.CreateSession(sessionName, true); err != nil {
@@ -321,18 +373,20 @@ func TestListSessions(t *testing.T) {
 	}
 	defer client.KillSession(sessionName)
 
-	// List sessions again
+	// Wait for session to be visible (handles tmux timing race)
+	if err := waitForSession(client, sessionName, 2*time.Second); err != nil {
+		t.Fatalf("Session not visible after creation: %v", err)
+	}
+
+	// List sessions
 	sessions, err := client.ListSessions()
 	if err != nil {
 		t.Fatalf("Failed to list sessions: %v", err)
 	}
 
-	// Should have one more session
-	if len(sessions) != len(initialSessions)+1 {
-		t.Errorf("Expected %d sessions, got %d", len(initialSessions)+1, len(sessions))
-	}
-
-	// Our session should be in the list
+	// Our test session should be in the list
+	// Note: We don't check exact count because external processes may create/delete
+	// sessions concurrently, making count-based assertions flaky
 	found := false
 	for _, s := range sessions {
 		if s == sessionName {
