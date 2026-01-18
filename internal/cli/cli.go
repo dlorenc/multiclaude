@@ -2313,6 +2313,10 @@ func (c *CLI) startClaudeInTmux(tmuxSession, tmuxWindow, workDir, sessionID, pro
 		if err := tmuxClient.SendEnter(tmuxSession, tmuxWindow); err != nil {
 			return pid, fmt.Errorf("failed to send Enter for initial message to Claude: %w", err)
 		}
+		// Send Enter twice - Claude Code may swallow the first Enter when processing large pasted text
+		if err := tmuxClient.SendEnter(tmuxSession, tmuxWindow); err != nil {
+			return pid, fmt.Errorf("failed to send second Enter for initial message to Claude: %w", err)
+		}
 	}
 
 	return pid, nil
