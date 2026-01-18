@@ -305,6 +305,41 @@ func TestSendKeysLiteral(t *testing.T) {
 	}
 }
 
+func TestSendKeysLiteralWithNewlines(t *testing.T) {
+	client := NewClient()
+	sessionName := uniqueSessionName()
+
+	// Create session
+	if err := client.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+	defer client.KillSession(sessionName)
+
+	// Create a window
+	windowName := "test-window"
+	if err := client.CreateWindow(sessionName, windowName); err != nil {
+		t.Fatalf("Failed to create window: %v", err)
+	}
+
+	// Test sending text with newlines - should not error
+	multiLineText := "line1\nline2\nline3"
+	if err := client.SendKeysLiteral(sessionName, windowName, multiLineText); err != nil {
+		t.Fatalf("Failed to send multi-line text: %v", err)
+	}
+
+	// Test with empty lines
+	textWithEmptyLines := "first\n\nlast"
+	if err := client.SendKeysLiteral(sessionName, windowName, textWithEmptyLines); err != nil {
+		t.Fatalf("Failed to send text with empty lines: %v", err)
+	}
+
+	// Test with trailing newline
+	textWithTrailingNewline := "content\n"
+	if err := client.SendKeysLiteral(sessionName, windowName, textWithTrailingNewline); err != nil {
+		t.Fatalf("Failed to send text with trailing newline: %v", err)
+	}
+}
+
 func TestListSessions(t *testing.T) {
 	client := NewClient()
 

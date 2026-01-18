@@ -102,8 +102,32 @@ func (c *Client) SendKeys(session, windowName, text string) error {
 }
 
 // SendKeysLiteral sends text to a window without Enter (using -l for literal mode)
+// If the text contains newlines, it splits the text and sends each line separately
+// with Enter keys between them to preserve line breaks.
 func (c *Client) SendKeysLiteral(session, windowName, text string) error {
 	target := fmt.Sprintf("%s:%s", session, windowName)
+
+	// Check if text contains newlines
+	if strings.Contains(text, "\n") {
+		lines := strings.Split(text, "\n")
+		for i, line := range lines {
+			// Send the line
+			cmd := exec.Command("tmux", "send-keys", "-t", target, "-l", line)
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to send keys: %w", err)
+			}
+			// Send Enter after each line except the last
+			if i < len(lines)-1 {
+				cmd = exec.Command("tmux", "send-keys", "-t", target, "C-m")
+				if err := cmd.Run(); err != nil {
+					return fmt.Errorf("failed to send newline: %w", err)
+				}
+			}
+		}
+		return nil
+	}
+
+	// No newlines, send the text as before
 	cmd := exec.Command("tmux", "send-keys", "-t", target, "-l", text)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to send keys: %w", err)
