@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dlorenc/multiclaude/internal/daemon"
+	"github.com/dlorenc/multiclaude/internal/errors"
 	"github.com/dlorenc/multiclaude/internal/format"
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/names"
@@ -49,7 +50,7 @@ func New() (*CLI, error) {
 	// Resolve the full path to the claude binary to prevent version drift
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
-		return nil, fmt.Errorf("failed to find claude binary in PATH: %w", err)
+		return nil, errors.ClaudeNotFound(err)
 	}
 
 	cli := &CLI{
@@ -128,7 +129,7 @@ func (c *CLI) executeCommand(cmd *Command, args []string) error {
 		return cmd.Run(args)
 	}
 
-	return fmt.Errorf("unknown command: %s", args[0])
+	return errors.UnknownCommand(args[0])
 }
 
 // showHelp shows the main help message
@@ -541,7 +542,7 @@ func (c *CLI) stopAll(args []string) error {
 
 func (c *CLI) initRepo(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: multiclaude init <github-url> [name]")
+		return errors.InvalidUsage("usage: multiclaude init <github-url> [name]")
 	}
 
 	githubURL := args[0]
@@ -563,7 +564,7 @@ func (c *CLI) initRepo(args []string) error {
 	client := socket.NewClient(c.paths.DaemonSock)
 	_, err := client.Send(socket.Request{Command: "ping"})
 	if err != nil {
-		return fmt.Errorf("daemon not running. Start it with: multiclaude start")
+		return errors.DaemonNotRunning()
 	}
 
 	// Clone repository
@@ -574,7 +575,7 @@ func (c *CLI) initRepo(args []string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to clone repository: %w", err)
+		return errors.GitOperationFailed("clone", err)
 	}
 
 	// Create tmux session
@@ -585,13 +586,13 @@ func (c *CLI) initRepo(args []string) error {
 	// Create session with supervisor window
 	cmd = exec.Command("tmux", "new-session", "-d", "-s", tmuxSession, "-n", "supervisor", "-c", repoPath)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create tmux session: %w", err)
+		return errors.TmuxOperationFailed("create session", err)
 	}
 
 	// Create merge-queue window (detached so it doesn't switch focus)
 	cmd = exec.Command("tmux", "new-window", "-d", "-t", tmuxSession, "-n", "merge-queue", "-c", repoPath)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create merge-queue window: %w", err)
+		return errors.TmuxOperationFailed("create window", err)
 	}
 
 	// Generate session IDs for agents
@@ -779,16 +780,16 @@ func (c *CLI) listRepos(args []string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to list repos: %w (is daemon running?)", err)
+		return errors.DaemonCommunicationFailed("listing repositories", err)
 	}
 
 	if !resp.Success {
-		return fmt.Errorf("failed to list repos: %s", resp.Error)
+		return errors.Wrap(errors.CategoryRuntime, "failed to list repos", fmt.Errorf("%s", resp.Error))
 	}
 
 	repos, ok := resp.Data.([]interface{})
 	if !ok {
-		return fmt.Errorf("unexpected response format")
+		return errors.New(errors.CategoryRuntime, "unexpected response format from daemon")
 	}
 
 	if len(repos) == 0 {
@@ -848,7 +849,7 @@ func (c *CLI) createWorker(args []string) error {
 	// Get task description
 	task := strings.Join(posArgs, " ")
 	if task == "" {
-		return fmt.Errorf("usage: multiclaude work <task description>")
+		return errors.InvalidUsage("usage: multiclaude work <task description>")
 	}
 
 	// Determine repository (from flag or current directory)
@@ -873,7 +874,7 @@ func (c *CLI) createWorker(args []string) error {
 		}
 
 		if repoName == "" {
-			return fmt.Errorf("not in a tracked repository. Use --repo flag or run from repo directory")
+			return errors.NotInRepo()
 		}
 	}
 
@@ -903,7 +904,7 @@ func (c *CLI) createWorker(args []string) error {
 
 	fmt.Printf("Creating worktree at: %s\n", wtPath)
 	if err := wt.CreateNewBranch(wtPath, branchName, startBranch); err != nil {
-		return fmt.Errorf("failed to create worktree: %w", err)
+		return errors.WorktreeCreationFailed(err)
 	}
 
 	// Get repository info to determine tmux session
@@ -915,10 +916,10 @@ func (c *CLI) createWorker(args []string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to get repo info: %w (is daemon running?)", err)
+		return errors.DaemonCommunicationFailed("getting repo info", err)
 	}
 	if !resp.Success {
-		return fmt.Errorf("failed to get repo info: %s", resp.Error)
+		return errors.Wrap(errors.CategoryRuntime, "failed to get repo info", fmt.Errorf("%s", resp.Error))
 	}
 
 	// Get tmux session name (it's mc-<reponame>)
@@ -928,7 +929,7 @@ func (c *CLI) createWorker(args []string) error {
 	fmt.Printf("Creating tmux window: %s\n", workerName)
 	cmd := exec.Command("tmux", "new-window", "-d", "-t", tmuxSession, "-n", workerName, "-c", wtPath)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create tmux window: %w", err)
+		return errors.TmuxOperationFailed("create window", err)
 	}
 
 	// Generate session ID for worker
@@ -1011,7 +1012,7 @@ func (c *CLI) listWorkers(args []string) error {
 		if len(repos) == 1 {
 			repoName = repos[0]
 		} else {
-			return fmt.Errorf("multiple repos exist. Use --repo flag to specify which one")
+			return errors.MultipleRepos()
 		}
 	}
 
@@ -1024,16 +1025,16 @@ func (c *CLI) listWorkers(args []string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to list workers: %w (is daemon running?)", err)
+		return errors.DaemonCommunicationFailed("listing workers", err)
 	}
 
 	if !resp.Success {
-		return fmt.Errorf("failed to list workers: %s", resp.Error)
+		return errors.Wrap(errors.CategoryRuntime, "failed to list workers", fmt.Errorf("%s", resp.Error))
 	}
 
 	agents, ok := resp.Data.([]interface{})
 	if !ok {
-		return fmt.Errorf("unexpected response format")
+		return errors.New(errors.CategoryRuntime, "unexpected response format from daemon")
 	}
 
 	// Filter for workers and workspace
@@ -1133,7 +1134,7 @@ func (c *CLI) listWorkers(args []string) error {
 
 func (c *CLI) removeWorker(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: multiclaude work rm <worker-name>")
+		return errors.InvalidUsage("usage: multiclaude work rm <worker-name>")
 	}
 
 	workerName := args[0]
@@ -1149,7 +1150,7 @@ func (c *CLI) removeWorker(args []string) error {
 		if len(repos) == 1 {
 			repoName = repos[0]
 		} else {
-			return fmt.Errorf("multiple repos exist. Use --repo flag to specify which one")
+			return errors.MultipleRepos()
 		}
 	}
 
@@ -1164,10 +1165,10 @@ func (c *CLI) removeWorker(args []string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to get worker info: %w", err)
+		return errors.DaemonCommunicationFailed("getting worker info", err)
 	}
 	if !resp.Success {
-		return fmt.Errorf("failed to get worker info: %s", resp.Error)
+		return errors.Wrap(errors.CategoryRuntime, "failed to get worker info", fmt.Errorf("%s", resp.Error))
 	}
 
 	// Find worker
@@ -1183,7 +1184,7 @@ func (c *CLI) removeWorker(args []string) error {
 	}
 
 	if workerInfo == nil {
-		return fmt.Errorf("worker '%s' not found", workerName)
+		return errors.AgentNotFound("worker", workerName, repoName)
 	}
 
 	// Get worktree path
@@ -1294,7 +1295,7 @@ func (c *CLI) getReposList() []string {
 
 func (c *CLI) sendMessage(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: multiclaude agent send-message <to> <message>")
+		return errors.InvalidUsage("usage: multiclaude agent send-message <to> <message>")
 	}
 
 	to := args[0]
@@ -1358,7 +1359,7 @@ func (c *CLI) listMessages(args []string) error {
 
 func (c *CLI) readMessage(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: multiclaude agent read-message <message-id>")
+		return errors.InvalidUsage("usage: multiclaude agent read-message <message-id>")
 	}
 
 	messageID := args[0]
@@ -1401,7 +1402,7 @@ func (c *CLI) readMessage(args []string) error {
 
 func (c *CLI) ackMessage(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: multiclaude agent ack-message <message-id>")
+		return errors.InvalidUsage("usage: multiclaude agent ack-message <message-id>")
 	}
 
 	messageID := args[0]
@@ -1473,7 +1474,7 @@ func (c *CLI) inferAgentContext() (repoName, agentName string, err error) {
 		}
 	}
 
-	return "", "", fmt.Errorf("not in a multiclaude agent directory. Run this command from within a tmux window")
+	return "", "", errors.NotInAgentContext()
 }
 
 // Helper functions
@@ -1510,10 +1511,10 @@ func (c *CLI) completeWorker(args []string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to mark agent complete: %w (is daemon running?)", err)
+		return errors.DaemonCommunicationFailed("marking agent complete", err)
 	}
 	if !resp.Success {
-		return fmt.Errorf("failed to mark agent complete: %s", resp.Error)
+		return errors.Wrap(errors.CategoryRuntime, "failed to mark agent complete", fmt.Errorf("%s", resp.Error))
 	}
 
 	fmt.Println("✓ Agent marked as complete")
@@ -1523,7 +1524,7 @@ func (c *CLI) completeWorker(args []string) error {
 
 func (c *CLI) reviewPR(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: multiclaude review <pr-url>")
+		return errors.InvalidUsage("usage: multiclaude review <pr-url>")
 	}
 
 	prURL := args[0]
@@ -1537,7 +1538,7 @@ func (c *CLI) reviewPR(args []string) error {
 	parts := strings.Split(prURL, "/")
 
 	if len(parts) < 5 || parts[3] != "pull" {
-		return fmt.Errorf("invalid PR URL format. Expected: https://github.com/owner/repo/pull/123")
+		return errors.InvalidPRURL()
 	}
 
 	prNumber := parts[4]
@@ -1566,7 +1567,7 @@ func (c *CLI) reviewPR(args []string) error {
 		}
 
 		if repoName == "" {
-			return fmt.Errorf("not in a tracked repository. Use --repo flag or run from repo directory")
+			return errors.NotInRepo()
 		}
 	}
 
@@ -1584,11 +1585,11 @@ func (c *CLI) reviewPR(args []string) error {
 	cmd.Dir = repoPath
 	branchOutput, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to get PR branch: %w", err)
+		return errors.Wrap(errors.CategoryRuntime, "failed to get PR branch info", err).WithSuggestion("ensure 'gh' CLI is installed and authenticated: gh auth login")
 	}
 	prBranch := strings.TrimSpace(string(branchOutput))
 	if prBranch == "" {
-		return fmt.Errorf("could not determine PR branch name")
+		return errors.New(errors.CategoryRuntime, "could not determine PR branch name - the PR may not exist or be accessible")
 	}
 
 	fmt.Printf("PR branch: %s\n", prBranch)
@@ -1597,7 +1598,7 @@ func (c *CLI) reviewPR(args []string) error {
 	cmd = exec.Command("git", "fetch", "origin", prBranch)
 	cmd.Dir = repoPath
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to fetch PR branch: %w", err)
+		return errors.GitOperationFailed("fetch", err)
 	}
 
 	// Create worktree for review
@@ -1704,7 +1705,7 @@ func (c *CLI) attachAgent(args []string) error {
 		if len(repos) == 1 {
 			repoName = repos[0]
 		} else {
-			return fmt.Errorf("multiple repos exist. Use --repo flag to specify which one")
+			return errors.MultipleRepos()
 		}
 	}
 
