@@ -17,6 +17,7 @@ type Paths struct {
 	ReposDir     string // repos/
 	WorktreesDir string // wts/
 	MessagesDir  string // messages/
+	OutputDir    string // output/
 }
 
 // DefaultPaths returns the default paths for multiclaude
@@ -37,6 +38,7 @@ func DefaultPaths() (*Paths, error) {
 		ReposDir:     filepath.Join(root, "repos"),
 		WorktreesDir: filepath.Join(root, "wts"),
 		MessagesDir:  filepath.Join(root, "messages"),
+		OutputDir:    filepath.Join(root, "output"),
 	}, nil
 }
 
@@ -47,6 +49,7 @@ func (p *Paths) EnsureDirectories() error {
 		p.ReposDir,
 		p.WorktreesDir,
 		p.MessagesDir,
+		p.OutputDir,
 	}
 
 	for _, dir := range dirs {
@@ -81,4 +84,22 @@ func (p *Paths) RepoMessagesDir(repoName string) string {
 // AgentMessagesDir returns the path for a specific agent's messages
 func (p *Paths) AgentMessagesDir(repoName, agentName string) string {
 	return filepath.Join(p.RepoMessagesDir(repoName), agentName)
+}
+
+// RepoOutputDir returns the path for a repository's output logs
+func (p *Paths) RepoOutputDir(repoName string) string {
+	return filepath.Join(p.OutputDir, repoName)
+}
+
+// WorkersOutputDir returns the path for worker agent output logs
+func (p *Paths) WorkersOutputDir(repoName string) string {
+	return filepath.Join(p.RepoOutputDir(repoName), "workers")
+}
+
+// AgentLogFile returns the path to an agent's log file
+func (p *Paths) AgentLogFile(repoName, agentName string, isWorker bool) string {
+	if isWorker {
+		return filepath.Join(p.WorkersOutputDir(repoName), agentName+".log")
+	}
+	return filepath.Join(p.RepoOutputDir(repoName), agentName+".log")
 }

@@ -54,6 +54,7 @@ func TestEnsureDirectories(t *testing.T) {
 		ReposDir:     filepath.Join(tmpDir, "test-multiclaude", "repos"),
 		WorktreesDir: filepath.Join(tmpDir, "test-multiclaude", "wts"),
 		MessagesDir:  filepath.Join(tmpDir, "test-multiclaude", "messages"),
+		OutputDir:    filepath.Join(tmpDir, "test-multiclaude", "output"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -61,7 +62,7 @@ func TestEnsureDirectories(t *testing.T) {
 	}
 
 	// Verify directories were created
-	dirs := []string{paths.Root, paths.ReposDir, paths.WorktreesDir, paths.MessagesDir}
+	dirs := []string{paths.Root, paths.ReposDir, paths.WorktreesDir, paths.MessagesDir, paths.OutputDir}
 	for _, dir := range dirs {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			t.Errorf("Directory not created: %s", dir)
@@ -115,5 +116,44 @@ func TestRepoPaths(t *testing.T) {
 	expected = filepath.Join(tmpDir, "messages", repoName, agentName)
 	if agentMsgDir != expected {
 		t.Errorf("AgentMessagesDir() = %q, want %q", agentMsgDir, expected)
+	}
+}
+
+func TestOutputPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	paths := &Paths{
+		Root:         tmpDir,
+		OutputDir:    filepath.Join(tmpDir, "output"),
+	}
+
+	repoName := "test-repo"
+
+	// Test RepoOutputDir
+	repoOutputDir := paths.RepoOutputDir(repoName)
+	expected := filepath.Join(tmpDir, "output", repoName)
+	if repoOutputDir != expected {
+		t.Errorf("RepoOutputDir() = %q, want %q", repoOutputDir, expected)
+	}
+
+	// Test WorkersOutputDir
+	workersDir := paths.WorkersOutputDir(repoName)
+	expected = filepath.Join(tmpDir, "output", repoName, "workers")
+	if workersDir != expected {
+		t.Errorf("WorkersOutputDir() = %q, want %q", workersDir, expected)
+	}
+
+	// Test AgentLogFile for system agent (not worker)
+	supervisorLog := paths.AgentLogFile(repoName, "supervisor", false)
+	expected = filepath.Join(tmpDir, "output", repoName, "supervisor.log")
+	if supervisorLog != expected {
+		t.Errorf("AgentLogFile(supervisor, false) = %q, want %q", supervisorLog, expected)
+	}
+
+	// Test AgentLogFile for worker
+	workerLog := paths.AgentLogFile(repoName, "happy-eagle", true)
+	expected = filepath.Join(tmpDir, "output", repoName, "workers", "happy-eagle.log")
+	if workerLog != expected {
+		t.Errorf("AgentLogFile(happy-eagle, true) = %q, want %q", workerLog, expected)
 	}
 }

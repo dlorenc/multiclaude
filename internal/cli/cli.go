@@ -337,6 +337,37 @@ func (c *CLI) registerCommands() {
 		Usage:       "multiclaude review <pr-url>",
 		Run:         c.reviewPR,
 	}
+
+	// Logs commands
+	logsCmd := &Command{
+		Name:        "logs",
+		Description: "View and manage agent output logs",
+		Subcommands: make(map[string]*Command),
+	}
+
+	logsCmd.Run = c.viewLogs // Default action: view logs for an agent
+
+	logsCmd.Subcommands["list"] = &Command{
+		Name:        "list",
+		Description: "List log files",
+		Run:         c.listLogs,
+	}
+
+	logsCmd.Subcommands["search"] = &Command{
+		Name:        "search",
+		Description: "Search across logs",
+		Usage:       "multiclaude logs search <pattern> [--repo <repo>]",
+		Run:         c.searchLogs,
+	}
+
+	logsCmd.Subcommands["clean"] = &Command{
+		Name:        "clean",
+		Description: "Clean old logs",
+		Usage:       "multiclaude logs clean --older-than <duration>",
+		Run:         c.cleanLogs,
+	}
+
+	c.rootCmd.Subcommands["logs"] = logsCmd
 }
 
 // Daemon command implementations
@@ -630,6 +661,11 @@ func (c *CLI) initRepo(args []string) error {
 		}
 		supervisorPID = pid
 
+		// Set up output capture for supervisor
+		if err := c.setupOutputCapture(tmuxSession, "supervisor", repoName, "supervisor", "supervisor"); err != nil {
+			fmt.Printf("Warning: failed to setup output capture for supervisor: %v\n", err)
+		}
+
 		// Start Claude in merge-queue window
 		fmt.Println("Starting Claude Code in merge-queue window...")
 		pid, err = c.startClaudeInTmux(tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, "")
@@ -637,6 +673,11 @@ func (c *CLI) initRepo(args []string) error {
 			return fmt.Errorf("failed to start merge-queue Claude: %w", err)
 		}
 		mergeQueuePID = pid
+
+		// Set up output capture for merge-queue
+		if err := c.setupOutputCapture(tmuxSession, "merge-queue", repoName, "merge-queue", "merge-queue"); err != nil {
+			fmt.Printf("Warning: failed to setup output capture for merge-queue: %v\n", err)
+		}
 	}
 
 	// Add repository to daemon state
@@ -737,6 +778,11 @@ func (c *CLI) initRepo(args []string) error {
 			return fmt.Errorf("failed to start workspace Claude: %w", err)
 		}
 		workspacePID = pid
+
+		// Set up output capture for workspace
+		if err := c.setupOutputCapture(tmuxSession, "workspace", repoName, "workspace", "workspace"); err != nil {
+			fmt.Printf("Warning: failed to setup output capture for workspace: %v\n", err)
+		}
 	}
 
 	// Add workspace agent
@@ -917,6 +963,11 @@ func (c *CLI) createWorker(args []string) error {
 			return fmt.Errorf("failed to start worker Claude: %w", err)
 		}
 		workerPID = pid
+
+		// Set up output capture for worker
+		if err := c.setupOutputCapture(tmuxSession, workerName, repoName, workerName, "worker"); err != nil {
+			fmt.Printf("Warning: failed to setup output capture for worker: %v\n", err)
+		}
 	}
 
 	// Register worker with daemon
@@ -1551,6 +1602,11 @@ func (c *CLI) reviewPR(args []string) error {
 			return fmt.Errorf("failed to start reviewer Claude: %w", err)
 		}
 		reviewerPID = pid
+
+		// Set up output capture for reviewer
+		if err := c.setupOutputCapture(tmuxSession, reviewerName, repoName, reviewerName, "review"); err != nil {
+			fmt.Printf("Warning: failed to setup output capture for reviewer: %v\n", err)
+		}
 	}
 
 	// Register reviewer with daemon
@@ -1584,6 +1640,280 @@ func (c *CLI) reviewPR(args []string) error {
 	fmt.Printf("Or use: multiclaude attach %s\n", reviewerName)
 
 	return nil
+}
+
+// Logs command implementations
+
+func (c *CLI) viewLogs(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: multiclaude logs <agent> [--lines N] [--follow]")
+	}
+
+	agentName := args[0]
+	flags, _ := ParseFlags(args[1:])
+
+	// Determine repository
+	var repoName string
+	if r, ok := flags["repo"]; ok {
+		repoName = r
+	} else {
+		repos := c.getReposList()
+		if len(repos) == 0 {
+			return fmt.Errorf("no repositories tracked")
+		}
+		if len(repos) == 1 {
+			repoName = repos[0]
+		} else {
+			return fmt.Errorf("multiple repos exist. Use --repo flag to specify which one")
+		}
+	}
+
+	// Determine if it's a worker or system agent by checking if it exists in workers dir
+	workerLogFile := c.paths.AgentLogFile(repoName, agentName, true)
+	systemLogFile := c.paths.AgentLogFile(repoName, agentName, false)
+
+	var logFile string
+	if _, err := os.Stat(workerLogFile); err == nil {
+		logFile = workerLogFile
+	} else if _, err := os.Stat(systemLogFile); err == nil {
+		logFile = systemLogFile
+	} else {
+		return fmt.Errorf("no log file found for agent %s in repo %s", agentName, repoName)
+	}
+
+	// Check for --follow flag
+	if _, ok := flags["follow"]; ok {
+		// Use tail -f
+		cmd := exec.Command("tail", "-f", logFile)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+
+	// Determine number of lines
+	lines := "100"
+	if l, ok := flags["lines"]; ok {
+		lines = l
+	}
+
+	// Use tail to get recent lines
+	cmd := exec.Command("tail", "-n", lines, logFile)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func (c *CLI) listLogs(args []string) error {
+	flags, _ := ParseFlags(args)
+
+	// Determine repository
+	var repoName string
+	if r, ok := flags["repo"]; ok {
+		repoName = r
+	}
+
+	if repoName != "" {
+		// List logs for specific repo
+		return c.listLogsForRepo(repoName)
+	}
+
+	// List logs for all repos
+	repos := c.getReposList()
+	if len(repos) == 0 {
+		fmt.Println("No repositories tracked")
+		return nil
+	}
+
+	for _, repo := range repos {
+		if err := c.listLogsForRepo(repo); err != nil {
+			fmt.Printf("Warning: failed to list logs for %s: %v\n", repo, err)
+		}
+	}
+	return nil
+}
+
+func (c *CLI) listLogsForRepo(repoName string) error {
+	repoOutputDir := c.paths.RepoOutputDir(repoName)
+
+	// Check if directory exists
+	if _, err := os.Stat(repoOutputDir); os.IsNotExist(err) {
+		fmt.Printf("No logs for %s\n", repoName)
+		return nil
+	}
+
+	fmt.Printf("\n%s:\n", repoName)
+
+	// List system agent logs
+	entries, err := os.ReadDir(repoOutputDir)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() == "workers" {
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".log") {
+			info, _ := entry.Info()
+			agentName := strings.TrimSuffix(entry.Name(), ".log")
+			if info != nil {
+				fmt.Printf("  %s (%d bytes)\n", agentName, info.Size())
+			} else {
+				fmt.Printf("  %s\n", agentName)
+			}
+		}
+	}
+
+	// List worker logs
+	workersDir := c.paths.WorkersOutputDir(repoName)
+	if _, err := os.Stat(workersDir); err == nil {
+		workerEntries, err := os.ReadDir(workersDir)
+		if err == nil && len(workerEntries) > 0 {
+			fmt.Println("  workers/")
+			for _, entry := range workerEntries {
+				if strings.HasSuffix(entry.Name(), ".log") {
+					info, _ := entry.Info()
+					workerName := strings.TrimSuffix(entry.Name(), ".log")
+					if info != nil {
+						fmt.Printf("    %s (%d bytes)\n", workerName, info.Size())
+					} else {
+						fmt.Printf("    %s\n", workerName)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (c *CLI) searchLogs(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: multiclaude logs search <pattern> [--repo <repo>]")
+	}
+
+	pattern := args[0]
+	flags, _ := ParseFlags(args[1:])
+
+	// Determine repository
+	var repoName string
+	if r, ok := flags["repo"]; ok {
+		repoName = r
+	}
+
+	// Get search directories
+	var searchPaths []string
+	if repoName != "" {
+		repoOutputDir := c.paths.RepoOutputDir(repoName)
+		if _, err := os.Stat(repoOutputDir); err == nil {
+			searchPaths = append(searchPaths, repoOutputDir)
+		}
+	} else {
+		// Search all repos
+		repos := c.getReposList()
+		for _, repo := range repos {
+			repoOutputDir := c.paths.RepoOutputDir(repo)
+			if _, err := os.Stat(repoOutputDir); err == nil {
+				searchPaths = append(searchPaths, repoOutputDir)
+			}
+		}
+	}
+
+	if len(searchPaths) == 0 {
+		fmt.Println("No log directories found")
+		return nil
+	}
+
+	// Use grep to search recursively
+	grepArgs := []string{"-r", "-n", "--include=*.log", pattern}
+	grepArgs = append(grepArgs, searchPaths...)
+
+	cmd := exec.Command("grep", grepArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Run grep (exit code 1 means no matches, which is fine)
+	err := cmd.Run()
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		fmt.Println("No matches found")
+		return nil
+	}
+	return err
+}
+
+func (c *CLI) cleanLogs(args []string) error {
+	flags, _ := ParseFlags(args)
+
+	olderThan, ok := flags["older-than"]
+	if !ok {
+		return fmt.Errorf("usage: multiclaude logs clean --older-than <duration> (e.g., 7d, 24h)")
+	}
+
+	// Parse duration
+	duration, err := parseDuration(olderThan)
+	if err != nil {
+		return fmt.Errorf("invalid duration: %v", err)
+	}
+
+	cutoff := time.Now().Add(-duration)
+	fmt.Printf("Cleaning logs older than %s...\n", cutoff.Format(time.RFC3339))
+
+	var deletedCount, deletedBytes int64
+
+	// Walk output directory
+	err = filepath.Walk(c.paths.OutputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip errors
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".log") {
+			return nil
+		}
+		if info.ModTime().Before(cutoff) {
+			deletedBytes += info.Size()
+			if err := os.Remove(path); err != nil {
+				fmt.Printf("Warning: failed to remove %s: %v\n", path, err)
+			} else {
+				deletedCount++
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to walk output directory: %w", err)
+	}
+
+	fmt.Printf("Deleted %d files (%.2f MB)\n", deletedCount, float64(deletedBytes)/(1024*1024))
+	return nil
+}
+
+// parseDuration parses a duration string like "7d", "24h", "30m"
+func parseDuration(s string) (time.Duration, error) {
+	if len(s) < 2 {
+		return 0, fmt.Errorf("duration too short")
+	}
+
+	unit := s[len(s)-1]
+	valueStr := s[:len(s)-1]
+
+	var value int
+	if _, err := fmt.Sscanf(valueStr, "%d", &value); err != nil {
+		return 0, err
+	}
+
+	switch unit {
+	case 'd':
+		return time.Duration(value) * 24 * time.Hour, nil
+	case 'h':
+		return time.Duration(value) * time.Hour, nil
+	case 'm':
+		return time.Duration(value) * time.Minute, nil
+	default:
+		return 0, fmt.Errorf("unknown unit: %c (use d, h, or m)", unit)
+	}
 }
 
 func (c *CLI) attachAgent(args []string) error {
@@ -2291,6 +2621,29 @@ func (c *CLI) copyHooksConfig(repoPath, worktreePath string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 	if err := os.WriteFile(settingsPath, hooksData, 0644); err != nil {
 		return fmt.Errorf("failed to write settings.json: %w", err)
+	}
+
+	return nil
+}
+
+// setupOutputCapture sets up tmux pipe-pane to capture agent output to a log file.
+// It creates the necessary directories and starts the pipe-pane command.
+// The agentType should be "worker" for worker agents, anything else for system agents.
+func (c *CLI) setupOutputCapture(tmuxSession, tmuxWindow, repoName, agentName, agentType string) error {
+	// Determine log file path based on agent type
+	isWorker := agentType == "worker" || agentType == "review"
+	logFile := c.paths.AgentLogFile(repoName, agentName, isWorker)
+
+	// Ensure directory exists
+	logDir := filepath.Dir(logFile)
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Set up pipe-pane
+	tmuxClient := tmux.NewClient()
+	if err := tmuxClient.StartPipePane(tmuxSession, tmuxWindow, logFile); err != nil {
+		return fmt.Errorf("failed to start output capture: %w", err)
 	}
 
 	return nil

@@ -204,3 +204,27 @@ func (c *Client) GetPanePID(session, windowName string) (int, error) {
 
 	return pid, nil
 }
+
+// StartPipePane sets up pipe-pane to capture output to a file
+// The output is appended to the file, so it persists across daemon restarts
+func (c *Client) StartPipePane(session, windowName, outputFile string) error {
+	target := fmt.Sprintf("%s:%s", session, windowName)
+	// Use -o to open a pipe (output only, not input)
+	// cat >> appends to the file so output is preserved
+	cmd := exec.Command("tmux", "pipe-pane", "-o", "-t", target, fmt.Sprintf("cat >> '%s'", outputFile))
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to start pipe-pane: %w", err)
+	}
+	return nil
+}
+
+// StopPipePane stops the pipe-pane for a window
+func (c *Client) StopPipePane(session, windowName string) error {
+	target := fmt.Sprintf("%s:%s", session, windowName)
+	// Running pipe-pane with no command stops any existing pipe
+	cmd := exec.Command("tmux", "pipe-pane", "-t", target)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to stop pipe-pane: %w", err)
+	}
+	return nil
+}

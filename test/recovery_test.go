@@ -110,6 +110,7 @@ func TestOrphanedTmuxSessionCleanup(t *testing.T) {
 		ReposDir:     filepath.Join(tmpDir, "repos"),
 		WorktreesDir: filepath.Join(tmpDir, "wts"),
 		MessagesDir:  filepath.Join(tmpDir, "messages"),
+		OutputDir:    filepath.Join(tmpDir, "output"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -256,6 +257,7 @@ func TestStaleSocketCleanup(t *testing.T) {
 		ReposDir:     filepath.Join(tmpDir, "repos"),
 		WorktreesDir: filepath.Join(tmpDir, "wts"),
 		MessagesDir:  filepath.Join(tmpDir, "messages"),
+		OutputDir:    filepath.Join(tmpDir, "output"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -371,6 +373,7 @@ func TestDaemonCrashRecovery(t *testing.T) {
 		ReposDir:     filepath.Join(tmpDir, "repos"),
 		WorktreesDir: filepath.Join(tmpDir, "wts"),
 		MessagesDir:  filepath.Join(tmpDir, "messages"),
+		OutputDir:    filepath.Join(tmpDir, "output"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {

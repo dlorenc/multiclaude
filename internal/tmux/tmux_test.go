@@ -614,3 +614,88 @@ func TestErrorHandling(t *testing.T) {
 		t.Error("ListWindows on non-existent session should fail")
 	}
 }
+
+func TestPipePane(t *testing.T) {
+	client := NewClient()
+	session := uniqueSessionName()
+	window := "testwindow"
+
+	// Create session with a named window using tmux directly
+	cmd := exec.Command("tmux", "new-session", "-d", "-s", session, "-n", window)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+	defer client.KillSession(session)
+
+	// Create a temp file to capture output
+	tmpFile, err := os.CreateTemp("", "pipe-pane-test-*.log")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	// Start pipe-pane
+	if err := client.StartPipePane(session, window, tmpFile.Name()); err != nil {
+		t.Fatalf("StartPipePane failed: %v", err)
+	}
+
+	// Send some output to the pane
+	testMessage := "Hello from pipe-pane test"
+	if err := client.SendKeys(session, window, fmt.Sprintf("echo '%s'", testMessage)); err != nil {
+		t.Fatalf("Failed to send keys: %v", err)
+	}
+
+	// Wait for output to be captured
+	time.Sleep(500 * time.Millisecond)
+
+	// Read the captured output
+	content, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	// Verify the output was captured
+	if !strings.Contains(string(content), testMessage) {
+		t.Errorf("Expected output to contain %q, got %q", testMessage, string(content))
+	}
+
+	// Stop pipe-pane
+	if err := client.StopPipePane(session, window); err != nil {
+		t.Fatalf("StopPipePane failed: %v", err)
+	}
+
+	// Send more output after stopping
+	if err := client.SendKeys(session, window, "echo 'This should not be captured'"); err != nil {
+		t.Fatalf("Failed to send keys: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify the file size hasn't changed much (new output shouldn't be captured)
+	content2, err := os.ReadFile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	// The file might have grown a bit due to the echo command appearing in the prompt
+	// but the actual "This should not be captured" message should not appear
+	if strings.Contains(string(content2), "This should not be captured") {
+		t.Error("Output was captured after StopPipePane was called")
+	}
+}
+
+func TestPipePaneErrorHandling(t *testing.T) {
+	client := NewClient()
+
+	// Test StartPipePane on non-existent session
+	err := client.StartPipePane("nonexistent-session", "window", "/tmp/test.log")
+	if err == nil {
+		t.Error("StartPipePane on non-existent session should fail")
+	}
+
+	// Test StopPipePane on non-existent session
+	err = client.StopPipePane("nonexistent-session", "window")
+	if err == nil {
+		t.Error("StopPipePane on non-existent session should fail")
+	}
+}

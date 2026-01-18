@@ -204,11 +204,13 @@ func (d *Daemon) healthCheckLoop() {
 
 	// Run once immediately on startup
 	d.checkAgentHealth()
+	d.rotateLogsIfNeeded()
 
 	for {
 		select {
 		case <-ticker.C:
 			d.checkAgentHealth()
+			d.rotateLogsIfNeeded()
 		case <-d.ctx.Done():
 			d.logger.Info("Health check loop stopped")
 			return
@@ -1231,4 +1233,61 @@ func RunDetached() error {
 
 	fmt.Printf("Daemon started (PID will be written to %s)\n", paths.DaemonPID)
 	return nil
+}
+
+// MaxLogFileSize is the threshold for log rotation (10MB)
+const MaxLogFileSize = 10 * 1024 * 1024
+
+// rotateLogsIfNeeded checks log files and rotates any that exceed MaxLogFileSize
+func (d *Daemon) rotateLogsIfNeeded() {
+	d.logger.Debug("Checking for log rotation")
+
+	err := filepath.Walk(d.paths.OutputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip errors
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if !isLogFile(path) {
+			return nil
+		}
+
+		if info.Size() > MaxLogFileSize {
+			if err := d.rotateLog(path); err != nil {
+				d.logger.Error("Failed to rotate log %s: %v", path, err)
+			} else {
+				d.logger.Info("Rotated log %s (was %d bytes)", path, info.Size())
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		d.logger.Error("Failed to walk output directory for log rotation: %v", err)
+	}
+}
+
+// rotateLog rotates a single log file by renaming it with a timestamp suffix
+func (d *Daemon) rotateLog(logPath string) error {
+	// Generate rotated filename with timestamp
+	timestamp := time.Now().Format("20060102-150405")
+	rotatedPath := logPath + "." + timestamp
+
+	// Rename the current log file
+	if err := os.Rename(logPath, rotatedPath); err != nil {
+		return fmt.Errorf("failed to rename log: %w", err)
+	}
+
+	// The tmux pipe-pane will create a new file automatically when it next writes
+	// No need to recreate the file or restart the pipe
+
+	return nil
+}
+
+// isLogFile checks if a file is a log file
+func isLogFile(path string) bool {
+	base := filepath.Base(path)
+	// Only match .log files, not already-rotated files (which have timestamps)
+	return len(base) > 4 && base[len(base)-4:] == ".log"
 }
