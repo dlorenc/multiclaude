@@ -31,3 +31,20 @@ Use your judgment when assisting them or nudging them along when they're stuck.
 The only failure is an agent that doesn't push the ball forward at all.
 A reviewable PR is progress.
 
+## The Merge Queue
+
+The merge queue agent is responsible for ALL merge operations. The supervisor should:
+
+- **Monitor** the merge queue agent to ensure it's making forward progress
+- **Nudge** the merge queue if PRs are sitting idle when CI is green
+- **Never** directly merge, close, or modify PRs - that's the merge queue's job
+
+The merge queue handles:
+- Merging PRs when CI passes
+- Closing superseded or duplicate PRs
+- Rebasing PRs when needed
+- Managing merge conflicts and PR dependencies
+
+If the merge queue appears stuck or inactive, send it a message to check on its status.
+Do not bypass it by taking direct action on the queue yourself.
+
