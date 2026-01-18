@@ -287,12 +287,14 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["cleanup"] = &Command{
 		Name:        "cleanup",
 		Description: "Clean up orphaned resources",
+		Usage:       "multiclaude cleanup [--dry-run] [--verbose]",
 		Run:         c.cleanup,
 	}
 
 	c.rootCmd.Subcommands["repair"] = &Command{
 		Name:        "repair",
 		Description: "Repair state after crash",
+		Usage:       "multiclaude repair [--verbose]",
 		Run:         c.repair,
 	}
 
@@ -1470,6 +1472,7 @@ func (c *CLI) attachAgent(args []string) error {
 func (c *CLI) cleanup(args []string) error {
 	flags, _ := ParseFlags(args)
 	dryRun := flags["dry-run"] == "true"
+	verbose := flags["verbose"] == "true" || flags["v"] == "true"
 
 	if dryRun {
 		fmt.Println("Running cleanup in dry-run mode (no changes will be made)...")
@@ -1483,7 +1486,7 @@ func (c *CLI) cleanup(args []string) error {
 	_, err := client.Send(socket.Request{Command: "ping"})
 	if err != nil {
 		fmt.Println("Daemon is not running. Running local cleanup...")
-		return c.localCleanup(dryRun)
+		return c.localCleanup(dryRun, verbose)
 	}
 
 	// Trigger daemon cleanup
@@ -1504,76 +1507,248 @@ func (c *CLI) cleanup(args []string) error {
 	return nil
 }
 
-func (c *CLI) localCleanup(dryRun bool) error {
-	// Clean up orphaned worktrees and tmux sessions without daemon
+func (c *CLI) localCleanup(dryRun bool, verbose bool) error {
+	// Clean up orphaned worktrees, tmux sessions, and other resources
 	fmt.Println("\nChecking for orphaned resources...")
 
-	// List all repos
-	entries, err := os.ReadDir(c.paths.ReposDir)
+	totalRemoved := 0
+	totalIssues := 0
+
+	// Load state for reference
+	st, err := state.Load(c.paths.StateFile)
 	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Println("No repositories found")
-			return nil
-		}
-		return fmt.Errorf("failed to read repos directory: %w", err)
+		fmt.Printf("Warning: could not load state file: %v\n", err)
+		st = state.New(c.paths.StateFile)
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+	// Check for orphaned tmux sessions (mc-* sessions not in state)
+	tmuxClient := tmux.NewClient()
+	if tmuxClient.IsTmuxAvailable() {
+		sessions, err := tmuxClient.ListSessions()
+		if err == nil {
+			repos := st.ListRepos()
+			validSessions := make(map[string]bool)
+			for _, repo := range repos {
+				validSessions[fmt.Sprintf("mc-%s", repo)] = true
+			}
+
+			orphanedSessions := []string{}
+			for _, session := range sessions {
+				if strings.HasPrefix(session, "mc-") && !validSessions[session] {
+					orphanedSessions = append(orphanedSessions, session)
+				}
+			}
+
+			if len(orphanedSessions) > 0 {
+				fmt.Printf("\nOrphaned tmux sessions (%d):\n", len(orphanedSessions))
+				for _, session := range orphanedSessions {
+					if dryRun {
+						fmt.Printf("  Would kill: %s\n", session)
+					} else {
+						if err := tmuxClient.KillSession(session); err != nil {
+							fmt.Printf("  Failed to kill %s: %v\n", session, err)
+						} else {
+							fmt.Printf("  Killed: %s\n", session)
+							totalRemoved++
+						}
+					}
+				}
+			} else if verbose {
+				fmt.Println("\nNo orphaned tmux sessions found")
+			}
 		}
+	}
 
-		repoName := entry.Name()
-		repoPath := c.paths.RepoDir(repoName)
-		wtRootDir := c.paths.WorktreeDir(repoName)
-
-		fmt.Printf("\nRepository: %s\n", repoName)
-
-		// Check for orphaned worktrees
-		if _, err := os.Stat(wtRootDir); err == nil {
-			wt := worktree.NewManager(repoPath)
-			removed, err := worktree.CleanupOrphaned(wtRootDir, wt)
-			if err != nil {
-				fmt.Printf("  Warning: failed to cleanup worktrees: %v\n", err)
+	// Check for orphaned worktree directories (in wts/ but not in any repo's git worktrees)
+	entries, err := os.ReadDir(c.paths.WorktreesDir)
+	if err != nil && !os.IsNotExist(err) {
+		fmt.Printf("Warning: failed to read worktrees directory: %v\n", err)
+	} else if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
 				continue
 			}
 
-			if len(removed) > 0 {
-				for _, path := range removed {
-					if dryRun {
-						fmt.Printf("  Would remove: %s\n", path)
+			repoName := entry.Name()
+			repoPath := c.paths.RepoDir(repoName)
+			wtRootDir := c.paths.WorktreeDir(repoName)
+
+			// Check if the repo still exists
+			if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+				fmt.Printf("\nOrphaned worktree directory (repo missing): %s\n", wtRootDir)
+				if !dryRun {
+					if err := os.RemoveAll(wtRootDir); err != nil {
+						fmt.Printf("  Failed to remove: %v\n", err)
 					} else {
-						fmt.Printf("  Removed: %s\n", path)
+						fmt.Printf("  Removed\n")
+						totalRemoved++
 					}
 				}
+				continue
+			}
+
+			if verbose {
+				fmt.Printf("\nRepository: %s\n", repoName)
+			}
+
+			wt := worktree.NewManager(repoPath)
+
+			// Cleanup orphaned worktree directories
+			if !dryRun {
+				removed, err := worktree.CleanupOrphaned(wtRootDir, wt)
+				if err != nil {
+					fmt.Printf("  Warning: failed to cleanup worktrees: %v\n", err)
+				} else if len(removed) > 0 {
+					for _, path := range removed {
+						fmt.Printf("  Removed: %s\n", path)
+					}
+					totalRemoved += len(removed)
+				} else if verbose {
+					fmt.Println("  No orphaned worktrees")
+				}
 			} else {
-				fmt.Println("  No orphaned worktrees found")
+				// Dry run: just check what would be removed
+				gitWorktrees, _ := wt.List()
+				gitPaths := make(map[string]bool)
+				for _, gwt := range gitWorktrees {
+					absPath, _ := filepath.Abs(gwt.Path)
+					evalPath, err := filepath.EvalSymlinks(absPath)
+					if err != nil {
+						evalPath = absPath
+					}
+					gitPaths[evalPath] = true
+				}
+
+				dirEntries, _ := os.ReadDir(wtRootDir)
+				for _, de := range dirEntries {
+					if !de.IsDir() {
+						continue
+					}
+					path := filepath.Join(wtRootDir, de.Name())
+					absPath, _ := filepath.Abs(path)
+					evalPath, err := filepath.EvalSymlinks(absPath)
+					if err != nil {
+						evalPath = absPath
+					}
+					if !gitPaths[evalPath] {
+						fmt.Printf("  Would remove: %s\n", path)
+						totalIssues++
+					}
+				}
 			}
 
 			// Prune git worktree references
 			if !dryRun {
-				if err := wt.Prune(); err != nil {
+				if err := wt.Prune(); err != nil && verbose {
 					fmt.Printf("  Warning: failed to prune worktrees: %v\n", err)
 				}
 			}
 		}
 	}
 
-	fmt.Println("\n✓ Local cleanup completed")
+	// Check for orphaned message directories
+	msgEntries, err := os.ReadDir(c.paths.MessagesDir)
+	if err != nil && !os.IsNotExist(err) {
+		fmt.Printf("Warning: failed to read messages directory: %v\n", err)
+	} else if err == nil {
+		for _, entry := range msgEntries {
+			if !entry.IsDir() {
+				continue
+			}
+
+			repoName := entry.Name()
+			validAgents, _ := st.ListAgents(repoName)
+
+			msgMgr := messages.NewManager(c.paths.MessagesDir)
+
+			if !dryRun {
+				count, err := msgMgr.CleanupOrphaned(repoName, validAgents)
+				if err != nil && verbose {
+					fmt.Printf("Warning: failed to cleanup messages for %s: %v\n", repoName, err)
+				} else if count > 0 {
+					fmt.Printf("Cleaned up %d orphaned message dir(s) for %s\n", count, repoName)
+					totalRemoved += count
+				}
+			} else {
+				// Dry run check
+				repoDir := filepath.Join(c.paths.MessagesDir, repoName)
+				agentEntries, _ := os.ReadDir(repoDir)
+				validAgentMap := make(map[string]bool)
+				for _, a := range validAgents {
+					validAgentMap[a] = true
+				}
+				for _, ae := range agentEntries {
+					if ae.IsDir() && !validAgentMap[ae.Name()] {
+						fmt.Printf("Would remove orphaned message dir: %s/%s\n", repoName, ae.Name())
+						totalIssues++
+					}
+				}
+			}
+		}
+	}
+
+	// Check for stale socket and PID files (when daemon not running)
+	pidFile := daemon.NewPIDFile(c.paths.DaemonPID)
+	if running, _, _ := pidFile.IsRunning(); !running {
+		// Daemon not running, check for stale files
+		if _, err := os.Stat(c.paths.DaemonPID); err == nil {
+			if dryRun {
+				fmt.Printf("\nWould remove stale PID file: %s\n", c.paths.DaemonPID)
+				totalIssues++
+			} else {
+				if err := os.Remove(c.paths.DaemonPID); err == nil {
+					fmt.Printf("Removed stale PID file: %s\n", c.paths.DaemonPID)
+					totalRemoved++
+				}
+			}
+		}
+		if _, err := os.Stat(c.paths.DaemonSock); err == nil {
+			if dryRun {
+				fmt.Printf("Would remove stale socket file: %s\n", c.paths.DaemonSock)
+				totalIssues++
+			} else {
+				if err := os.Remove(c.paths.DaemonSock); err == nil {
+					fmt.Printf("Removed stale socket file: %s\n", c.paths.DaemonSock)
+					totalRemoved++
+				}
+			}
+		}
+	}
+
+	fmt.Println()
+	if dryRun {
+		if totalIssues > 0 {
+			fmt.Printf("✓ Dry run completed: would fix %d issue(s)\n", totalIssues)
+		} else {
+			fmt.Println("✓ Dry run completed: no issues found")
+		}
+	} else {
+		if totalRemoved > 0 {
+			fmt.Printf("✓ Cleanup completed: removed %d item(s)\n", totalRemoved)
+		} else {
+			fmt.Println("✓ Cleanup completed: no orphaned resources found")
+		}
+	}
+
 	return nil
 }
 
 func (c *CLI) repair(args []string) error {
+	flags, _ := ParseFlags(args)
+	verbose := flags["verbose"] == "true" || flags["v"] == "true"
+
 	fmt.Println("Repairing state...")
 
 	// Check if daemon is running
 	client := socket.NewClient(c.paths.DaemonSock)
 	_, err := client.Send(socket.Request{Command: "ping"})
 	if err != nil {
-		return fmt.Errorf("daemon must be running to repair state. Start it with: multiclaude start")
+		// Daemon not running - do local repair
+		fmt.Println("Daemon is not running. Performing local repair...")
+		return c.localRepair(verbose)
 	}
 
-	// Trigger state repair
+	// Trigger state repair via daemon
 	resp, err := client.Send(socket.Request{
 		Command: "repair_state",
 	})
@@ -1592,6 +1767,170 @@ func (c *CLI) repair(args []string) error {
 		if fixed, ok := data["issues_fixed"].(float64); ok && fixed > 0 {
 			fmt.Printf("  Fixed %d issue(s)\n", int(fixed))
 		}
+	}
+
+	return nil
+}
+
+// localRepair performs state repair without the daemon running
+func (c *CLI) localRepair(verbose bool) error {
+	// Load state from disk
+	st, err := state.Load(c.paths.StateFile)
+	if err != nil {
+		return fmt.Errorf("failed to load state: %w", err)
+	}
+
+	tmuxClient := tmux.NewClient()
+	agentsRemoved := 0
+	issuesFixed := 0
+
+	// Track orphaned tmux sessions
+	orphanedSessions := []string{}
+
+	// Get all tmux sessions and find orphaned ones
+	sessions, err := tmuxClient.ListSessions()
+	if err == nil {
+		repos := st.ListRepos()
+		validSessions := make(map[string]bool)
+		for _, repo := range repos {
+			validSessions[fmt.Sprintf("mc-%s", repo)] = true
+		}
+		for _, session := range sessions {
+			if strings.HasPrefix(session, "mc-") && !validSessions[session] {
+				orphanedSessions = append(orphanedSessions, session)
+			}
+		}
+	}
+
+	// Check each repo and its agents
+	repos := st.GetAllRepos()
+	for repoName, repo := range repos {
+		if verbose {
+			fmt.Printf("\nChecking repository: %s\n", repoName)
+		}
+
+		// Check if tmux session exists
+		hasSession, err := tmuxClient.HasSession(repo.TmuxSession)
+		if err != nil && verbose {
+			fmt.Printf("  Warning: failed to check session %s: %v\n", repo.TmuxSession, err)
+			continue
+		}
+
+		if !hasSession {
+			if verbose {
+				fmt.Printf("  Tmux session %s not found\n", repo.TmuxSession)
+			}
+			// Remove all agents for this repo
+			for agentName := range repo.Agents {
+				if verbose {
+					fmt.Printf("  Removing agent %s (session gone)\n", agentName)
+				}
+				if err := st.RemoveAgent(repoName, agentName); err == nil {
+					agentsRemoved++
+				}
+			}
+			issuesFixed++
+			continue
+		}
+
+		// Check each agent
+		for agentName, agent := range repo.Agents {
+			// Check if window exists
+			hasWindow, _ := tmuxClient.HasWindow(repo.TmuxSession, agent.TmuxWindow)
+			if !hasWindow {
+				if verbose {
+					fmt.Printf("  Removing agent %s (window %s not found)\n", agentName, agent.TmuxWindow)
+				}
+				if err := st.RemoveAgent(repoName, agentName); err == nil {
+					agentsRemoved++
+					issuesFixed++
+				}
+				continue
+			}
+
+			// Check if worktree exists (for workers)
+			if agent.Type == state.AgentTypeWorker && agent.WorktreePath != "" {
+				if _, err := os.Stat(agent.WorktreePath); os.IsNotExist(err) {
+					if verbose {
+						fmt.Printf("  Warning: worktree missing for %s: %s\n", agentName, agent.WorktreePath)
+					}
+					// Don't remove - window exists, user may have manually deleted worktree
+				}
+			}
+
+			if verbose {
+				fmt.Printf("  Agent %s: OK\n", agentName)
+			}
+		}
+	}
+
+	// Clean up orphaned worktrees
+	for _, repoName := range st.ListRepos() {
+		repoPath := c.paths.RepoDir(repoName)
+		wtRootDir := c.paths.WorktreeDir(repoName)
+
+		if _, err := os.Stat(wtRootDir); os.IsNotExist(err) {
+			continue
+		}
+
+		wt := worktree.NewManager(repoPath)
+		removed, err := worktree.CleanupOrphaned(wtRootDir, wt)
+		if err != nil {
+			if verbose {
+				fmt.Printf("  Warning: failed to cleanup worktrees for %s: %v\n", repoName, err)
+			}
+			continue
+		}
+
+		if len(removed) > 0 {
+			if verbose {
+				fmt.Printf("  Cleaned up %d orphaned worktree(s) for %s\n", len(removed), repoName)
+			}
+			issuesFixed += len(removed)
+		}
+
+		// Prune git worktree references
+		if err := wt.Prune(); err != nil && verbose {
+			fmt.Printf("  Warning: failed to prune worktrees for %s: %v\n", repoName, err)
+		}
+	}
+
+	// Clean up orphaned message directories
+	msgMgr := messages.NewManager(c.paths.MessagesDir)
+	for _, repoName := range st.ListRepos() {
+		validAgents, _ := st.ListAgents(repoName)
+		if count, err := msgMgr.CleanupOrphaned(repoName, validAgents); err == nil && count > 0 {
+			if verbose {
+				fmt.Printf("  Cleaned up %d orphaned message dir(s) for %s\n", count, repoName)
+			}
+			issuesFixed += count
+		}
+	}
+
+	// Report orphaned tmux sessions
+	if len(orphanedSessions) > 0 {
+		fmt.Printf("\nFound %d orphaned tmux session(s) not in state:\n", len(orphanedSessions))
+		for _, session := range orphanedSessions {
+			fmt.Printf("  - %s\n", session)
+		}
+		fmt.Println("To remove these, run: tmux kill-session -t <session>")
+		fmt.Println("Or use: multiclaude stop-all")
+	}
+
+	// Save updated state
+	if err := st.Save(); err != nil {
+		return fmt.Errorf("failed to save repaired state: %w", err)
+	}
+
+	fmt.Println("\n✓ Local repair completed")
+	if agentsRemoved > 0 {
+		fmt.Printf("  Removed %d dead agent(s)\n", agentsRemoved)
+	}
+	if issuesFixed > 0 {
+		fmt.Printf("  Fixed %d issue(s)\n", issuesFixed)
+	}
+	if agentsRemoved == 0 && issuesFixed == 0 {
+		fmt.Println("  No issues found")
 	}
 
 	return nil
