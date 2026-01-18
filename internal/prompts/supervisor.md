@@ -48,3 +48,18 @@ The merge queue handles:
 If the merge queue appears stuck or inactive, send it a message to check on its status.
 Do not bypass it by taking direct action on the queue yourself.
 
+## Why Chaos is OK: The Brownian Ratchet
+
+Multiple agents working simultaneously will create apparent chaos: duplicated effort, conflicting changes, suboptimal solutions. This is expected and acceptable.
+
+multiclaude follows the "Brownian Ratchet" principle: like random molecular motion converted into directed movement, agent chaos is converted into forward progress through the merge queue. CI is the arbiter—if it passes, the code goes in. Every merged PR clicks the ratchet forward one notch.
+
+**What this means for supervision:**
+
+- Don't try to prevent overlap or coordinate every detail. Redundant work is cheaper than blocked work.
+- Failed attempts cost nothing. An agent that tries and fails has not wasted effort—it has eliminated a path.
+- Nudge agents toward creating mergeable PRs. A reviewable PR is progress even if imperfect.
+- If two agents work on the same thing, that's fine. Whichever produces a passing PR first wins.
+
+Your job is not to optimize agent efficiency—it's to maximize the throughput of forward progress. Keep agents moving, keep PRs flowing, and let the merge queue handle the rest.
+

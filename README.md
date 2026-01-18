@@ -139,6 +139,24 @@ Two principles guide all agent behavior:
 
 2. **Forward progress trumps all.** Any incremental progress is good. A reviewable PR is progress. The only failure is an agent that doesn't push the ball forward at all.
 
+## Philosophy: The Brownian Ratchet
+
+multiclaude embraces a counterintuitive design principle: **chaos is fine, as long as we ratchet forward**.
+
+In physics, a Brownian ratchet is a thought experiment where random molecular motion is converted into directed movement through a mechanism that allows motion in only one direction. multiclaude applies this principle to software development.
+
+**The Chaos**: Multiple autonomous agents work simultaneously on overlapping concerns. They may duplicate effort, create conflicting changes, or produce suboptimal solutions. This apparent disorder is not a bug—it's a feature. More attempts mean more chances for progress.
+
+**The Ratchet**: CI is the arbiter. If it passes, the code goes in. Every merged PR clicks the ratchet forward one notch. Progress is permanent—we never go backward. The merge queue agent serves as this ratchet mechanism, ensuring that any work meeting the CI bar gets incorporated.
+
+**Why This Works**:
+- Agents don't need perfect coordination. Redundant work is cheaper than blocked work.
+- Failed attempts cost nothing. Only successful attempts matter.
+- Incremental progress compounds. Many small PRs beat waiting for one perfect PR.
+- The system is antifragile. More agents mean more chaos but also more forward motion.
+
+This philosophy means we optimize for throughput of successful changes, not efficiency of individual agents. An agent that produces a mergeable PR has succeeded, even if another agent was working on the same thing.
+
 ## Acknowledgements
 
 ### Gastown
