@@ -378,3 +378,268 @@ func TestStateAtomicSave(t *testing.T) {
 		t.Error("State file not created")
 	}
 }
+
+func TestSave(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Add a repo and agent without relying on AddRepo's auto-save
+	s.Repos["test-repo"] = &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "multiclaude-test-repo",
+		Agents: map[string]Agent{
+			"supervisor": {
+				Type:       AgentTypeSupervisor,
+				TmuxWindow: "supervisor",
+				SessionID:  "test-session",
+				PID:        12345,
+				CreatedAt:  time.Now(),
+			},
+		},
+	}
+
+	// Manually save
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Verify file exists and is valid JSON
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("Failed to read saved state file: %v", err)
+	}
+
+	if len(data) == 0 {
+		t.Error("Saved state file is empty")
+	}
+
+	// Verify we can load the saved state
+	loaded, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Failed to load saved state: %v", err)
+	}
+
+	if len(loaded.Repos) != 1 {
+		t.Errorf("Loaded state has %d repos, want 1", len(loaded.Repos))
+	}
+
+	repo, exists := loaded.GetRepo("test-repo")
+	if !exists {
+		t.Fatal("test-repo not found in loaded state")
+	}
+
+	if repo.GithubURL != "https://github.com/test/repo" {
+		t.Errorf("GithubURL = %q, want %q", repo.GithubURL, "https://github.com/test/repo")
+	}
+}
+
+func TestGetAllRepos(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Empty state
+	repos := s.GetAllRepos()
+	if len(repos) != 0 {
+		t.Errorf("GetAllRepos() on empty state returned %d repos, want 0", len(repos))
+	}
+
+	// Add multiple repos with agents
+	for _, name := range []string{"repo1", "repo2", "repo3"} {
+		repo := &Repository{
+			GithubURL:   "https://github.com/test/" + name,
+			TmuxSession: "mc-" + name,
+			Agents:      make(map[string]Agent),
+		}
+		if err := s.AddRepo(name, repo); err != nil {
+			t.Fatalf("AddRepo(%s) failed: %v", name, err)
+		}
+
+		// Add an agent to each repo
+		agent := Agent{
+			Type:       AgentTypeSupervisor,
+			TmuxWindow: "supervisor",
+			SessionID:  "session-" + name,
+			PID:        12345,
+			CreatedAt:  time.Now(),
+		}
+		if err := s.AddAgent(name, "supervisor", agent); err != nil {
+			t.Fatalf("AddAgent() failed: %v", err)
+		}
+	}
+
+	// Get all repos
+	repos = s.GetAllRepos()
+	if len(repos) != 3 {
+		t.Errorf("GetAllRepos() returned %d repos, want 3", len(repos))
+	}
+
+	// Verify we got all repos
+	for _, name := range []string{"repo1", "repo2", "repo3"} {
+		repo, exists := repos[name]
+		if !exists {
+			t.Errorf("GetAllRepos() missing repo %q", name)
+			continue
+		}
+
+		expectedURL := "https://github.com/test/" + name
+		if repo.GithubURL != expectedURL {
+			t.Errorf("repo %s GithubURL = %q, want %q", name, repo.GithubURL, expectedURL)
+		}
+
+		// Verify agents were copied
+		if len(repo.Agents) != 1 {
+			t.Errorf("repo %s has %d agents, want 1", name, len(repo.Agents))
+		}
+	}
+}
+
+func TestGetAllReposIsSnapshot(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Add a repo
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Get snapshot
+	snapshot := s.GetAllRepos()
+
+	// Modify the snapshot
+	snapshot["test-repo"].GithubURL = "modified"
+
+	// Verify original state is unchanged
+	originalRepo, _ := s.GetRepo("test-repo")
+	if originalRepo.GithubURL == "modified" {
+		t.Error("GetAllRepos() did not return a deep copy - modifying snapshot affected original state")
+	}
+}
+
+func TestUpdateAgentNonExistentRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	agent := Agent{
+		Type:       AgentTypeSupervisor,
+		TmuxWindow: "supervisor",
+	}
+
+	err := s.UpdateAgent("nonexistent", "supervisor", agent)
+	if err == nil {
+		t.Error("UpdateAgent() should fail for nonexistent repo")
+	}
+}
+
+func TestUpdateAgentNonExistentAgent(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Add repo but no agent
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	agent := Agent{
+		Type:       AgentTypeSupervisor,
+		TmuxWindow: "supervisor",
+	}
+
+	err := s.UpdateAgent("test-repo", "nonexistent", agent)
+	if err == nil {
+		t.Error("UpdateAgent() should fail for nonexistent agent")
+	}
+}
+
+func TestRemoveAgentNonExistentRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	err := s.RemoveAgent("nonexistent", "agent")
+	if err == nil {
+		t.Error("RemoveAgent() should fail for nonexistent repo")
+	}
+}
+
+func TestGetAgentNonExistentRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	_, exists := s.GetAgent("nonexistent", "agent")
+	if exists {
+		t.Error("GetAgent() should return false for nonexistent repo")
+	}
+}
+
+func TestListAgentsNonExistentRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	_, err := s.ListAgents("nonexistent")
+	if err == nil {
+		t.Error("ListAgents() should fail for nonexistent repo")
+	}
+}
+
+func TestLoadInvalidJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "invalid.json")
+
+	// Write invalid JSON
+	if err := os.WriteFile(statePath, []byte("not valid json"), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	_, err := Load(statePath)
+	if err == nil {
+		t.Error("Load() should fail for invalid JSON")
+	}
+}
+
+func TestAddRepoInitializesAgentsMap(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Add repo with nil agents map
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      nil, // Intentionally nil
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Verify agents map was initialized
+	addedRepo, _ := s.GetRepo("test-repo")
+	if addedRepo.Agents == nil {
+		t.Error("AddRepo() did not initialize nil Agents map")
+	}
+}

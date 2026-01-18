@@ -36,8 +36,55 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      - name: Run unit tests
-        run: go test -v ./internal/... ./pkg/...
+      - name: Run unit tests with coverage
+        run: |
+          go test -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/...
+          go tool cover -func=coverage.out
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 7
+
+  coverage-check:
+    name: Coverage Check
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Check coverage thresholds
+        run: |
+          go test -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/...
+
+          echo "## Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Package | Coverage |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|----------|" >> $GITHUB_STEP_SUMMARY
+
+          # Parse coverage and check thresholds
+          go tool cover -func=coverage.out | while read line; do
+            if echo "$line" | grep -q "total:"; then
+              total=$(echo "$line" | awk '{print $NF}' | tr -d '%')
+              echo "| **Total** | **${total}%** |" >> $GITHUB_STEP_SUMMARY
+              echo ""
+              echo "Total coverage: ${total}%"
+            fi
+          done
+
+          # Show per-package summary
+          echo ""
+          echo "Per-package coverage:"
+          go test -cover ./internal/... ./pkg/... 2>&1 | grep "coverage:" | sort
 
   e2e-tests:
     name: E2E Tests
