@@ -229,7 +229,7 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["init"] = &Command{
 		Name:        "init",
 		Description: "Initialize a repository",
-		Usage:       "multiclaude init <github-url> [path] [name]",
+		Usage:       "multiclaude init <github-url> [name] [--no-merge-queue] [--mq-track=all|author|assigned]",
 		Run:         c.initRepo,
 	}
 
@@ -370,6 +370,14 @@ func (c *CLI) registerCommands() {
 	}
 
 	c.rootCmd.Subcommands["logs"] = logsCmd
+
+	// Config command
+	c.rootCmd.Subcommands["config"] = &Command{
+		Name:        "config",
+		Description: "View or modify repository configuration",
+		Usage:       "multiclaude config [repo] [--mq-enabled=true|false] [--mq-track=all|author|assigned]",
+		Run:         c.configRepo,
+	}
 }
 
 // Daemon command implementations
@@ -572,24 +580,52 @@ func (c *CLI) stopAll(args []string) error {
 }
 
 func (c *CLI) initRepo(args []string) error {
-	if len(args) < 1 {
-		return errors.InvalidUsage("usage: multiclaude init <github-url> [name]")
+	flags, posArgs := ParseFlags(args)
+
+	if len(posArgs) < 1 {
+		return errors.InvalidUsage("usage: multiclaude init <github-url> [name] [--no-merge-queue] [--mq-track=all|author|assigned]")
 	}
 
-	githubURL := args[0]
+	githubURL := posArgs[0]
 
 	// Parse repository name from URL if not provided
 	var repoName string
-	if len(args) >= 2 {
-		repoName = args[1]
+	if len(posArgs) >= 2 {
+		repoName = posArgs[1]
 	} else {
 		// Extract repo name from URL (e.g., github.com/user/repo -> repo)
 		parts := strings.Split(githubURL, "/")
 		repoName = strings.TrimSuffix(parts[len(parts)-1], ".git")
 	}
 
+	// Parse merge queue configuration flags
+	mqEnabled := flags["no-merge-queue"] != "true"
+	mqTrackMode := state.TrackModeAll
+	if trackMode, ok := flags["mq-track"]; ok {
+		switch trackMode {
+		case "all":
+			mqTrackMode = state.TrackModeAll
+		case "author":
+			mqTrackMode = state.TrackModeAuthor
+		case "assigned":
+			mqTrackMode = state.TrackModeAssigned
+		default:
+			return fmt.Errorf("invalid --mq-track value: %s (must be 'all', 'author', or 'assigned')", trackMode)
+		}
+	}
+
+	mqConfig := state.MergeQueueConfig{
+		Enabled:   mqEnabled,
+		TrackMode: mqTrackMode,
+	}
+
 	fmt.Printf("Initializing repository: %s\n", repoName)
 	fmt.Printf("GitHub URL: %s\n", githubURL)
+	if mqEnabled {
+		fmt.Printf("Merge queue: enabled (tracking: %s)\n", mqTrackMode)
+	} else {
+		fmt.Printf("Merge queue: disabled\n")
+	}
 
 	// Check if daemon is running
 	client := socket.NewClient(c.paths.DaemonSock)
@@ -620,10 +656,12 @@ func (c *CLI) initRepo(args []string) error {
 		return errors.TmuxOperationFailed("create session", err)
 	}
 
-	// Create merge-queue window (detached so it doesn't switch focus)
-	cmd = exec.Command("tmux", "new-window", "-d", "-t", tmuxSession, "-n", "merge-queue", "-c", repoPath)
-	if err := cmd.Run(); err != nil {
-		return errors.TmuxOperationFailed("create window", err)
+	// Create merge-queue window only if enabled
+	if mqEnabled {
+		cmd = exec.Command("tmux", "new-window", "-d", "-t", tmuxSession, "-n", "merge-queue", "-c", repoPath)
+		if err := cmd.Run(); err != nil {
+			return errors.TmuxOperationFailed("create merge-queue window", err)
+		}
 	}
 
 	// Generate session IDs for agents
@@ -632,9 +670,12 @@ func (c *CLI) initRepo(args []string) error {
 		return fmt.Errorf("failed to generate supervisor session ID: %w", err)
 	}
 
-	mergeQueueSessionID, err := generateSessionID()
-	if err != nil {
-		return fmt.Errorf("failed to generate merge-queue session ID: %w", err)
+	var mergeQueueSessionID string
+	if mqEnabled {
+		mergeQueueSessionID, err = generateSessionID()
+		if err != nil {
+			return fmt.Errorf("failed to generate merge-queue session ID: %w", err)
+		}
 	}
 
 	// Write prompt files
@@ -643,9 +684,12 @@ func (c *CLI) initRepo(args []string) error {
 		return fmt.Errorf("failed to write supervisor prompt: %w", err)
 	}
 
-	mergeQueuePromptFile, err := c.writePromptFile(repoPath, prompts.TypeMergeQueue, "merge-queue")
-	if err != nil {
-		return fmt.Errorf("failed to write merge-queue prompt: %w", err)
+	var mergeQueuePromptFile string
+	if mqEnabled {
+		mergeQueuePromptFile, err = c.writeMergeQueuePromptFile(repoPath, "merge-queue", mqConfig)
+		if err != nil {
+			return fmt.Errorf("failed to write merge-queue prompt: %w", err)
+		}
 	}
 
 	// Copy hooks configuration if it exists (for supervisor and merge-queue)
@@ -668,27 +712,31 @@ func (c *CLI) initRepo(args []string) error {
 			fmt.Printf("Warning: failed to setup output capture for supervisor: %v\n", err)
 		}
 
-		// Start Claude in merge-queue window
-		fmt.Println("Starting Claude Code in merge-queue window...")
-		pid, err = c.startClaudeInTmux(tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, "")
-		if err != nil {
-			return fmt.Errorf("failed to start merge-queue Claude: %w", err)
-		}
-		mergeQueuePID = pid
+		// Start Claude in merge-queue window only if enabled
+		if mqEnabled {
+			fmt.Println("Starting Claude Code in merge-queue window...")
+			pid, err = c.startClaudeInTmux(tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, "")
+			if err != nil {
+				return fmt.Errorf("failed to start merge-queue Claude: %w", err)
+			}
+			mergeQueuePID = pid
 
-		// Set up output capture for merge-queue
-		if err := c.setupOutputCapture(tmuxSession, "merge-queue", repoName, "merge-queue", "merge-queue"); err != nil {
-			fmt.Printf("Warning: failed to setup output capture for merge-queue: %v\n", err)
+			// Set up output capture for merge-queue
+			if err := c.setupOutputCapture(tmuxSession, "merge-queue", repoName, "merge-queue", "merge-queue"); err != nil {
+				fmt.Printf("Warning: failed to setup output capture for merge-queue: %v\n", err)
+			}
 		}
 	}
 
-	// Add repository to daemon state
+	// Add repository to daemon state (with merge queue config)
 	resp, err := client.Send(socket.Request{
 		Command: "add_repo",
 		Args: map[string]interface{}{
-			"name":         repoName,
-			"github_url":   githubURL,
-			"tmux_session": tmuxSession,
+			"name":             repoName,
+			"github_url":       githubURL,
+			"tmux_session":     tmuxSession,
+			"mq_enabled":       mqConfig.Enabled,
+			"mq_track_mode":    string(mqConfig.TrackMode),
 		},
 	})
 	if err != nil {
@@ -718,24 +766,26 @@ func (c *CLI) initRepo(args []string) error {
 		return fmt.Errorf("failed to register supervisor: %s", resp.Error)
 	}
 
-	// Add merge-queue agent
-	resp, err = client.Send(socket.Request{
-		Command: "add_agent",
-		Args: map[string]interface{}{
-			"repo":          repoName,
-			"agent":         "merge-queue",
-			"type":          "merge-queue",
-			"worktree_path": repoPath,
-			"tmux_window":   "merge-queue",
-			"session_id":    mergeQueueSessionID,
-			"pid":           mergeQueuePID,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to register merge-queue: %w", err)
-	}
-	if !resp.Success {
-		return fmt.Errorf("failed to register merge-queue: %s", resp.Error)
+	// Add merge-queue agent only if enabled
+	if mqEnabled {
+		resp, err = client.Send(socket.Request{
+			Command: "add_agent",
+			Args: map[string]interface{}{
+				"repo":          repoName,
+				"agent":         "merge-queue",
+				"type":          "merge-queue",
+				"worktree_path": repoPath,
+				"tmux_window":   "merge-queue",
+				"session_id":    mergeQueueSessionID,
+				"pid":           mergeQueuePID,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to register merge-queue: %w", err)
+		}
+		if !resp.Success {
+			return fmt.Errorf("failed to register merge-queue: %s", resp.Error)
+		}
 	}
 
 	// Create workspace worktree
@@ -810,7 +860,11 @@ func (c *CLI) initRepo(args []string) error {
 	fmt.Println()
 	fmt.Println("✓ Repository initialized successfully!")
 	fmt.Printf("  Tmux session: %s\n", tmuxSession)
-	fmt.Printf("  Agents: supervisor, merge-queue, workspace\n")
+	if mqEnabled {
+		fmt.Printf("  Agents: supervisor, merge-queue, workspace\n")
+	} else {
+		fmt.Printf("  Agents: supervisor, workspace\n")
+	}
 	fmt.Printf("\nAttach to session: tmux attach -t %s\n", tmuxSession)
 	fmt.Printf("Or attach to your workspace: multiclaude attach workspace\n")
 
@@ -887,6 +941,148 @@ func (c *CLI) listRepos(args []string) error {
 	table.Print()
 
 	return nil
+}
+
+func (c *CLI) configRepo(args []string) error {
+	flags, posArgs := ParseFlags(args)
+
+	// Determine repository
+	var repoName string
+	if len(posArgs) >= 1 {
+		repoName = posArgs[0]
+	} else {
+		// Try to infer from current directory
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current directory: %w", err)
+		}
+
+		// Check if we're in a tracked repo
+		repos := c.getReposList()
+		for _, repo := range repos {
+			repoPath := c.paths.RepoDir(repo)
+			if strings.HasPrefix(cwd, repoPath) {
+				repoName = repo
+				break
+			}
+		}
+
+		if repoName == "" {
+			// If only one repo exists, use it
+			if len(repos) == 1 {
+				repoName = repos[0]
+			} else {
+				return fmt.Errorf("please specify a repository name or run from within a tracked repository")
+			}
+		}
+	}
+
+	// Check if any config flags are provided
+	hasMqEnabled := flags["mq-enabled"] != ""
+	hasMqTrack := flags["mq-track"] != ""
+
+	if !hasMqEnabled && !hasMqTrack {
+		// No flags - just show current config
+		return c.showRepoConfig(repoName)
+	}
+
+	// Apply config changes
+	return c.updateRepoConfig(repoName, flags)
+}
+
+func (c *CLI) showRepoConfig(repoName string) error {
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "get_repo_config",
+		Args: map[string]interface{}{
+			"name": repoName,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get repo config: %w (is daemon running?)", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("failed to get repo config: %s", resp.Error)
+	}
+
+	// Parse response
+	configMap, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("unexpected response format")
+	}
+
+	fmt.Printf("Configuration for repository: %s\n\n", repoName)
+	fmt.Println("Merge Queue:")
+
+	mqEnabled := true
+	if enabled, ok := configMap["mq_enabled"].(bool); ok {
+		mqEnabled = enabled
+	}
+
+	mqTrackMode := "all"
+	if trackMode, ok := configMap["mq_track_mode"].(string); ok {
+		mqTrackMode = trackMode
+	}
+
+	if mqEnabled {
+		fmt.Printf("  Enabled: true\n")
+		fmt.Printf("  Track mode: %s\n", mqTrackMode)
+	} else {
+		fmt.Printf("  Enabled: false\n")
+	}
+
+	fmt.Println("\nTo modify:")
+	fmt.Printf("  multiclaude config %s --mq-enabled=true|false\n", repoName)
+	fmt.Printf("  multiclaude config %s --mq-track=all|author|assigned\n", repoName)
+
+	return nil
+}
+
+func (c *CLI) updateRepoConfig(repoName string, flags map[string]string) error {
+	// Build update args
+	updateArgs := map[string]interface{}{
+		"name": repoName,
+	}
+
+	// Parse and validate flags
+	if mqEnabled, ok := flags["mq-enabled"]; ok {
+		switch mqEnabled {
+		case "true":
+			updateArgs["mq_enabled"] = true
+		case "false":
+			updateArgs["mq_enabled"] = false
+		default:
+			return fmt.Errorf("invalid --mq-enabled value: %s (must be 'true' or 'false')", mqEnabled)
+		}
+	}
+
+	if mqTrack, ok := flags["mq-track"]; ok {
+		switch mqTrack {
+		case "all", "author", "assigned":
+			updateArgs["mq_track_mode"] = mqTrack
+		default:
+			return fmt.Errorf("invalid --mq-track value: %s (must be 'all', 'author', or 'assigned')", mqTrack)
+		}
+	}
+
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "update_repo_config",
+		Args:    updateArgs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update repo config: %w (is daemon running?)", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("failed to update repo config: %s", resp.Error)
+	}
+
+	fmt.Printf("Configuration updated for repository: %s\n", repoName)
+
+	// Show the updated config
+	return c.showRepoConfig(repoName)
 }
 
 func (c *CLI) createWorker(args []string) error {
@@ -2689,6 +2885,73 @@ func (c *CLI) writePromptFile(repoPath string, agentType prompts.AgentType, agen
 	}
 
 	return promptPath, nil
+}
+
+// writeMergeQueuePromptFile writes a merge-queue prompt file with tracking mode configuration
+func (c *CLI) writeMergeQueuePromptFile(repoPath string, agentName string, mqConfig state.MergeQueueConfig) (string, error) {
+	// Get the complete prompt (default + custom + CLI docs)
+	promptText, err := prompts.GetPrompt(repoPath, prompts.TypeMergeQueue, c.documentation)
+	if err != nil {
+		return "", fmt.Errorf("failed to get prompt: %w", err)
+	}
+
+	// Add tracking mode configuration to the prompt
+	trackingConfig := c.generateTrackingModePrompt(mqConfig.TrackMode)
+	promptText = trackingConfig + "\n\n" + promptText
+
+	// Create a prompt file in the prompts directory
+	promptDir := filepath.Join(c.paths.Root, "prompts")
+	if err := os.MkdirAll(promptDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create prompt directory: %w", err)
+	}
+
+	promptPath := filepath.Join(promptDir, fmt.Sprintf("%s.md", agentName))
+	if err := os.WriteFile(promptPath, []byte(promptText), 0644); err != nil {
+		return "", fmt.Errorf("failed to write prompt file: %w", err)
+	}
+
+	return promptPath, nil
+}
+
+// generateTrackingModePrompt generates prompt text explaining which PRs to track based on tracking mode
+func (c *CLI) generateTrackingModePrompt(trackMode state.TrackMode) string {
+	switch trackMode {
+	case state.TrackModeAuthor:
+		return `## PR Tracking Mode: Author Only
+
+**IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are the author.
+
+When listing and monitoring PRs, use:
+` + "```bash" + `
+gh pr list --author @me --label multiclaude
+` + "```" + `
+
+Do NOT process or attempt to merge PRs authored by others. Focus only on PRs created by multiclaude workers.`
+
+	case state.TrackModeAssigned:
+		return `## PR Tracking Mode: Assigned Only
+
+**IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are assigned.
+
+When listing and monitoring PRs, use:
+` + "```bash" + `
+gh pr list --assignee @me --label multiclaude
+` + "```" + `
+
+Do NOT process or attempt to merge PRs unless they are assigned to you. Focus only on PRs explicitly assigned to multiclaude.`
+
+	default: // TrackModeAll
+		return `## PR Tracking Mode: All PRs
+
+This repository is configured to track all PRs with the multiclaude label.
+
+When listing and monitoring PRs, use:
+` + "```bash" + `
+gh pr list --label multiclaude
+` + "```" + `
+
+Monitor and process all multiclaude-labeled PRs regardless of author or assignee.`
+	}
 }
 
 // copyHooksConfig copies hooks configuration from repo to worktree if it exists

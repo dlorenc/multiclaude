@@ -643,3 +643,213 @@ func TestAddRepoInitializesAgentsMap(t *testing.T) {
 		t.Error("AddRepo() did not initialize nil Agents map")
 	}
 }
+
+func TestDefaultMergeQueueConfig(t *testing.T) {
+	config := DefaultMergeQueueConfig()
+
+	if !config.Enabled {
+		t.Error("Default config should have Enabled = true")
+	}
+
+	if config.TrackMode != TrackModeAll {
+		t.Errorf("Default config TrackMode = %q, want %q", config.TrackMode, TrackModeAll)
+	}
+}
+
+func TestMergeQueueConfigSaveLoad(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Create repo with custom merge queue config
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]Agent),
+		MergeQueueConfig: MergeQueueConfig{
+			Enabled:   false,
+			TrackMode: TrackModeAuthor,
+		},
+	}
+
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Load state from disk
+	loaded, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Verify merge queue config was loaded
+	loadedRepo, exists := loaded.GetRepo("test-repo")
+	if !exists {
+		t.Fatal("Repository not found after load")
+	}
+
+	if loadedRepo.MergeQueueConfig.Enabled != false {
+		t.Error("MergeQueueConfig.Enabled not persisted correctly")
+	}
+
+	if loadedRepo.MergeQueueConfig.TrackMode != TrackModeAuthor {
+		t.Errorf("MergeQueueConfig.TrackMode = %q, want %q", loadedRepo.MergeQueueConfig.TrackMode, TrackModeAuthor)
+	}
+}
+
+func TestGetMergeQueueConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Test non-existent repo
+	_, err := s.GetMergeQueueConfig("nonexistent")
+	if err == nil {
+		t.Error("GetMergeQueueConfig() should fail for nonexistent repo")
+	}
+
+	// Add repo without explicit config (should get defaults)
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Get config - should return defaults for empty config
+	config, err := s.GetMergeQueueConfig("test-repo")
+	if err != nil {
+		t.Fatalf("GetMergeQueueConfig() failed: %v", err)
+	}
+
+	if !config.Enabled {
+		t.Error("Default config should have Enabled = true")
+	}
+
+	if config.TrackMode != TrackModeAll {
+		t.Errorf("Default config TrackMode = %q, want %q", config.TrackMode, TrackModeAll)
+	}
+}
+
+func TestUpdateMergeQueueConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Test non-existent repo
+	err := s.UpdateMergeQueueConfig("nonexistent", MergeQueueConfig{})
+	if err == nil {
+		t.Error("UpdateMergeQueueConfig() should fail for nonexistent repo")
+	}
+
+	// Add repo
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Update config
+	newConfig := MergeQueueConfig{
+		Enabled:   false,
+		TrackMode: TrackModeAssigned,
+	}
+
+	if err := s.UpdateMergeQueueConfig("test-repo", newConfig); err != nil {
+		t.Fatalf("UpdateMergeQueueConfig() failed: %v", err)
+	}
+
+	// Verify update
+	updatedConfig, err := s.GetMergeQueueConfig("test-repo")
+	if err != nil {
+		t.Fatalf("GetMergeQueueConfig() failed: %v", err)
+	}
+
+	if updatedConfig.Enabled != false {
+		t.Error("Config.Enabled not updated correctly")
+	}
+
+	if updatedConfig.TrackMode != TrackModeAssigned {
+		t.Errorf("Config.TrackMode = %q, want %q", updatedConfig.TrackMode, TrackModeAssigned)
+	}
+
+	// Verify persistence - reload state
+	loaded, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	loadedConfig, err := loaded.GetMergeQueueConfig("test-repo")
+	if err != nil {
+		t.Fatalf("GetMergeQueueConfig() after reload failed: %v", err)
+	}
+
+	if loadedConfig.TrackMode != TrackModeAssigned {
+		t.Error("Config not persisted correctly after update")
+	}
+}
+
+func TestGetAllReposCopiesMergeQueueConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Add repo with custom merge queue config
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]Agent),
+		MergeQueueConfig: MergeQueueConfig{
+			Enabled:   false,
+			TrackMode: TrackModeAuthor,
+		},
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Get all repos
+	repos := s.GetAllRepos()
+
+	// Verify config was copied
+	copiedRepo := repos["test-repo"]
+	if copiedRepo.MergeQueueConfig.Enabled != false {
+		t.Error("GetAllRepos() did not copy MergeQueueConfig.Enabled")
+	}
+
+	if copiedRepo.MergeQueueConfig.TrackMode != TrackModeAuthor {
+		t.Errorf("GetAllRepos() MergeQueueConfig.TrackMode = %q, want %q", copiedRepo.MergeQueueConfig.TrackMode, TrackModeAuthor)
+	}
+
+	// Modify the copy and verify original is unchanged
+	copiedRepo.MergeQueueConfig.TrackMode = TrackModeAssigned
+
+	originalRepo, _ := s.GetRepo("test-repo")
+	if originalRepo.MergeQueueConfig.TrackMode == TrackModeAssigned {
+		t.Error("GetAllRepos() did not deep copy MergeQueueConfig")
+	}
+}
+
+func TestTrackModeConstants(t *testing.T) {
+	// Verify the track mode constants have the expected values
+	if TrackModeAll != "all" {
+		t.Errorf("TrackModeAll = %q, want 'all'", TrackModeAll)
+	}
+
+	if TrackModeAuthor != "author" {
+		t.Errorf("TrackModeAuthor = %q, want 'author'", TrackModeAuthor)
+	}
+
+	if TrackModeAssigned != "assigned" {
+		t.Errorf("TrackModeAssigned = %q, want 'assigned'", TrackModeAssigned)
+	}
+}

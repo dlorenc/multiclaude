@@ -19,6 +19,34 @@ const (
 	AgentTypeReview     AgentType = "review"
 )
 
+// TrackMode defines which PRs the merge queue should track
+type TrackMode string
+
+const (
+	// TrackModeAll tracks all PRs (default)
+	TrackModeAll TrackMode = "all"
+	// TrackModeAuthor tracks only PRs where the multiclaude user is the author
+	TrackModeAuthor TrackMode = "author"
+	// TrackModeAssigned tracks only PRs where the multiclaude user is assigned
+	TrackModeAssigned TrackMode = "assigned"
+)
+
+// MergeQueueConfig holds configuration for the merge queue agent
+type MergeQueueConfig struct {
+	// Enabled determines whether the merge queue agent should run (default: true)
+	Enabled bool `json:"enabled"`
+	// TrackMode determines which PRs to track: "all", "author", or "assigned" (default: "all")
+	TrackMode TrackMode `json:"track_mode"`
+}
+
+// DefaultMergeQueueConfig returns the default merge queue configuration
+func DefaultMergeQueueConfig() MergeQueueConfig {
+	return MergeQueueConfig{
+		Enabled:   true,
+		TrackMode: TrackModeAll,
+	}
+}
+
 // Agent represents an agent's state
 type Agent struct {
 	Type            AgentType `json:"type"`
@@ -34,9 +62,10 @@ type Agent struct {
 
 // Repository represents a tracked repository's state
 type Repository struct {
-	GithubURL    string           `json:"github_url"`
-	TmuxSession  string           `json:"tmux_session"`
-	Agents       map[string]Agent `json:"agents"`
+	GithubURL        string           `json:"github_url"`
+	TmuxSession      string           `json:"tmux_session"`
+	Agents           map[string]Agent `json:"agents"`
+	MergeQueueConfig MergeQueueConfig `json:"merge_queue_config,omitempty"`
 }
 
 // State represents the entire daemon state
@@ -152,9 +181,10 @@ func (s *State) GetAllRepos() map[string]*Repository {
 	for name, repo := range s.Repos {
 		// Copy the repository
 		repoCopy := &Repository{
-			GithubURL:   repo.GithubURL,
-			TmuxSession: repo.TmuxSession,
-			Agents:      make(map[string]Agent, len(repo.Agents)),
+			GithubURL:        repo.GithubURL,
+			TmuxSession:      repo.TmuxSession,
+			Agents:           make(map[string]Agent, len(repo.Agents)),
+			MergeQueueConfig: repo.MergeQueueConfig,
 		}
 		// Copy agents
 		for agentName, agent := range repo.Agents {
@@ -244,6 +274,37 @@ func (s *State) ListAgents(repoName string) ([]string, error) {
 		agents = append(agents, name)
 	}
 	return agents, nil
+}
+
+// GetMergeQueueConfig returns the merge queue config for a repository
+func (s *State) GetMergeQueueConfig(repoName string) (MergeQueueConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return MergeQueueConfig{}, fmt.Errorf("repository %q not found", repoName)
+	}
+
+	// Return default config if not set (for backward compatibility)
+	if repo.MergeQueueConfig.TrackMode == "" {
+		return DefaultMergeQueueConfig(), nil
+	}
+	return repo.MergeQueueConfig, nil
+}
+
+// UpdateMergeQueueConfig updates the merge queue config for a repository
+func (s *State) UpdateMergeQueueConfig(repoName string, config MergeQueueConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return fmt.Errorf("repository %q not found", repoName)
+	}
+
+	repo.MergeQueueConfig = config
+	return s.saveUnlocked()
 }
 
 // saveUnlocked saves state without acquiring lock (caller must hold lock)

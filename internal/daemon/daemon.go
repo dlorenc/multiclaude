@@ -494,6 +494,12 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	case "repair_state":
 		return d.handleRepairState(req)
 
+	case "get_repo_config":
+		return d.handleGetRepoConfig(req)
+
+	case "update_repo_config":
+		return d.handleUpdateRepoConfig(req)
+
 	default:
 		return socket.Response{
 			Success: false,
@@ -586,17 +592,34 @@ func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
 		return socket.Response{Success: false, Error: "missing 'tmux_session': tmux session name is required"}
 	}
 
+	// Parse merge queue configuration (optional, defaults to enabled with "all" tracking)
+	mqConfig := state.DefaultMergeQueueConfig()
+	if mqEnabled, ok := req.Args["mq_enabled"].(bool); ok {
+		mqConfig.Enabled = mqEnabled
+	}
+	if mqTrackMode, ok := req.Args["mq_track_mode"].(string); ok {
+		switch mqTrackMode {
+		case "all":
+			mqConfig.TrackMode = state.TrackModeAll
+		case "author":
+			mqConfig.TrackMode = state.TrackModeAuthor
+		case "assigned":
+			mqConfig.TrackMode = state.TrackModeAssigned
+		}
+	}
+
 	repo := &state.Repository{
-		GithubURL:   githubURL,
-		TmuxSession: tmuxSession,
-		Agents:      make(map[string]state.Agent),
+		GithubURL:        githubURL,
+		TmuxSession:      tmuxSession,
+		Agents:           make(map[string]state.Agent),
+		MergeQueueConfig: mqConfig,
 	}
 
 	if err := d.state.AddRepo(name, repo); err != nil {
 		return socket.Response{Success: false, Error: err.Error()}
 	}
 
-	d.logger.Info("Added repository: %s", name)
+	d.logger.Info("Added repository: %s (merge queue: enabled=%v, track=%s)", name, mqConfig.Enabled, mqConfig.TrackMode)
 	return socket.Response{Success: true}
 }
 
@@ -922,6 +945,72 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 	}
 }
 
+// handleGetRepoConfig returns the merge queue configuration for a repository
+func (d *Daemon) handleGetRepoConfig(req socket.Request) socket.Response {
+	name, ok := req.Args["name"].(string)
+	if !ok {
+		return socket.Response{Success: false, Error: "missing or invalid 'name' argument"}
+	}
+
+	repo, exists := d.state.GetRepo(name)
+	if !exists {
+		return socket.Response{Success: false, Error: fmt.Sprintf("repository %q not found", name)}
+	}
+
+	// Get merge queue config (use default if not set for backward compatibility)
+	mqConfig := repo.MergeQueueConfig
+	if mqConfig.TrackMode == "" {
+		mqConfig = state.DefaultMergeQueueConfig()
+	}
+
+	return socket.Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"mq_enabled":    mqConfig.Enabled,
+			"mq_track_mode": string(mqConfig.TrackMode),
+		},
+	}
+}
+
+// handleUpdateRepoConfig updates the merge queue configuration for a repository
+func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
+	name, ok := req.Args["name"].(string)
+	if !ok {
+		return socket.Response{Success: false, Error: "missing or invalid 'name' argument"}
+	}
+
+	// Get current config
+	currentConfig, err := d.state.GetMergeQueueConfig(name)
+	if err != nil {
+		return socket.Response{Success: false, Error: err.Error()}
+	}
+
+	// Update with provided values
+	if mqEnabled, ok := req.Args["mq_enabled"].(bool); ok {
+		currentConfig.Enabled = mqEnabled
+	}
+	if mqTrackMode, ok := req.Args["mq_track_mode"].(string); ok {
+		switch mqTrackMode {
+		case "all":
+			currentConfig.TrackMode = state.TrackModeAll
+		case "author":
+			currentConfig.TrackMode = state.TrackModeAuthor
+		case "assigned":
+			currentConfig.TrackMode = state.TrackModeAssigned
+		default:
+			return socket.Response{Success: false, Error: fmt.Sprintf("invalid track mode: %s", mqTrackMode)}
+		}
+	}
+
+	// Save updated config
+	if err := d.state.UpdateMergeQueueConfig(name, currentConfig); err != nil {
+		return socket.Response{Success: false, Error: err.Error()}
+	}
+
+	d.logger.Info("Updated merge queue config for repo %s: enabled=%v, track=%s", name, currentConfig.Enabled, currentConfig.TrackMode)
+	return socket.Response{Success: true}
+}
+
 // cleanupDeadAgents removes dead agents from state
 func (d *Daemon) cleanupDeadAgents(deadAgents map[string][]string) {
 	for repoName, agentNames := range deadAgents {
@@ -1056,10 +1145,18 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 		return fmt.Errorf("failed to create tmux session: %w", err)
 	}
 
-	// Create merge-queue window
-	cmd = exec.Command("tmux", "new-window", "-d", "-t", repo.TmuxSession, "-n", "merge-queue", "-c", repoPath)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create merge-queue window: %w", err)
+	// Get merge queue config (use default if not set for backward compatibility)
+	mqConfig := repo.MergeQueueConfig
+	if mqConfig.TrackMode == "" {
+		mqConfig = state.DefaultMergeQueueConfig()
+	}
+
+	// Create merge-queue window only if enabled
+	if mqConfig.Enabled {
+		cmd = exec.Command("tmux", "new-window", "-d", "-t", repo.TmuxSession, "-n", "merge-queue", "-c", repoPath)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to create merge-queue window: %w", err)
+		}
 	}
 
 	// Start supervisor agent
@@ -1067,9 +1164,13 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 		d.logger.Error("Failed to start supervisor for %s: %v", repoName, err)
 	}
 
-	// Start merge-queue agent
-	if err := d.startAgent(repoName, repo, "merge-queue", prompts.TypeMergeQueue, repoPath); err != nil {
-		d.logger.Error("Failed to start merge-queue for %s: %v", repoName, err)
+	// Start merge-queue agent only if enabled
+	if mqConfig.Enabled {
+		if err := d.startMergeQueueAgent(repoName, repo, repoPath, mqConfig); err != nil {
+			d.logger.Error("Failed to start merge-queue for %s: %v", repoName, err)
+		}
+	} else {
+		d.logger.Info("Merge queue is disabled for repo %s, skipping merge-queue agent", repoName)
 	}
 
 	// Create and restore workspace
@@ -1159,6 +1260,134 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 
 	d.logger.Info("Started and registered agent %s/%s", repoName, agentName)
 	return nil
+}
+
+// startMergeQueueAgent starts a merge-queue agent with tracking mode configuration
+func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, workDir string, mqConfig state.MergeQueueConfig) error {
+	// Generate session ID
+	sessionID, err := generateSessionID()
+	if err != nil {
+		return fmt.Errorf("failed to generate session ID: %w", err)
+	}
+
+	// Write prompt file with tracking mode configuration
+	promptFile, err := d.writeMergeQueuePromptFile(repoName, "merge-queue", mqConfig)
+	if err != nil {
+		return fmt.Errorf("failed to write prompt file: %w", err)
+	}
+
+	// Copy hooks config if needed
+	repoPath := d.paths.RepoDir(repoName)
+	if err := d.copyHooksConfig(repoPath, workDir); err != nil {
+		d.logger.Warn("Failed to copy hooks config: %v", err)
+	}
+
+	// Build Claude command
+	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
+		d.claudeBinaryPath, sessionID, promptFile)
+
+	// Send command to tmux window
+	target := fmt.Sprintf("%s:merge-queue", repo.TmuxSession)
+	cmd := exec.Command("tmux", "send-keys", "-t", target, claudeCmd, "C-m")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to start Claude in tmux: %w", err)
+	}
+
+	// Wait a moment for Claude to start
+	time.Sleep(500 * time.Millisecond)
+
+	// Get PID
+	pid, err := d.tmux.GetPanePID(repo.TmuxSession, "merge-queue")
+	if err != nil {
+		d.logger.Warn("Failed to get PID for merge-queue: %v", err)
+		pid = 0
+	}
+
+	// Register agent with state
+	agent := state.Agent{
+		Type:         state.AgentTypeMergeQueue,
+		WorktreePath: workDir,
+		TmuxWindow:   "merge-queue",
+		SessionID:    sessionID,
+		PID:          pid,
+		CreatedAt:    time.Now(),
+	}
+
+	if err := d.state.AddAgent(repoName, "merge-queue", agent); err != nil {
+		return fmt.Errorf("failed to register agent: %w", err)
+	}
+
+	d.logger.Info("Started and registered merge-queue agent %s/merge-queue (track mode: %s)", repoName, mqConfig.TrackMode)
+	return nil
+}
+
+// writeMergeQueuePromptFile writes a merge-queue prompt file with tracking mode configuration
+func (d *Daemon) writeMergeQueuePromptFile(repoName string, agentName string, mqConfig state.MergeQueueConfig) (string, error) {
+	repoPath := d.paths.RepoDir(repoName)
+
+	// Get the base prompt (without CLI docs since we don't have them in daemon context)
+	promptText, err := prompts.GetPrompt(repoPath, prompts.TypeMergeQueue, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to get prompt: %w", err)
+	}
+
+	// Add tracking mode configuration to the prompt
+	trackingConfig := d.generateTrackingModePrompt(mqConfig.TrackMode)
+	promptText = trackingConfig + "\n\n" + promptText
+
+	// Create prompt file in prompts directory
+	promptDir := filepath.Join(d.paths.Root, "prompts")
+	if err := os.MkdirAll(promptDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create prompt directory: %w", err)
+	}
+
+	promptPath := filepath.Join(promptDir, fmt.Sprintf("%s.md", agentName))
+	if err := os.WriteFile(promptPath, []byte(promptText), 0644); err != nil {
+		return "", fmt.Errorf("failed to write prompt file: %w", err)
+	}
+
+	return promptPath, nil
+}
+
+// generateTrackingModePrompt generates prompt text explaining which PRs to track based on tracking mode
+func (d *Daemon) generateTrackingModePrompt(trackMode state.TrackMode) string {
+	switch trackMode {
+	case state.TrackModeAuthor:
+		return `## PR Tracking Mode: Author Only
+
+**IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are the author.
+
+When listing and monitoring PRs, use:
+` + "```bash" + `
+gh pr list --author @me --label multiclaude
+` + "```" + `
+
+Do NOT process or attempt to merge PRs authored by others. Focus only on PRs created by multiclaude workers.`
+
+	case state.TrackModeAssigned:
+		return `## PR Tracking Mode: Assigned Only
+
+**IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are assigned.
+
+When listing and monitoring PRs, use:
+` + "```bash" + `
+gh pr list --assignee @me --label multiclaude
+` + "```" + `
+
+Do NOT process or attempt to merge PRs unless they are assigned to you. Focus only on PRs explicitly assigned to multiclaude.`
+
+	default: // TrackModeAll
+		return `## PR Tracking Mode: All PRs
+
+This repository is configured to track all PRs with the multiclaude label.
+
+When listing and monitoring PRs, use:
+` + "```bash" + `
+gh pr list --label multiclaude
+` + "```" + `
+
+Monitor and process all multiclaude-labeled PRs regardless of author or assignee.`
+	}
 }
 
 // writePromptFile writes the agent prompt to a file and returns the path
