@@ -4,6 +4,71 @@ A lightweight orchestrator for running multiple Claude Code agents on GitHub rep
 
 multiclaude spawns and coordinates autonomous Claude Code instances that work together on your codebase. Each agent runs in its own tmux window with an isolated git worktree, making all work observable and interruptible at any time.
 
+## Philosophy: The Brownian Ratchet
+
+multiclaude embraces a counterintuitive design principle: **chaos is fine, as long as we ratchet forward**.
+
+In physics, a Brownian ratchet is a thought experiment where random molecular motion is converted into directed movement through a mechanism that allows motion in only one direction. multiclaude applies this principle to software development.
+
+**The Chaos**: Multiple autonomous agents work simultaneously on overlapping concerns. They may duplicate effort, create conflicting changes, or produce suboptimal solutions. This apparent disorder is not a bug—it's a feature. More attempts mean more chances for progress.
+
+**The Ratchet**: CI is the arbiter. If it passes, the code goes in. Every merged PR clicks the ratchet forward one notch. Progress is permanent—we never go backward. The merge queue agent serves as this ratchet mechanism, ensuring that any work meeting the CI bar gets incorporated.
+
+**Why This Works**:
+- Agents don't need perfect coordination. Redundant work is cheaper than blocked work.
+- Failed attempts cost nothing. Only successful attempts matter.
+- Incremental progress compounds. Many small PRs beat waiting for one perfect PR.
+- The system is antifragile. More agents mean more chaos but also more forward motion.
+
+This philosophy means we optimize for throughput of successful changes, not efficiency of individual agents. An agent that produces a mergeable PR has succeeded, even if another agent was working on the same thing.
+
+## Our Opinions
+
+multiclaude is intentionally opinionated. These aren't configuration options—they're core beliefs baked into how the system works:
+
+### CI is King
+
+CI is the source of truth. Period. If tests pass, the code can ship. If tests fail, the code doesn't ship. There's no "but the change looks right" or "I'm pretty sure it's fine." The automation decides.
+
+Agents are forbidden from weakening CI to make their work pass. No skipping tests, no reducing coverage requirements, no "temporary" workarounds. If an agent can't pass CI, it asks for help or tries a different approach.
+
+### Forward Progress Over Perfection
+
+Any incremental progress is good. A reviewable PR is progress. A partial implementation with tests is progress. The only failure is an agent that doesn't push the ball forward at all.
+
+This means we'd rather have three okay PRs than wait for one perfect PR. We'd rather merge working code now and improve it later than block on getting everything right the first time. Small, frequent commits beat large, infrequent ones.
+
+### Chaos is Expected
+
+Multiple agents working simultaneously will create conflicts, duplicate work, and occasionally step on each other's toes. This is fine. This is the plan.
+
+Trying to perfectly coordinate agent work is both expensive and fragile. Instead, we let chaos happen and use CI as the ratchet that captures forward progress. Wasted work is cheap; blocked work is expensive.
+
+### Humans Approve, Agents Execute
+
+Agents do the work. Humans set the direction and approve the results. Agents should never make decisions that require human judgment—they should ask.
+
+This means agents create PRs for human review. Agents ask the supervisor when they're stuck. Agents don't bypass review requirements or merge without appropriate approval. The merge queue agent can auto-merge, but only when CI passes and review requirements are met.
+
+## Gastown and multiclaude
+
+multiclaude was developed independently but shares similar goals with [Gastown](https://github.com/steveyegge/gastown), Steve Yegge's multi-agent orchestrator for Claude Code released in January 2026.
+
+Both projects solve the same fundamental problem: coordinating multiple Claude Code instances working on a shared codebase. Both use Go, tmux for observability, and git worktrees for isolation. If you're evaluating multi-agent orchestrators, you should look at both.
+
+**Where they differ:**
+
+| Aspect | multiclaude | Gastown |
+|--------|-------------|---------|
+| Agent model | 3 roles: supervisor, worker, merge-queue | 7 roles: Mayor, Polecats, Refinery, Witness, Deacon, Dogs, Crew |
+| State persistence | JSON file + filesystem | Git-backed "hooks" for crash recovery |
+| Work tracking | Simple task descriptions | "Beads" framework for structured work units |
+| Communication | Filesystem-based messages | Built on Beads framework |
+| Philosophy | Minimal, Unix-style simplicity | Comprehensive orchestration system |
+| Maturity | Early development | More established, larger feature set |
+
+multiclaude aims to be a simpler, more lightweight alternative—the "worse is better" approach. If you need sophisticated orchestration features, work swarming, or built-in crash recovery, Gastown may be a better fit.
+
 ## Quick Start
 
 ```bash
@@ -98,7 +163,17 @@ multiclaude agent ack-message <id>         # Acknowledge a message
 multiclaude agent complete                 # Signal task completion (workers)
 ```
 
-## Directory Structure
+## Architecture
+
+### Design Principles
+
+1. **Observable** - All agent activity visible via tmux. Attach anytime to watch or intervene.
+2. **Isolated** - Each agent works in its own git worktree. No interference between tasks.
+3. **Recoverable** - State persists to disk. Daemon recovers gracefully from crashes.
+4. **Safe** - Agents never weaken CI or bypass checks without human approval.
+5. **Simple** - Minimal abstractions. Filesystem for state, tmux for visibility, git for isolation.
+
+### Directory Structure
 
 ```
 ~/.multiclaude/
@@ -111,7 +186,7 @@ multiclaude agent complete                 # Signal task completion (workers)
 └── messages/<repo>/    # Inter-agent messages
 ```
 
-## Repository Configuration
+### Repository Configuration
 
 Repositories can include optional configuration in `.multiclaude/`:
 
@@ -122,65 +197,6 @@ Repositories can include optional configuration in `.multiclaude/`:
 ├── REVIEWER.md     # Additional instructions for merge queue
 └── hooks.json      # Claude Code hooks configuration
 ```
-
-## Design Principles
-
-1. **Observable** - All agent activity visible via tmux. Attach anytime to watch or intervene.
-2. **Isolated** - Each agent works in its own git worktree. No interference between tasks.
-3. **Recoverable** - State persists to disk. Daemon recovers gracefully from crashes.
-4. **Safe** - Agents never weaken CI or bypass checks without human approval.
-5. **Simple** - Minimal abstractions. Filesystem for state, tmux for visibility, git for isolation.
-
-## Golden Rules
-
-Two principles guide all agent behavior:
-
-1. **If CI passes, the code can go in.** CI is the source of truth. Never reduce or weaken CI without explicit human approval.
-
-2. **Forward progress trumps all.** Any incremental progress is good. A reviewable PR is progress. The only failure is an agent that doesn't push the ball forward at all.
-
-## Philosophy: The Brownian Ratchet
-
-multiclaude embraces a counterintuitive design principle: **chaos is fine, as long as we ratchet forward**.
-
-In physics, a Brownian ratchet is a thought experiment where random molecular motion is converted into directed movement through a mechanism that allows motion in only one direction. multiclaude applies this principle to software development.
-
-**The Chaos**: Multiple autonomous agents work simultaneously on overlapping concerns. They may duplicate effort, create conflicting changes, or produce suboptimal solutions. This apparent disorder is not a bug—it's a feature. More attempts mean more chances for progress.
-
-**The Ratchet**: CI is the arbiter. If it passes, the code goes in. Every merged PR clicks the ratchet forward one notch. Progress is permanent—we never go backward. The merge queue agent serves as this ratchet mechanism, ensuring that any work meeting the CI bar gets incorporated.
-
-**Why This Works**:
-- Agents don't need perfect coordination. Redundant work is cheaper than blocked work.
-- Failed attempts cost nothing. Only successful attempts matter.
-- Incremental progress compounds. Many small PRs beat waiting for one perfect PR.
-- The system is antifragile. More agents mean more chaos but also more forward motion.
-
-This philosophy means we optimize for throughput of successful changes, not efficiency of individual agents. An agent that produces a mergeable PR has succeeded, even if another agent was working on the same thing.
-
-## Acknowledgements
-
-### Gastown
-
-multiclaude was developed independently but shares similar goals with [Gastown](https://github.com/steveyegge/gastown), Steve Yegge's multi-agent orchestrator for Claude Code released in January 2026.
-
-**Similarities:**
-- Both are Go-based orchestrators for multiple Claude Code instances
-- Both use tmux for session management and human observability
-- Both use git worktrees for isolated agent workspaces
-- Both coordinate agents working on GitHub repositories
-
-**Key Differences:**
-
-| Aspect | multiclaude | Gastown |
-|--------|-------------|---------|
-| Agent model | 3 roles: supervisor, worker, merge-queue | 7 roles: Mayor, Polecats, Refinery, Witness, Deacon, Dogs, Crew |
-| State persistence | JSON file + filesystem | Git-backed "hooks" for crash recovery |
-| Work tracking | Simple task descriptions | "Beads" framework for structured work units |
-| Communication | Filesystem-based messages | Built on Beads framework |
-| Philosophy | Minimal, Unix-style simplicity | Comprehensive orchestration system |
-| Maturity | Early development | More established, larger feature set |
-
-multiclaude aims to be a simpler, more lightweight alternative. If you need sophisticated orchestration features, work swarming, or built-in crash recovery, Gastown may be a better fit.
 
 ## Building
 
