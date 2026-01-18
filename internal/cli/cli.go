@@ -304,6 +304,14 @@ func (c *CLI) registerCommands() {
 		Description: "Show generated CLI documentation",
 		Run:         c.showDocs,
 	}
+
+	// Review command
+	c.rootCmd.Subcommands["review"] = &Command{
+		Name:        "review",
+		Description: "Spawn a review agent for a PR",
+		Usage:       "multiclaude review <pr-url>",
+		Run:         c.reviewPR,
+	}
 }
 
 // Daemon command implementations
@@ -1389,6 +1397,167 @@ func (c *CLI) completeWorker(args []string) error {
 
 	fmt.Println("✓ Agent marked as complete")
 	fmt.Println("The daemon will clean up this agent's resources shortly.")
+	return nil
+}
+
+func (c *CLI) reviewPR(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: multiclaude review <pr-url>")
+	}
+
+	prURL := args[0]
+
+	// Parse PR URL to extract owner, repo, and PR number
+	// Expected formats:
+	// - https://github.com/owner/repo/pull/123
+	// - github.com/owner/repo/pull/123
+	prURL = strings.TrimPrefix(prURL, "https://")
+	prURL = strings.TrimPrefix(prURL, "http://")
+	parts := strings.Split(prURL, "/")
+
+	if len(parts) < 5 || parts[3] != "pull" {
+		return fmt.Errorf("invalid PR URL format. Expected: https://github.com/owner/repo/pull/123")
+	}
+
+	prNumber := parts[4]
+	fmt.Printf("Reviewing PR #%s\n", prNumber)
+
+	// Determine repository from flag or current directory
+	flags, _ := ParseFlags(args[1:])
+	var repoName string
+	if r, ok := flags["repo"]; ok {
+		repoName = r
+	} else {
+		// Try to infer from current directory
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current directory: %w", err)
+		}
+
+		// Check if we're in a tracked repo
+		repos := c.getReposList()
+		for _, repo := range repos {
+			repoPath := c.paths.RepoDir(repo)
+			if strings.HasPrefix(cwd, repoPath) {
+				repoName = repo
+				break
+			}
+		}
+
+		if repoName == "" {
+			return fmt.Errorf("not in a tracked repository. Use --repo flag or run from repo directory")
+		}
+	}
+
+	// Generate review agent name
+	reviewerName := fmt.Sprintf("review-%s", prNumber)
+
+	fmt.Printf("Creating review agent '%s' in repo '%s'\n", reviewerName, repoName)
+
+	// Get repository path
+	repoPath := c.paths.RepoDir(repoName)
+
+	// Get the PR branch name using gh CLI
+	fmt.Printf("Fetching PR branch information...\n")
+	cmd := exec.Command("gh", "pr", "view", prNumber, "--repo", fmt.Sprintf("%s/%s", parts[1], parts[2]), "--json", "headRefName", "-q", ".headRefName")
+	cmd.Dir = repoPath
+	branchOutput, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to get PR branch: %w", err)
+	}
+	prBranch := strings.TrimSpace(string(branchOutput))
+	if prBranch == "" {
+		return fmt.Errorf("could not determine PR branch name")
+	}
+
+	fmt.Printf("PR branch: %s\n", prBranch)
+
+	// Fetch the PR branch
+	cmd = exec.Command("git", "fetch", "origin", prBranch)
+	cmd.Dir = repoPath
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to fetch PR branch: %w", err)
+	}
+
+	// Create worktree for review
+	wt := worktree.NewManager(repoPath)
+	wtPath := c.paths.AgentWorktree(repoName, reviewerName)
+	reviewBranch := fmt.Sprintf("review/%s", reviewerName)
+
+	fmt.Printf("Creating worktree at: %s\n", wtPath)
+	if err := wt.CreateNewBranch(wtPath, reviewBranch, fmt.Sprintf("origin/%s", prBranch)); err != nil {
+		return fmt.Errorf("failed to create worktree: %w", err)
+	}
+
+	// Get tmux session name
+	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+
+	// Create tmux window for reviewer (detached so it doesn't switch focus)
+	fmt.Printf("Creating tmux window: %s\n", reviewerName)
+	cmd = exec.Command("tmux", "new-window", "-d", "-t", tmuxSession, "-n", reviewerName, "-c", wtPath)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to create tmux window: %w", err)
+	}
+
+	// Generate session ID for reviewer
+	reviewerSessionID, err := generateSessionID()
+	if err != nil {
+		return fmt.Errorf("failed to generate reviewer session ID: %w", err)
+	}
+
+	// Write prompt file for reviewer
+	reviewerPromptFile, err := c.writePromptFile(repoPath, prompts.TypeReview, reviewerName)
+	if err != nil {
+		return fmt.Errorf("failed to write reviewer prompt: %w", err)
+	}
+
+	// Copy hooks configuration if it exists
+	if err := c.copyHooksConfig(repoPath, wtPath); err != nil {
+		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
+	}
+
+	// Start Claude in reviewer window with initial task (skip in test mode)
+	var reviewerPID int
+	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
+		fmt.Println("Starting Claude Code in reviewer window...")
+		initialMessage := fmt.Sprintf("Review PR #%s: https://github.com/%s/%s/pull/%s", prNumber, parts[1], parts[2], prNumber)
+		pid, err := c.startClaudeInTmux(tmuxSession, reviewerName, wtPath, reviewerSessionID, reviewerPromptFile, initialMessage)
+		if err != nil {
+			return fmt.Errorf("failed to start reviewer Claude: %w", err)
+		}
+		reviewerPID = pid
+	}
+
+	// Register reviewer with daemon
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "add_agent",
+		Args: map[string]interface{}{
+			"repo":          repoName,
+			"agent":         reviewerName,
+			"type":          "review",
+			"worktree_path": wtPath,
+			"tmux_window":   reviewerName,
+			"task":          fmt.Sprintf("Review PR #%s", prNumber),
+			"session_id":    reviewerSessionID,
+			"pid":           reviewerPID,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to register reviewer: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("failed to register reviewer: %s", resp.Error)
+	}
+
+	fmt.Println()
+	fmt.Println("✓ Review agent created successfully!")
+	fmt.Printf("  Name: %s\n", reviewerName)
+	fmt.Printf("  Branch: %s\n", reviewBranch)
+	fmt.Printf("  Worktree: %s\n", wtPath)
+	fmt.Printf("\nAttach to reviewer: tmux select-window -t %s:%s\n", tmuxSession, reviewerName)
+	fmt.Printf("Or use: multiclaude attach %s\n", reviewerName)
+
 	return nil
 }
 

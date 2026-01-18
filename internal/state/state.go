@@ -16,6 +16,7 @@ const (
 	AgentTypeWorker     AgentType = "worker"
 	AgentTypeMergeQueue AgentType = "merge-queue"
 	AgentTypeWorkspace  AgentType = "workspace"
+	AgentTypeReview     AgentType = "review"
 )
 
 // Agent represents an agent's state

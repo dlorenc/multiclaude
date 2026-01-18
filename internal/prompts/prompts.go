@@ -15,6 +15,7 @@ const (
 	TypeWorker     AgentType = "worker"
 	TypeMergeQueue AgentType = "merge-queue"
 	TypeWorkspace  AgentType = "workspace"
+	TypeReview     AgentType = "review"
 )
 
 // Embedded default prompts
@@ -30,6 +31,9 @@ var defaultMergeQueuePrompt string
 //go:embed workspace.md
 var defaultWorkspacePrompt string
 
+//go:embed review.md
+var defaultReviewPrompt string
+
 // GetDefaultPrompt returns the default prompt for the given agent type
 func GetDefaultPrompt(agentType AgentType) string {
 	switch agentType {
@@ -41,6 +45,8 @@ func GetDefaultPrompt(agentType AgentType) string {
 		return defaultMergeQueuePrompt
 	case TypeWorkspace:
 		return defaultWorkspacePrompt
+	case TypeReview:
+		return defaultReviewPrompt
 	default:
 		return ""
 	}
@@ -59,6 +65,8 @@ func LoadCustomPrompt(repoPath string, agentType AgentType) (string, error) {
 		filename = "REVIEWER.md"
 	case TypeWorkspace:
 		filename = "WORKSPACE.md"
+	case TypeReview:
+		filename = "REVIEW.md"
 	default:
 		return "", fmt.Errorf("unknown agent type: %s", agentType)
 	}

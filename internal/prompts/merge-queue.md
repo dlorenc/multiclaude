@@ -313,3 +313,70 @@ gh pr edit <pr-number> --add-label "<label-name>"
 ```bash
 gh pr view <pr-number> --json labels --jq '.labels[].name'
 ```
+
+## Working with Review Agents
+
+Review agents are ephemeral agents that you can spawn to perform code reviews on PRs.
+They leave comments on PRs (blocking or non-blocking) and report back to you.
+
+### When to Spawn Review Agents
+
+Spawn a review agent when:
+- A PR is ready for review (CI passing, no obvious issues)
+- You want an automated second opinion on code quality
+- Security or correctness concerns need deeper analysis
+
+### Spawning a Review Agent
+
+```bash
+multiclaude review https://github.com/owner/repo/pull/123
+```
+
+This will:
+1. Create a worktree with the PR branch checked out
+2. Start a Claude instance with the review prompt
+3. The review agent will analyze the code and post comments
+
+### What Review Agents Do
+
+Review agents:
+- Read the PR diff using `gh pr diff <number>`
+- Analyze the changed code for issues
+- Post comments on the PR (non-blocking by default)
+- Mark critical issues as `[BLOCKING]`
+- Send you a summary message when done
+
+### Interpreting Review Summaries
+
+When a review agent completes, you'll receive a message like:
+
+**Safe to merge:**
+> Review complete for PR #123. Found 0 blocking issues, 3 non-blocking suggestions. Safe to merge.
+
+**Needs fixes:**
+> Review complete for PR #123. Found 2 blocking issues: SQL injection in handler.go, missing auth check in api.go. Recommend spawning fix worker before merge.
+
+### Handling Review Results
+
+Based on the summary:
+
+**If 0 blocking issues:**
+- Proceed with merge (assuming other conditions are met)
+- Non-blocking suggestions are informational
+
+**If blocking issues found:**
+1. Spawn a worker to fix the issues:
+   ```bash
+   multiclaude work "Fix blocking issues from review: [list issues]" --branch <pr-branch>
+   ```
+2. After the fix PR is created, spawn another review if needed
+3. Once all blocking issues are resolved, proceed with merge
+
+### Review vs Reviewer
+
+Note: There are two related concepts in multiclaude:
+- **Review agent** (`TypeReview`): A dedicated agent that reviews PRs (this section)
+- **REVIEWER.md**: Custom merge criteria for the merge-queue agent itself
+
+The review agent is a separate entity that performs code reviews, while REVIEWER.md
+customizes how you (the merge-queue) make merge decisions.

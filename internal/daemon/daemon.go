@@ -374,6 +374,8 @@ func (d *Daemon) wakeAgents() {
 				message = "Status check: Review open PRs and check CI status."
 			case state.AgentTypeWorker:
 				message = "Status check: Update on your progress?"
+			case state.AgentTypeReview:
+				message = "Status check: Update on your review progress?"
 			}
 
 			// Send message using literal mode to avoid escaping issues
@@ -646,28 +648,38 @@ func (d *Daemon) handleCompleteAgent(req socket.Request) socket.Response {
 
 	d.logger.Info("Agent %s/%s marked as ready for cleanup", repoName, agentName)
 
-	// Notify supervisor and merge-queue that worker completed
-	if agent.Type == state.AgentTypeWorker {
+	// Notify supervisor and merge-queue that worker or review agent completed
+	if agent.Type == state.AgentTypeWorker || agent.Type == state.AgentTypeReview {
 		msgMgr := d.getMessageManager()
 		task := agent.Task
 		if task == "" {
 			task = "unknown task"
 		}
 
-		// Notify supervisor
-		supervisorMessage := fmt.Sprintf("Worker '%s' has completed its task: %s", agentName, task)
-		if _, err := msgMgr.Send(repoName, agentName, "supervisor", supervisorMessage); err != nil {
-			d.logger.Error("Failed to send completion message to supervisor: %v", err)
-		} else {
-			d.logger.Info("Sent completion notification to supervisor for worker %s", agentName)
-		}
+		if agent.Type == state.AgentTypeWorker {
+			// Notify supervisor
+			supervisorMessage := fmt.Sprintf("Worker '%s' has completed its task: %s", agentName, task)
+			if _, err := msgMgr.Send(repoName, agentName, "supervisor", supervisorMessage); err != nil {
+				d.logger.Error("Failed to send completion message to supervisor: %v", err)
+			} else {
+				d.logger.Info("Sent completion notification to supervisor for worker %s", agentName)
+			}
 
-		// Notify merge-queue so it can process any new PRs immediately
-		mergeQueueMessage := fmt.Sprintf("Worker '%s' has completed and may have created a PR. Task: %s. Please check for new PRs to process.", agentName, task)
-		if _, err := msgMgr.Send(repoName, agentName, "merge-queue", mergeQueueMessage); err != nil {
-			d.logger.Error("Failed to send completion message to merge-queue: %v", err)
-		} else {
-			d.logger.Info("Sent completion notification to merge-queue for worker %s", agentName)
+			// Notify merge-queue so it can process any new PRs immediately
+			mergeQueueMessage := fmt.Sprintf("Worker '%s' has completed and may have created a PR. Task: %s. Please check for new PRs to process.", agentName, task)
+			if _, err := msgMgr.Send(repoName, agentName, "merge-queue", mergeQueueMessage); err != nil {
+				d.logger.Error("Failed to send completion message to merge-queue: %v", err)
+			} else {
+				d.logger.Info("Sent completion notification to merge-queue for worker %s", agentName)
+			}
+		} else if agent.Type == state.AgentTypeReview {
+			// Review agent completed - notify merge-queue to process the review results
+			mergeQueueMessage := fmt.Sprintf("Review agent '%s' has completed its review. Task: %s. Please check the review summary and decide on next steps.", agentName, task)
+			if _, err := msgMgr.Send(repoName, agentName, "merge-queue", mergeQueueMessage); err != nil {
+				d.logger.Error("Failed to send completion message to merge-queue: %v", err)
+			} else {
+				d.logger.Info("Sent completion notification to merge-queue for review agent %s", agentName)
+			}
 		}
 
 		// Trigger immediate message delivery
@@ -736,8 +748,8 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 				continue
 			}
 
-			// Check if worktree exists (for workers)
-			if agent.Type == state.AgentTypeWorker && agent.WorktreePath != "" {
+			// Check if worktree exists (for workers and review agents)
+			if (agent.Type == state.AgentTypeWorker || agent.Type == state.AgentTypeReview) && agent.WorktreePath != "" {
 				if _, err := os.Stat(agent.WorktreePath); os.IsNotExist(err) {
 					d.logger.Warn("Worktree missing for agent %s, but window exists - keeping agent", agentName)
 					// Don't remove - user might have manually deleted worktree
@@ -800,8 +812,8 @@ func (d *Daemon) cleanupDeadAgents(deadAgents map[string][]string) {
 				d.logger.Error("Failed to remove agent %s/%s from state: %v", repoName, agentName, err)
 			}
 
-			// Clean up worktree if it exists
-			if agent.WorktreePath != "" && agent.Type == state.AgentTypeWorker {
+			// Clean up worktree if it exists (workers and review agents have worktrees)
+			if agent.WorktreePath != "" && (agent.Type == state.AgentTypeWorker || agent.Type == state.AgentTypeReview) {
 				repoPath := d.paths.RepoDir(repoName)
 				wt := worktree.NewManager(repoPath)
 				if err := wt.Remove(agent.WorktreePath, true); err != nil {
