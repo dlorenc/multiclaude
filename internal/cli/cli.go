@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dlorenc/multiclaude/internal/daemon"
+	"github.com/dlorenc/multiclaude/internal/format"
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/names"
 	"github.com/dlorenc/multiclaude/internal/prompts"
@@ -771,7 +772,12 @@ func (c *CLI) initRepo(args []string) error {
 
 func (c *CLI) listRepos(args []string) error {
 	client := socket.NewClient(c.paths.DaemonSock)
-	resp, err := client.Send(socket.Request{Command: "list_repos"})
+	resp, err := client.Send(socket.Request{
+		Command: "list_repos",
+		Args: map[string]interface{}{
+			"rich": true,
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("failed to list repos: %w (is daemon running?)", err)
 	}
@@ -787,16 +793,51 @@ func (c *CLI) listRepos(args []string) error {
 
 	if len(repos) == 0 {
 		fmt.Println("No repositories tracked")
-		fmt.Println("\nInitialize a repository with: multiclaude init <github-url>")
+		format.Dimmed("\nInitialize a repository with: multiclaude init <github-url>")
 		return nil
 	}
 
-	fmt.Printf("Tracked repositories (%d):\n", len(repos))
+	format.Header("Tracked repositories (%d):", len(repos))
+	fmt.Println()
+
+	table := format.NewColoredTable("REPO", "AGENTS", "STATUS", "SESSION")
 	for _, repo := range repos {
-		if repoStr, ok := repo.(string); ok {
-			fmt.Printf("  - %s\n", repoStr)
+		if repoMap, ok := repo.(map[string]interface{}); ok {
+			name, _ := repoMap["name"].(string)
+			totalAgents := 0
+			if v, ok := repoMap["total_agents"].(float64); ok {
+				totalAgents = int(v)
+			}
+			workerCount := 0
+			if v, ok := repoMap["worker_count"].(float64); ok {
+				workerCount = int(v)
+			}
+			sessionHealthy, _ := repoMap["session_healthy"].(bool)
+			tmuxSession, _ := repoMap["tmux_session"].(string)
+
+			// Format agent count
+			agentStr := fmt.Sprintf("%d total", totalAgents)
+			if workerCount > 0 {
+				agentStr = fmt.Sprintf("%d (%d workers)", totalAgents, workerCount)
+			}
+
+			// Format status
+			var statusCell format.ColoredCell
+			if sessionHealthy {
+				statusCell = format.ColorCell(format.ColoredStatus(format.StatusHealthy), nil)
+			} else {
+				statusCell = format.ColorCell(format.ColoredStatus(format.StatusError), nil)
+			}
+
+			table.AddRow(
+				format.Cell(name),
+				format.Cell(agentStr),
+				statusCell,
+				format.ColorCell(tmuxSession, format.Dim),
+			)
 		}
 	}
+	table.Print()
 
 	return nil
 }
@@ -979,6 +1020,7 @@ func (c *CLI) listWorkers(args []string) error {
 		Command: "list_agents",
 		Args: map[string]interface{}{
 			"repo": repoName,
+			"rich": true,
 		},
 	})
 	if err != nil {
@@ -1010,27 +1052,81 @@ func (c *CLI) listWorkers(args []string) error {
 
 	// Show workspace first if it exists
 	if workspace != nil {
-		fmt.Printf("Workspace in '%s':\n", repoName)
-		fmt.Printf("  - workspace (user workspace)\n")
+		format.Header("Workspace in '%s':", repoName)
+		status, _ := workspace["status"].(string)
+		var statusCell format.ColoredCell
+		switch status {
+		case "running":
+			statusCell = format.ColorCell(format.ColoredStatus(format.StatusRunning), nil)
+		case "completed":
+			statusCell = format.ColorCell(format.ColoredStatus(format.StatusCompleted), nil)
+		default:
+			statusCell = format.ColorCell(format.ColoredStatus(format.StatusIdle), nil)
+		}
+		fmt.Printf("  workspace ")
+		fmt.Print(statusCell.Text)
+		fmt.Println()
 		fmt.Println()
 	}
 
 	if len(workers) == 0 {
-		if workspace == nil {
-			fmt.Printf("No workers in repository '%s'\n", repoName)
-		} else {
-			fmt.Printf("No workers in repository '%s'\n", repoName)
-		}
-		fmt.Println("\nCreate a worker with: multiclaude work <task>")
+		fmt.Printf("No workers in repository '%s'\n", repoName)
+		format.Dimmed("\nCreate a worker with: multiclaude work <task>")
 		return nil
 	}
 
-	fmt.Printf("Workers in '%s' (%d):\n", repoName, len(workers))
+	format.Header("Workers in '%s' (%d):", repoName, len(workers))
+	fmt.Println()
+
+	table := format.NewColoredTable("NAME", "STATUS", "BRANCH", "MSGS", "TASK")
 	for _, worker := range workers {
-		name := worker["name"].(string)
-		task := worker["task"].(string)
-		fmt.Printf("  - %s: %s\n", name, task)
+		name, _ := worker["name"].(string)
+		task, _ := worker["task"].(string)
+		status, _ := worker["status"].(string)
+		branch, _ := worker["branch"].(string)
+		msgsTotal := 0
+		if v, ok := worker["messages_total"].(float64); ok {
+			msgsTotal = int(v)
+		}
+		msgsPending := 0
+		if v, ok := worker["messages_pending"].(float64); ok {
+			msgsPending = int(v)
+		}
+
+		// Format status with color
+		var statusCell format.ColoredCell
+		switch status {
+		case "running":
+			statusCell = format.ColorCell(format.ColoredStatus(format.StatusRunning), nil)
+		case "completed":
+			statusCell = format.ColorCell(format.ColoredStatus(format.StatusCompleted), nil)
+		case "stopped":
+			statusCell = format.ColorCell(format.ColoredStatus(format.StatusError), nil)
+		default:
+			statusCell = format.ColorCell(format.ColoredStatus(format.StatusIdle), nil)
+		}
+
+		// Format branch
+		branchCell := format.ColorCell(branch, format.Cyan)
+		if branch == "" {
+			branchCell = format.ColorCell("-", format.Dim)
+		}
+
+		// Format message count
+		msgStr := format.MessageBadge(msgsPending, msgsTotal)
+
+		// Truncate task
+		truncTask := format.Truncate(task, 40)
+
+		table.AddRow(
+			format.Cell(name),
+			statusCell,
+			branchCell,
+			format.Cell(msgStr),
+			format.Cell(truncTask),
+		)
 	}
+	table.Print()
 
 	return nil
 }

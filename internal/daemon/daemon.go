@@ -521,10 +521,50 @@ func (d *Daemon) handleStatus(req socket.Request) socket.Response {
 	}
 }
 
-// handleListRepos lists all repositories
+// handleListRepos lists all repositories with detailed status
 func (d *Daemon) handleListRepos(req socket.Request) socket.Response {
-	repos := d.state.ListRepos()
-	return socket.Response{Success: true, Data: repos}
+	repos := d.state.GetAllRepos()
+
+	// Check if rich format is requested
+	rich, _ := req.Args["rich"].(bool)
+	if !rich {
+		// Return simple list for backward compatibility
+		repoNames := make([]string, 0, len(repos))
+		for name := range repos {
+			repoNames = append(repoNames, name)
+		}
+		return socket.Response{Success: true, Data: repoNames}
+	}
+
+	// Return detailed repo info
+	repoDetails := make([]map[string]interface{}, 0, len(repos))
+	for repoName, repo := range repos {
+		// Count agents by type
+		workerCount := 0
+		totalAgents := len(repo.Agents)
+		for _, agent := range repo.Agents {
+			if agent.Type == state.AgentTypeWorker {
+				workerCount++
+			}
+		}
+
+		// Check session health
+		sessionHealthy := false
+		if hasSession, err := d.tmux.HasSession(repo.TmuxSession); err == nil {
+			sessionHealthy = hasSession
+		}
+
+		repoDetails = append(repoDetails, map[string]interface{}{
+			"name":            repoName,
+			"github_url":      repo.GithubURL,
+			"tmux_session":    repo.TmuxSession,
+			"total_agents":    totalAgents,
+			"worker_count":    workerCount,
+			"session_healthy": sessionHealthy,
+		})
+	}
+
+	return socket.Response{Success: true, Data: repoDetails}
 }
 
 // handleAddRepo adds a new repository
@@ -653,6 +693,12 @@ func (d *Daemon) handleListAgents(req socket.Request) socket.Response {
 		return socket.Response{Success: false, Error: err.Error()}
 	}
 
+	// Check if rich format is requested
+	rich, _ := req.Args["rich"].(bool)
+
+	// Get repository to check session
+	repo, repoExists := d.state.GetRepo(repoName)
+
 	// Get full agent details
 	agentDetails := make([]map[string]interface{}, 0, len(agents))
 	for _, agentName := range agents {
@@ -661,14 +707,55 @@ func (d *Daemon) handleListAgents(req socket.Request) socket.Response {
 			continue
 		}
 
-		agentDetails = append(agentDetails, map[string]interface{}{
+		detail := map[string]interface{}{
 			"name":          agentName,
 			"type":          agent.Type,
 			"worktree_path": agent.WorktreePath,
 			"tmux_window":   agent.TmuxWindow,
 			"task":          agent.Task,
 			"created_at":    agent.CreatedAt,
-		})
+		}
+
+		// Add rich status information if requested
+		if rich {
+			// Determine agent status
+			status := "unknown"
+			if agent.ReadyForCleanup {
+				status = "completed"
+			} else if repoExists {
+				// Check if window exists (means agent is running)
+				hasWindow, err := d.tmux.HasWindow(repo.TmuxSession, agent.TmuxWindow)
+				if err == nil && hasWindow {
+					status = "running"
+				} else {
+					status = "stopped"
+				}
+			}
+			detail["status"] = status
+
+			// Get current branch from worktree
+			branch := ""
+			if agent.WorktreePath != "" {
+				if b, err := worktree.GetCurrentBranch(agent.WorktreePath); err == nil {
+					branch = b
+				}
+			}
+			detail["branch"] = branch
+
+			// Get message counts
+			msgManager := messages.NewManager(d.paths.MessagesDir)
+			allMsgs, _ := msgManager.List(repoName, agentName)
+			pendingCount := 0
+			for _, msg := range allMsgs {
+				if msg.Status == messages.StatusPending || msg.Status == messages.StatusDelivered {
+					pendingCount++
+				}
+			}
+			detail["messages_total"] = len(allMsgs)
+			detail["messages_pending"] = pendingCount
+		}
+
+		agentDetails = append(agentDetails, detail)
 	}
 
 	return socket.Response{Success: true, Data: agentDetails}
