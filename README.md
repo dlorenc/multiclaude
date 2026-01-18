@@ -69,6 +69,22 @@ Both projects solve the same fundamental problem: coordinating multiple Claude C
 
 multiclaude aims to be a simpler, more lightweight alternative—the "worse is better" approach. If you need sophisticated orchestration features, work swarming, or built-in crash recovery, Gastown may be a better fit.
 
+### Remote-First: Software is an MMORPG
+
+The biggest philosophical difference: **multiclaude is designed for remote-first collaboration**.
+
+Gastown treats agents as NPCs in a single-player game. You're the player, agents are your minions. This works great for solo development where you want to parallelize your own work.
+
+multiclaude treats software engineering as an **MMORPG**. You're one player among many—some human, some AI. The workspace agent is your character, but other humans have their own workspaces. Workers are party members you spawn for quests. The supervisor coordinates the guild. The merge queue is the raid boss that decides what loot (code) makes it into the vault (main branch).
+
+This means:
+- **Your workspace persists**. It's your home base, not a temporary session.
+- **You interact with workers, not control them**. Spawn them with a task, check on them later.
+- **Other humans can have their own workspaces** on the same repo.
+- **The system keeps running when you're away**. Agents work, PRs merge, CI runs.
+
+The workspace is where you hop in to spawn agents, check on progress, review what landed, and plan the next sprint—then hop out and let the system work while you sleep.
+
 ## Quick Start
 
 ```bash
@@ -161,6 +177,180 @@ multiclaude agent send-message --all "msg" # Broadcast to all agents
 multiclaude agent list-messages            # List incoming messages
 multiclaude agent ack-message <id>         # Acknowledge a message
 multiclaude agent complete                 # Signal task completion (workers)
+```
+
+## Working with multiclaude
+
+### What the tmux Session Looks Like
+
+When you attach to a repo's tmux session, you'll see multiple windows—one per agent:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ mc-myrepo: supervisor | merge-queue | workspace | swift-eagle | calm-deer   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  $ claude                                                                   │
+│                                                                             │
+│  ╭─────────────────────────────────────────────────────────────────────────╮│
+│  │ I'll check on the current workers and see if anyone needs help.        ││
+│  │                                                                         ││
+│  │ > multiclaude work list                                                 ││
+│  │ Workers (2):                                                            ││
+│  │   - swift-eagle: working on issue #44                                   ││
+│  │   - calm-deer: working on issue #24                                     ││
+│  │                                                                         ││
+│  │ Both workers are making progress. swift-eagle just pushed a commit.    ││
+│  │ I'll check back in a few minutes.                                       ││
+│  ╰─────────────────────────────────────────────────────────────────────────╯│
+│                                                                             │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  > What would you like to do?                                               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+Use standard tmux navigation:
+- `Ctrl-b n` / `Ctrl-b p` — Next/previous window
+- `Ctrl-b 0-9` — Jump to window by number
+- `Ctrl-b w` — Window picker
+- `Ctrl-b d` — Detach (agents keep running)
+
+### Workflow: Spawning Workers from Your Workspace
+
+Your workspace is a persistent Claude session where you can spawn and manage workers:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ You (in workspace):                                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  > Let's tackle issues #44 and #45 in parallel                              │
+│                                                                             │
+│  ╭─────────────────────────────────────────────────────────────────────────╮│
+│  │ I'll spawn workers for both issues.                                     ││
+│  │                                                                         ││
+│  │ > multiclaude work "Implement rich list commands per issue #44"         ││
+│  │ ✓ Worker created: swift-eagle (branch: work/swift-eagle)                ││
+│  │                                                                         ││
+│  │ > multiclaude work "Improve error messages per issue #45"               ││
+│  │ ✓ Worker created: calm-deer (branch: work/calm-deer)                    ││
+│  │                                                                         ││
+│  │ Both workers are now running. You can check on them with:               ││
+│  │   multiclaude work list                                                 ││
+│  │   multiclaude attach swift-eagle                                        ││
+│  ╰─────────────────────────────────────────────────────────────────────────╯│
+│                                                                             │
+│  > Great, let me know when they finish. I'm going to grab lunch.            │
+│                                                                             │
+│  ╭─────────────────────────────────────────────────────────────────────────╮│
+│  │ Will do! I'll get notified when they complete and can summarize         ││
+│  │ their PRs when you're back. The workers will keep running while         ││
+│  │ you're away.                                                            ││
+│  ╰─────────────────────────────────────────────────────────────────────────╯│
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+Later, when you return:
+
+```
+│  > I'm back. What happened while I was gone?                                │
+│                                                                             │
+│  ╭─────────────────────────────────────────────────────────────────────────╮│
+│  │ Welcome back! Here's the update:                                        ││
+│  │                                                                         ││
+│  │ ✓ swift-eagle completed - PR #47 created for rich list commands         ││
+│  │ ✓ calm-deer completed - PR #48 created for error messages               ││
+│  │                                                                         ││
+│  │ Both PRs are passing CI. The merge queue is monitoring them.            ││
+│  ╰─────────────────────────────────────────────────────────────────────────╯│
+```
+
+### Watching the Supervisor
+
+The supervisor coordinates agents and provides status updates. Attach to watch it work:
+
+```bash
+multiclaude attach supervisor --read-only
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Supervisor:                                                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ╭─────────────────────────────────────────────────────────────────────────╮│
+│  │ [Periodic check - 14:32]                                                ││
+│  │                                                                         ││
+│  │ Checking agent status...                                                ││
+│  │                                                                         ││
+│  │ Agents:                                                                 ││
+│  │   supervisor: healthy (me)                                              ││
+│  │   merge-queue: healthy, monitoring 2 PRs                                ││
+│  │   workspace: healthy, user attached                                     ││
+│  │   swift-eagle: healthy, working on #44                                  ││
+│  │   calm-deer: needs attention - stuck on test failure                    ││
+│  │                                                                         ││
+│  │ Sending help to calm-deer...                                            ││
+│  │                                                                         ││
+│  │ > multiclaude agent send-message calm-deer "I see you're stuck on a     ││
+│  │   test failure. The flaky test in auth_test.go sometimes fails due to   ││
+│  │   timing. Try adding a retry or mocking the clock."                     ││
+│  ╰─────────────────────────────────────────────────────────────────────────╯│
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Watching the Merge Queue
+
+The merge queue monitors PRs and merges them when CI passes:
+
+```bash
+multiclaude attach merge-queue --read-only
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Merge Queue:                                                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ╭─────────────────────────────────────────────────────────────────────────╮│
+│  │ [PR Check - 14:45]                                                      ││
+│  │                                                                         ││
+│  │ Checking open PRs...                                                    ││
+│  │                                                                         ││
+│  │ > gh pr list --author @me                                               ││
+│  │ #47  Add rich list commands      swift-eagle   work/swift-eagle         ││
+│  │ #48  Improve error messages      calm-deer     work/calm-deer           ││
+│  │                                                                         ││
+│  │ Checking CI status for #47...                                           ││
+│  │ > gh pr checks 47                                                       ││
+│  │ ✓ All checks passed                                                     ││
+│  │                                                                         ││
+│  │ PR #47 is ready to merge!                                               ││
+│  │ > gh pr merge 47 --squash --auto                                        ││
+│  │ ✓ Merged #47 into main                                                  ││
+│  │                                                                         ││
+│  │ Notifying supervisor of merge...                                        ││
+│  │ > multiclaude agent send-message supervisor "Merged PR #47: Add rich    ││
+│  │   list commands"                                                        ││
+│  ╰─────────────────────────────────────────────────────────────────────────╯│
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+When CI fails, the merge queue can spawn workers to fix it:
+
+```
+│  │ Checking CI status for #48...                                           ││
+│  │ ✗ Tests failed: 2 failures in error_test.go                             ││
+│  │                                                                         ││
+│  │ Spawning fixup worker for #48...                                        ││
+│  │ > multiclaude work "Fix test failures in PR #48" --branch work/calm-deer││
+│  │ ✓ Worker created: quick-fox                                             ││
+│  │                                                                         ││
+│  │ I'll check back on #48 after quick-fox pushes a fix.                    ││
 ```
 
 ## Architecture
