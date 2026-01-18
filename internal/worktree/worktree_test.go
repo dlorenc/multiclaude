@@ -34,8 +34,10 @@ func createTestRepo(t *testing.T) (string, func()) {
 		os.RemoveAll(tmpDir)
 	}
 
-	// Initialize git repo
-	cmd := exec.Command("git", "init")
+	// Initialize git repo with explicit 'main' branch
+	// This ensures consistency across different git versions and CI environments
+	// (older git versions default to 'master', newer ones may use 'main')
+	cmd := exec.Command("git", "init", "-b", "main")
 	cmd.Dir = tmpDir
 	if err := cmd.Run(); err != nil {
 		cleanup()
@@ -43,9 +45,6 @@ func createTestRepo(t *testing.T) (string, func()) {
 	}
 
 	// Configure git user (required for commits)
-	exec.Command("git", "config", "user.name", "Test User").Run()
-	exec.Command("git", "config", "user.email", "test@example.com").Run()
-
 	cmd = exec.Command("git", "config", "user.name", "Test User")
 	cmd.Dir = tmpDir
 	cmd.Run()
