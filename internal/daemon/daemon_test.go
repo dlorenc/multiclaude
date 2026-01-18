@@ -695,3 +695,104 @@ func TestCheckAgentHealth(t *testing.T) {
 		t.Log("Agent still exists - this is expected if tmux session check failed first")
 	}
 }
+
+func TestWorkspaceAgentExcludedFromRouteMessages(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a test repository
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "test-session",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Add a workspace agent
+	workspaceAgent := state.Agent{
+		Type:       state.AgentTypeWorkspace,
+		TmuxWindow: "workspace",
+		SessionID:  "workspace-session",
+		CreatedAt:  time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "workspace", workspaceAgent); err != nil {
+		t.Fatalf("Failed to add workspace agent: %v", err)
+	}
+
+	// Create a message TO workspace (which should not be delivered)
+	msgMgr := messages.NewManager(d.paths.MessagesDir)
+	msg, err := msgMgr.Send("test-repo", "supervisor", "workspace", "This message should not be delivered")
+	if err != nil {
+		t.Fatalf("Failed to create message: %v", err)
+	}
+
+	// Verify message is pending
+	if msg.Status != messages.StatusPending {
+		t.Errorf("Message status = %s, want %s", msg.Status, messages.StatusPending)
+	}
+
+	// Call routeMessages - it should skip the workspace agent
+	d.routeMessages()
+
+	// The message should still be pending (not delivered) because workspace agents are skipped
+	updatedMsgs, err := msgMgr.ListUnread("test-repo", "workspace")
+	if err != nil {
+		t.Fatalf("Failed to list messages: %v", err)
+	}
+	for _, m := range updatedMsgs {
+		if m.ID == msg.ID && m.Status == messages.StatusDelivered {
+			t.Error("Message to workspace agent should NOT have been delivered")
+		}
+	}
+}
+
+func TestWorkspaceAgentExcludedFromWakeLoop(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a test repository
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "test-session",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Add a workspace agent (should be skipped in wake loop)
+	workspaceAgent := state.Agent{
+		Type:       state.AgentTypeWorkspace,
+		TmuxWindow: "workspace",
+		SessionID:  "workspace-session",
+		CreatedAt:  time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "workspace", workspaceAgent); err != nil {
+		t.Fatalf("Failed to add workspace agent: %v", err)
+	}
+
+	// Add a worker agent (should be processed in wake loop)
+	workerAgent := state.Agent{
+		Type:       state.AgentTypeWorker,
+		TmuxWindow: "worker",
+		SessionID:  "worker-session",
+		CreatedAt:  time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "worker", workerAgent); err != nil {
+		t.Fatalf("Failed to add worker agent: %v", err)
+	}
+
+	// Call wakeAgents - it will fail to send (no tmux) but we can check LastNudge wasn't updated for workspace
+	d.wakeAgents()
+
+	// Workspace agent's LastNudge should NOT have been updated (it was skipped)
+	updatedWorkspace, _ := d.state.GetAgent("test-repo", "workspace")
+	if !updatedWorkspace.LastNudge.IsZero() {
+		t.Error("Workspace agent LastNudge should not be updated - workspace should be skipped")
+	}
+
+	// Worker agent's LastNudge WOULD be updated if tmux succeeded, but since we don't have tmux,
+	// we can only verify the workspace was skipped (verified above)
+}

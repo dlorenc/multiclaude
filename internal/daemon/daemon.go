@@ -284,6 +284,11 @@ func (d *Daemon) routeMessages() {
 	for repoName, repo := range repos {
 		// Check each agent for messages
 		for agentName, agent := range repo.Agents {
+			// Skip workspace agent - it should only receive direct user input
+			if agent.Type == state.AgentTypeWorkspace {
+				continue
+			}
+
 			// Get unread messages (pending or delivered but not yet read)
 			unreadMsgs, err := msgMgr.ListUnread(repoName, agentName)
 			if err != nil {
@@ -360,6 +365,11 @@ func (d *Daemon) wakeAgents() {
 	repos := d.state.GetAllRepos()
 	for repoName, repo := range repos {
 		for agentName, agent := range repo.Agents {
+			// Skip workspace agent - it should only receive direct user input
+			if agent.Type == state.AgentTypeWorkspace {
+				continue
+			}
+
 			// Skip if nudged recently (within last 2 minutes)
 			if !agent.LastNudge.IsZero() && now.Sub(agent.LastNudge) < 2*time.Minute {
 				continue
