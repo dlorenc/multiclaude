@@ -260,12 +260,24 @@ func TestSendKeys(t *testing.T) {
 		t.Fatalf("Failed to send keys: %v", err)
 	}
 
-	// Give it a moment to execute
-	time.Sleep(100 * time.Millisecond)
+	// Poll for the file to be created with timeout
+	// CI environments may be slow, so we use a generous timeout with polling
+	timeout := 5 * time.Second
+	pollInterval := 50 * time.Millisecond
+	deadline := time.Now().Add(timeout)
+
+	fileCreated := false
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(testFile); err == nil {
+			fileCreated = true
+			break
+		}
+		time.Sleep(pollInterval)
+	}
 
 	// Verify the file was created (proves send-keys worked)
-	if _, err := os.Stat(testFile); os.IsNotExist(err) {
-		t.Error("SendKeys did not execute command - file was not created")
+	if !fileCreated {
+		t.Error("SendKeys did not execute command - file was not created within timeout")
 	}
 }
 
