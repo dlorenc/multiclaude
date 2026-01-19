@@ -1210,6 +1210,156 @@ func TestInferRepoFromCwd(t *testing.T) {
 	}
 }
 
+func TestHasPathPrefix(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		prefix string
+		want   bool
+	}{
+		{
+			name:   "exact match",
+			path:   "/foo/bar",
+			prefix: "/foo/bar",
+			want:   true,
+		},
+		{
+			name:   "child directory",
+			path:   "/foo/bar/baz",
+			prefix: "/foo/bar",
+			want:   true,
+		},
+		{
+			name:   "similar prefix not matching",
+			path:   "/foo/bar-extra/baz",
+			prefix: "/foo/bar",
+			want:   false,
+		},
+		{
+			name:   "wts-backup should not match wts",
+			path:   "/home/user/.multiclaude/wts-backup/repo/agent",
+			prefix: "/home/user/.multiclaude/wts",
+			want:   false,
+		},
+		{
+			name:   "wts should match wts",
+			path:   "/home/user/.multiclaude/wts/repo/agent",
+			prefix: "/home/user/.multiclaude/wts",
+			want:   true,
+		},
+		{
+			name:   "prefix with trailing slash",
+			path:   "/foo/bar/baz",
+			prefix: "/foo/bar/",
+			want:   true,
+		},
+		{
+			name:   "unrelated paths",
+			path:   "/completely/different",
+			prefix: "/foo/bar",
+			want:   false,
+		},
+		{
+			name:   "root prefix",
+			path:   "/foo/bar",
+			prefix: "/",
+			want:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasPathPrefix(tt.path, tt.prefix)
+			if got != tt.want {
+				t.Errorf("hasPathPrefix(%q, %q) = %v, want %v", tt.path, tt.prefix, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInferRepoFromCwdWithSymlinks(t *testing.T) {
+	// Create temp directories to simulate multiclaude structure
+	tmpDir := t.TempDir()
+
+	// Resolve symlinks (macOS /tmp -> /private/tmp)
+	resolvedTmpDir, err := filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to resolve tmpDir symlinks: %v", err)
+	}
+
+	worktreesDir := filepath.Join(resolvedTmpDir, "wts")
+	reposDir := filepath.Join(resolvedTmpDir, "repos")
+
+	// Create test directory structure including a similar-named directory
+	testDirs := []string{
+		filepath.Join(worktreesDir, "myrepo", "workspace"),
+		filepath.Join(resolvedTmpDir, "wts-backup", "myrepo", "workspace"), // Similar name, should NOT match
+	}
+	for _, d := range testDirs {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("failed to create test dir %s: %v", d, err)
+		}
+	}
+
+	cli := &CLI{
+		paths: &config.Paths{
+			Root:         resolvedTmpDir,
+			WorktreesDir: worktreesDir,
+			ReposDir:     reposDir,
+		},
+	}
+
+	// Save original working directory
+	origWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get original working directory: %v", err)
+	}
+	defer os.Chdir(origWd)
+
+	tests := []struct {
+		name      string
+		cwd       string
+		wantRepo  string
+		wantError bool
+	}{
+		{
+			name:      "worktree via resolved path",
+			cwd:       filepath.Join(worktreesDir, "myrepo", "workspace"),
+			wantRepo:  "myrepo",
+			wantError: false,
+		},
+		{
+			name:      "wts-backup should not match wts",
+			cwd:       filepath.Join(resolvedTmpDir, "wts-backup", "myrepo", "workspace"),
+			wantRepo:  "",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.Chdir(tt.cwd); err != nil {
+				t.Fatalf("failed to change to test directory %s: %v", tt.cwd, err)
+			}
+
+			gotRepo, err := cli.inferRepoFromCwd()
+
+			if tt.wantError {
+				if err == nil {
+					t.Errorf("inferRepoFromCwd() expected error, got repo=%q", gotRepo)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("inferRepoFromCwd() unexpected error: %v", err)
+				}
+				if gotRepo != tt.wantRepo {
+					t.Errorf("inferRepoFromCwd() = %q, want %q", gotRepo, tt.wantRepo)
+				}
+			}
+		})
+	}
+}
+
 // Workspace command tests
 
 func TestValidateWorkspaceName(t *testing.T) {

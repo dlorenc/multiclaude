@@ -2388,9 +2388,15 @@ func (c *CLI) inferRepoFromCwd() (string, error) {
 		return "", fmt.Errorf("failed to get current directory: %w", err)
 	}
 
+	// Resolve symlinks in cwd for proper path comparison
+	// This is especially important on macOS where /tmp -> /private/tmp
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
+
 	// Check if we're in a worktree path
 	// Path format: ~/.multiclaude/wts/<repo>/<agent>
-	if strings.Contains(cwd, c.paths.WorktreesDir) {
+	if hasPathPrefix(cwd, c.paths.WorktreesDir) {
 		rel, err := filepath.Rel(c.paths.WorktreesDir, cwd)
 		if err == nil {
 			parts := strings.SplitN(rel, string(filepath.Separator), 2)
@@ -2402,7 +2408,7 @@ func (c *CLI) inferRepoFromCwd() (string, error) {
 
 	// Check if we're in a main repo path
 	// Path format: ~/.multiclaude/repos/<repo>
-	if strings.Contains(cwd, c.paths.ReposDir) {
+	if hasPathPrefix(cwd, c.paths.ReposDir) {
 		rel, err := filepath.Rel(c.paths.ReposDir, cwd)
 		if err == nil {
 			parts := strings.SplitN(rel, string(filepath.Separator), 2)
@@ -2422,9 +2428,15 @@ func (c *CLI) inferAgentContext() (repoName, agentName string, err error) {
 		return "", "", fmt.Errorf("failed to get current directory: %w", err)
 	}
 
+	// Resolve symlinks in cwd for proper path comparison
+	// This is especially important on macOS where /tmp -> /private/tmp
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
+
 	// Check if we're in a worktree path
 	// Path format: ~/.multiclaude/wts/<repo>/<agent>
-	if strings.Contains(cwd, c.paths.WorktreesDir) {
+	if hasPathPrefix(cwd, c.paths.WorktreesDir) {
 		// Extract repo and agent from path
 		rel, err := filepath.Rel(c.paths.WorktreesDir, cwd)
 		if err == nil {
@@ -2441,7 +2453,7 @@ func (c *CLI) inferAgentContext() (repoName, agentName string, err error) {
 
 	// Check if we're in a main repo path
 	// Path format: ~/.multiclaude/repos/<repo>
-	if strings.Contains(cwd, c.paths.ReposDir) {
+	if hasPathPrefix(cwd, c.paths.ReposDir) {
 		rel, err := filepath.Rel(c.paths.ReposDir, cwd)
 		if err == nil {
 			parts := strings.SplitN(rel, string(filepath.Separator), 2)
@@ -2469,6 +2481,25 @@ func (c *CLI) inferAgentContext() (repoName, agentName string, err error) {
 }
 
 // Helper functions
+
+// hasPathPrefix checks if path starts with prefix using proper path semantics.
+// Unlike strings.Contains or strings.HasPrefix, this ensures we're comparing
+// complete path components (e.g., "/foo/bar" is under "/foo" but not under "/fo").
+func hasPathPrefix(path, prefix string) bool {
+	// Clean both paths to normalize them
+	path = filepath.Clean(path)
+	prefix = filepath.Clean(prefix)
+
+	// Check if path equals or starts with prefix followed by separator
+	if path == prefix {
+		return true
+	}
+	// Ensure prefix ends with separator for proper prefix matching
+	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+		prefix = prefix + string(filepath.Separator)
+	}
+	return strings.HasPrefix(path, prefix)
+}
 
 func formatTime(t time.Time) string {
 	if time.Since(t) < 24*time.Hour {
