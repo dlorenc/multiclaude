@@ -229,8 +229,65 @@ func WorktreeCreationFailed(cause error) *CLIError {
 		Category:   CategoryRuntime,
 		Message:    "failed to create git worktree",
 		Cause:      cause,
-		Suggestion: "check disk space and git repository state",
+		Suggestion: worktreeSuggestionForError(cause),
 	}
+}
+
+// worktreeSuggestionForError provides specific suggestions based on the git error
+func worktreeSuggestionForError(cause error) string {
+	if cause == nil {
+		return "check disk space and git repository state"
+	}
+
+	errMsg := cause.Error()
+
+	// Check more specific patterns first before "already exists"
+
+	// Worktree path already exists (check before generic "already exists")
+	if strings.Contains(errMsg, "path already exists") || strings.Contains(errMsg, "is a worktree") {
+		return "worktree directory already exists\n\nTry: multiclaude cleanup"
+	}
+
+	// Branch already checked out in another worktree
+	if strings.Contains(errMsg, "already checked out") {
+		return "this branch is already checked out in another worktree\n\nTry: multiclaude cleanup"
+	}
+
+	// Not a valid reference (start branch doesn't exist)
+	if strings.Contains(errMsg, "not a valid reference") || strings.Contains(errMsg, "invalid reference") {
+		return "the specified start branch does not exist\n\nCheck available branches: git branch -a"
+	}
+
+	// Branch already exists (most common case from cleanup issues)
+	// Check this after more specific patterns
+	if strings.Contains(errMsg, "already exists") {
+		branchName := extractQuotedValue(errMsg)
+		if branchName != "" {
+			return fmt.Sprintf("branch '%s' already exists from a previous run\n\n"+
+				"To fix this:\n"+
+				"  1. Run: multiclaude cleanup\n"+
+				"  2. Or manually delete the stale branch:\n"+
+				"     git branch -D %s", branchName, branchName)
+		}
+		return "a branch with this name already exists from a previous run\n\nTry: multiclaude cleanup"
+	}
+
+	// Default fallback
+	return "check disk space and git repository state"
+}
+
+// extractQuotedValue extracts the first single-quoted value from an error message
+// e.g., "fatal: a branch named 'work/nice-owl' already exists" -> "work/nice-owl"
+func extractQuotedValue(errMsg string) string {
+	start := strings.Index(errMsg, "'")
+	if start == -1 {
+		return ""
+	}
+	end := strings.Index(errMsg[start+1:], "'")
+	if end == -1 {
+		return ""
+	}
+	return errMsg[start+1 : start+1+end]
 }
 
 // ClaudeNotFound creates an error for when Claude binary is not found

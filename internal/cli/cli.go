@@ -3501,6 +3501,52 @@ func (c *CLI) localCleanup(dryRun bool, verbose bool) error {
 					fmt.Printf("  Warning: failed to prune worktrees: %v\n", err)
 				}
 			}
+
+			// Clean up orphaned work/* branches (branches without corresponding worktrees)
+			orphanedBranches, err := wt.FindOrphanedBranches("work/")
+			if err != nil && verbose {
+				fmt.Printf("  Warning: failed to find orphaned branches: %v\n", err)
+			} else if len(orphanedBranches) > 0 {
+				fmt.Printf("\nOrphaned work branches (%d) for %s:\n", len(orphanedBranches), repoName)
+				for _, branch := range orphanedBranches {
+					if dryRun {
+						fmt.Printf("  Would delete branch: %s\n", branch)
+						totalIssues++
+					} else {
+						if err := wt.DeleteBranch(branch); err != nil {
+							fmt.Printf("  Failed to delete %s: %v\n", branch, err)
+						} else {
+							fmt.Printf("  Deleted branch: %s\n", branch)
+							totalRemoved++
+						}
+					}
+				}
+			} else if verbose {
+				fmt.Println("  No orphaned work branches")
+			}
+
+			// Also clean up orphaned workspace/* branches
+			orphanedWorkspaces, err := wt.FindOrphanedBranches("workspace/")
+			if err != nil && verbose {
+				fmt.Printf("  Warning: failed to find orphaned workspace branches: %v\n", err)
+			} else if len(orphanedWorkspaces) > 0 {
+				fmt.Printf("\nOrphaned workspace branches (%d) for %s:\n", len(orphanedWorkspaces), repoName)
+				for _, branch := range orphanedWorkspaces {
+					if dryRun {
+						fmt.Printf("  Would delete branch: %s\n", branch)
+						totalIssues++
+					} else {
+						if err := wt.DeleteBranch(branch); err != nil {
+							fmt.Printf("  Failed to delete %s: %v\n", branch, err)
+						} else {
+							fmt.Printf("  Deleted branch: %s\n", branch)
+							totalRemoved++
+						}
+					}
+				}
+			} else if verbose {
+				fmt.Println("  No orphaned workspace branches")
+			}
 		}
 	}
 

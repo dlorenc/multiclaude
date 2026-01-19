@@ -227,6 +227,67 @@ func (m *Manager) RenameBranch(oldName, newName string) error {
 	return nil
 }
 
+// DeleteBranch force deletes a branch (git branch -D)
+func (m *Manager) DeleteBranch(branchName string) error {
+	cmd := exec.Command("git", "branch", "-D", branchName)
+	cmd.Dir = m.repoPath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to delete branch: %w\nOutput: %s", err, output)
+	}
+	return nil
+}
+
+// ListBranchesWithPrefix lists all branches that start with the given prefix
+func (m *Manager) ListBranchesWithPrefix(prefix string) ([]string, error) {
+	cmd := exec.Command("git", "for-each-ref", "--format=%(refname:short)", "refs/heads/"+prefix)
+	cmd.Dir = m.repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list branches: %w", err)
+	}
+
+	var branches []string
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line != "" {
+			branches = append(branches, line)
+		}
+	}
+	return branches, nil
+}
+
+// FindOrphanedBranches finds branches with the given prefix that don't have corresponding worktrees
+func (m *Manager) FindOrphanedBranches(prefix string) ([]string, error) {
+	// Get all branches with the prefix
+	branches, err := m.ListBranchesWithPrefix(prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get all worktrees
+	worktrees, err := m.List()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build a set of branches that have worktrees
+	activeBranches := make(map[string]bool)
+	for _, wt := range worktrees {
+		if wt.Branch != "" {
+			activeBranches[wt.Branch] = true
+		}
+	}
+
+	// Find orphaned branches
+	var orphaned []string
+	for _, branch := range branches {
+		if !activeBranches[branch] {
+			orphaned = append(orphaned, branch)
+		}
+	}
+
+	return orphaned, nil
+}
+
 // CanCreateBranchWithPrefix checks if a branch can be created with a given prefix.
 // Returns false if there's a conflicting branch (e.g., "workspace" exists and
 // we're trying to create "workspace/foo").
