@@ -9,8 +9,8 @@ import (
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
-	"github.com/dlorenc/multiclaude/pkg/tmux"
 	"github.com/dlorenc/multiclaude/pkg/config"
+	"github.com/dlorenc/multiclaude/pkg/tmux"
 )
 
 func setupTestDaemon(t *testing.T) (*Daemon, func()) {
@@ -1684,9 +1684,9 @@ func TestGenerateTrackingModePrompt(t *testing.T) {
 	defer cleanup()
 
 	tests := []struct {
-		name          string
-		trackMode     state.TrackMode
-		wantContains  []string
+		name           string
+		trackMode      state.TrackMode
+		wantContains   []string
 		wantNotContain []string
 	}{
 		{

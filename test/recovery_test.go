@@ -10,9 +10,9 @@ import (
 	"github.com/dlorenc/multiclaude/internal/daemon"
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/state"
-	"github.com/dlorenc/multiclaude/pkg/tmux"
 	"github.com/dlorenc/multiclaude/internal/worktree"
 	"github.com/dlorenc/multiclaude/pkg/config"
+	"github.com/dlorenc/multiclaude/pkg/tmux"
 )
 
 // TestCorruptedStateFileRecovery tests that the system can recover from a corrupted state file

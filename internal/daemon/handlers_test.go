@@ -1114,7 +1114,7 @@ func TestArgumentTypeCoercion(t *testing.T) {
 	resp := d.handleAddAgent(socket.Request{
 		Command: "add_agent",
 		Args: map[string]interface{}{
-			"repo":          123,  // wrong type
+			"repo":          123, // wrong type
 			"agent":         "test",
 			"type":          "worker",
 			"worktree_path": "/tmp",
