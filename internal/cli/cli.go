@@ -103,14 +103,26 @@ func NewWithPaths(paths *config.Paths, claudePath string) *CLI {
 	return cli
 }
 
+// tmuxSanitizer replaces problematic characters with hyphens for tmux session names.
+// tmux has issues with dots, colons, spaces, and forward slashes in session names.
+var tmuxSanitizer = strings.NewReplacer(
+	".", "-",
+	":", "-",
+	" ", "-",
+	"/", "-",
+)
+
 // sanitizeTmuxSessionName creates a tmux-safe session name from a repo name.
 // tmux has issues with certain characters like dots, so we replace them.
 func sanitizeTmuxSessionName(repoName string) string {
-	// Replace dots and other problematic characters with hyphens
-	sanitized := strings.ReplaceAll(repoName, ".", "-")
-	sanitized = strings.ReplaceAll(sanitized, ":", "-")
-	sanitized = strings.ReplaceAll(sanitized, " ", "-")
-	return fmt.Sprintf("mc-%s", sanitized)
+	// Strip control characters (ASCII 0-31) for safety
+	sanitized := strings.Map(func(r rune) rune {
+		if r < 32 {
+			return -1 // drop the character
+		}
+		return r
+	}, repoName)
+	return fmt.Sprintf("mc-%s", tmuxSanitizer.Replace(sanitized))
 }
 
 // Execute executes the CLI with the given arguments

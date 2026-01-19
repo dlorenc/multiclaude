@@ -2169,6 +2169,9 @@ func TestSanitizeTmuxSessionName(t *testing.T) {
 		{"repo:with:colons", "mc-repo-with-colons"},
 		{"repo with spaces", "mc-repo-with-spaces"},
 		{"simple", "mc-simple"},
+		{"repo/with/slashes", "mc-repo-with-slashes"},
+		{"path/to/repo.git", "mc-path-to-repo-git"},
+		{"repo\x00with\x1fnull", "mc-repowithnull"}, // control characters stripped
 	}
 
 	for _, tt := range tests {
