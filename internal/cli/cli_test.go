@@ -1030,3 +1030,263 @@ func TestInferRepoFromCwd(t *testing.T) {
 		})
 	}
 }
+
+// Workspace command tests
+
+func TestValidateWorkspaceName(t *testing.T) {
+	tests := []struct {
+		name      string
+		workspace string
+		wantError bool
+	}{
+		{
+			name:      "valid simple name",
+			workspace: "default",
+			wantError: false,
+		},
+		{
+			name:      "valid name with dash",
+			workspace: "my-workspace",
+			wantError: false,
+		},
+		{
+			name:      "valid name with numbers",
+			workspace: "workspace123",
+			wantError: false,
+		},
+		{
+			name:      "valid name with underscore",
+			workspace: "my_workspace",
+			wantError: false,
+		},
+		{
+			name:      "empty name",
+			workspace: "",
+			wantError: true,
+		},
+		{
+			name:      "dot only",
+			workspace: ".",
+			wantError: true,
+		},
+		{
+			name:      "double dot",
+			workspace: "..",
+			wantError: true,
+		},
+		{
+			name:      "starts with dot",
+			workspace: ".hidden",
+			wantError: true,
+		},
+		{
+			name:      "starts with dash",
+			workspace: "-invalid",
+			wantError: true,
+		},
+		{
+			name:      "ends with dot",
+			workspace: "invalid.",
+			wantError: true,
+		},
+		{
+			name:      "ends with slash",
+			workspace: "invalid/",
+			wantError: true,
+		},
+		{
+			name:      "contains double dots",
+			workspace: "invalid..name",
+			wantError: true,
+		},
+		{
+			name:      "contains space",
+			workspace: "invalid name",
+			wantError: true,
+		},
+		{
+			name:      "contains tilde",
+			workspace: "invalid~name",
+			wantError: true,
+		},
+		{
+			name:      "contains caret",
+			workspace: "invalid^name",
+			wantError: true,
+		},
+		{
+			name:      "contains colon",
+			workspace: "invalid:name",
+			wantError: true,
+		},
+		{
+			name:      "contains question mark",
+			workspace: "invalid?name",
+			wantError: true,
+		},
+		{
+			name:      "contains asterisk",
+			workspace: "invalid*name",
+			wantError: true,
+		},
+		{
+			name:      "contains bracket",
+			workspace: "invalid[name",
+			wantError: true,
+		},
+		{
+			name:      "contains at sign",
+			workspace: "invalid@name",
+			wantError: true,
+		},
+		{
+			name:      "contains backslash",
+			workspace: "invalid\\name",
+			wantError: true,
+		},
+		{
+			name:      "contains curly brace",
+			workspace: "invalid{name",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateWorkspaceName(tt.workspace)
+			if (err != nil) != tt.wantError {
+				t.Errorf("validateWorkspaceName(%q) error = %v, wantError %v", tt.workspace, err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestCLIWorkspaceListEmpty(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Add a repo first via daemon so we can list workspaces
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// List workspaces - should work even when empty
+	err := cli.Execute([]string{"workspace", "list", "--repo", "test-repo"})
+	if err != nil {
+		t.Errorf("workspace list failed: %v", err)
+	}
+}
+
+func TestCLIWorkspaceListWithWorkspaces(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Add a repo and workspace via daemon
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	agent := state.Agent{
+		Type:         state.AgentTypeWorkspace,
+		WorktreePath: "/tmp/test-workspace",
+		TmuxWindow:   "default",
+		CreatedAt:    time.Now(),
+	}
+	if err := d.GetState().AddAgent("test-repo", "default", agent); err != nil {
+		t.Fatalf("Failed to add workspace agent: %v", err)
+	}
+
+	// List workspaces - should show the workspace
+	err := cli.Execute([]string{"workspace", "list", "--repo", "test-repo"})
+	if err != nil {
+		t.Errorf("workspace list with workspaces failed: %v", err)
+	}
+}
+
+func TestCLIWorkspaceDefaultAction(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Add a repo via daemon
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// workspace with no args should list (same as workspace list)
+	err := cli.Execute([]string{"workspace", "--repo", "test-repo"})
+	if err != nil {
+		t.Errorf("workspace (no args) failed: %v", err)
+	}
+}
+
+func TestCLIWorkspaceAddValidation(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Add a repo
+	repoPath := cli.paths.RepoDir("test-repo")
+	setupTestRepo(t, repoPath)
+
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// workspace add with invalid name should fail
+	err := cli.Execute([]string{"workspace", "add", ".invalid", "--repo", "test-repo"})
+	if err == nil {
+		t.Error("workspace add with invalid name should fail")
+	}
+}
+
+func TestCLIWorkspaceAddMissingName(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// workspace add without name should fail
+	err := cli.Execute([]string{"workspace", "add"})
+	if err == nil {
+		t.Error("workspace add without name should fail")
+	}
+}
+
+func TestCLIWorkspaceRmMissingName(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// workspace rm without name should fail
+	err := cli.Execute([]string{"workspace", "rm"})
+	if err == nil {
+		t.Error("workspace rm without name should fail")
+	}
+}
+
+func TestCLIWorkspaceConnectMissingName(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// workspace connect without name should fail
+	err := cli.Execute([]string{"workspace", "connect"})
+	if err == nil {
+		t.Error("workspace connect without name should fail")
+	}
+}

@@ -279,6 +279,44 @@ func (c *CLI) registerCommands() {
 
 	c.rootCmd.Subcommands["work"] = workCmd
 
+	// Workspace commands
+	workspaceCmd := &Command{
+		Name:        "workspace",
+		Description: "Manage workspaces",
+		Subcommands: make(map[string]*Command),
+	}
+
+	workspaceCmd.Run = c.workspaceDefault // Default action: list or connect
+
+	workspaceCmd.Subcommands["add"] = &Command{
+		Name:        "add",
+		Description: "Add a new workspace",
+		Usage:       "multiclaude workspace add <name> [--branch <branch>]",
+		Run:         c.addWorkspace,
+	}
+
+	workspaceCmd.Subcommands["rm"] = &Command{
+		Name:        "rm",
+		Description: "Remove a workspace",
+		Usage:       "multiclaude workspace rm <name>",
+		Run:         c.removeWorkspace,
+	}
+
+	workspaceCmd.Subcommands["list"] = &Command{
+		Name:        "list",
+		Description: "List workspaces",
+		Run:         c.listWorkspaces,
+	}
+
+	workspaceCmd.Subcommands["connect"] = &Command{
+		Name:        "connect",
+		Description: "Connect to a workspace",
+		Usage:       "multiclaude workspace connect <name>",
+		Run:         c.connectWorkspace,
+	}
+
+	c.rootCmd.Subcommands["workspace"] = workspaceCmd
+
 	// Agent commands (run from within Claude)
 	agentCmd := &Command{
 		Name:        "agent",
@@ -804,18 +842,18 @@ func (c *CLI) initRepo(args []string) error {
 		}
 	}
 
-	// Create workspace worktree
+	// Create default workspace worktree
 	wt := worktree.NewManager(repoPath)
-	workspacePath := c.paths.AgentWorktree(repoName, "workspace")
-	workspaceBranch := "workspace"
+	workspacePath := c.paths.AgentWorktree(repoName, "default")
+	workspaceBranch := "workspace/default"
 
-	fmt.Printf("Creating workspace worktree at: %s\n", workspacePath)
+	fmt.Printf("Creating default workspace worktree at: %s\n", workspacePath)
 	if err := wt.CreateNewBranch(workspacePath, workspaceBranch, "HEAD"); err != nil {
-		return fmt.Errorf("failed to create workspace worktree: %w", err)
+		return fmt.Errorf("failed to create default workspace worktree: %w", err)
 	}
 
-	// Create workspace tmux window (detached so it doesn't switch focus)
-	cmd = exec.Command("tmux", "new-window", "-d", "-t", tmuxSession, "-n", "workspace", "-c", workspacePath)
+	// Create default workspace tmux window (detached so it doesn't switch focus)
+	cmd = exec.Command("tmux", "new-window", "-d", "-t", tmuxSession, "-n", "default", "-c", workspacePath)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to create workspace window: %w", err)
 	}
@@ -826,63 +864,63 @@ func (c *CLI) initRepo(args []string) error {
 		return fmt.Errorf("failed to generate workspace session ID: %w", err)
 	}
 
-	// Write prompt file for workspace
-	workspacePromptFile, err := c.writePromptFile(repoPath, prompts.TypeWorkspace, "workspace")
+	// Write prompt file for default workspace
+	workspacePromptFile, err := c.writePromptFile(repoPath, prompts.TypeWorkspace, "default")
 	if err != nil {
-		return fmt.Errorf("failed to write workspace prompt: %w", err)
+		return fmt.Errorf("failed to write default workspace prompt: %w", err)
 	}
 
 	// Copy hooks configuration if it exists
 	if err := c.copyHooksConfig(repoPath, workspacePath); err != nil {
-		fmt.Printf("Warning: failed to copy hooks config to workspace: %v\n", err)
+		fmt.Printf("Warning: failed to copy hooks config to default workspace: %v\n", err)
 	}
 
-	// Start Claude in workspace window (skip in test mode)
+	// Start Claude in default workspace window (skip in test mode)
 	var workspacePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		fmt.Println("Starting Claude Code in workspace window...")
-		pid, err := c.startClaudeInTmux(tmuxSession, "workspace", workspacePath, workspaceSessionID, workspacePromptFile, "")
+		fmt.Println("Starting Claude Code in default workspace window...")
+		pid, err := c.startClaudeInTmux(tmuxSession, "default", workspacePath, workspaceSessionID, workspacePromptFile, "")
 		if err != nil {
-			return fmt.Errorf("failed to start workspace Claude: %w", err)
+			return fmt.Errorf("failed to start default workspace Claude: %w", err)
 		}
 		workspacePID = pid
 
-		// Set up output capture for workspace
-		if err := c.setupOutputCapture(tmuxSession, "workspace", repoName, "workspace", "workspace"); err != nil {
-			fmt.Printf("Warning: failed to setup output capture for workspace: %v\n", err)
+		// Set up output capture for default workspace
+		if err := c.setupOutputCapture(tmuxSession, "default", repoName, "default", "workspace"); err != nil {
+			fmt.Printf("Warning: failed to setup output capture for default workspace: %v\n", err)
 		}
 	}
 
-	// Add workspace agent
+	// Add default workspace agent
 	resp, err = client.Send(socket.Request{
 		Command: "add_agent",
 		Args: map[string]interface{}{
 			"repo":          repoName,
-			"agent":         "workspace",
+			"agent":         "default",
 			"type":          "workspace",
 			"worktree_path": workspacePath,
-			"tmux_window":   "workspace",
+			"tmux_window":   "default",
 			"session_id":    workspaceSessionID,
 			"pid":           workspacePID,
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to register workspace: %w", err)
+		return fmt.Errorf("failed to register default workspace: %w", err)
 	}
 	if !resp.Success {
-		return fmt.Errorf("failed to register workspace: %s", resp.Error)
+		return fmt.Errorf("failed to register default workspace: %s", resp.Error)
 	}
 
 	fmt.Println()
 	fmt.Println("✓ Repository initialized successfully!")
 	fmt.Printf("  Tmux session: %s\n", tmuxSession)
 	if mqEnabled {
-		fmt.Printf("  Agents: supervisor, merge-queue, workspace\n")
+		fmt.Printf("  Agents: supervisor, merge-queue, default (workspace)\n")
 	} else {
-		fmt.Printf("  Agents: supervisor, workspace\n")
+		fmt.Printf("  Agents: supervisor, default (workspace)\n")
 	}
 	fmt.Printf("\nAttach to session: tmux attach -t %s\n", tmuxSession)
-	fmt.Printf("Or attach to your workspace: multiclaude attach workspace\n")
+	fmt.Printf("Or connect to your workspace: multiclaude workspace connect default\n")
 
 	return nil
 }
@@ -1636,6 +1674,519 @@ func (c *CLI) removeWorker(args []string) error {
 	}
 
 	fmt.Println("✓ Worker removed successfully")
+	return nil
+}
+
+// Workspace command implementations
+
+// workspaceDefault handles `multiclaude workspace` with no subcommand or `multiclaude workspace <name>`
+func (c *CLI) workspaceDefault(args []string) error {
+	// If no args, list workspaces
+	if len(args) == 0 {
+		return c.listWorkspaces(args)
+	}
+
+	// If first arg looks like a workspace name (not a flag), treat as connect
+	if !strings.HasPrefix(args[0], "-") {
+		return c.connectWorkspace(args)
+	}
+
+	// Otherwise list with flags
+	return c.listWorkspaces(args)
+}
+
+// addWorkspace creates a new workspace
+func (c *CLI) addWorkspace(args []string) error {
+	flags, posArgs := ParseFlags(args)
+
+	if len(posArgs) < 1 {
+		return errors.InvalidUsage("usage: multiclaude workspace add <name> [--branch <branch>]")
+	}
+
+	workspaceName := posArgs[0]
+
+	// Validate workspace name (same restrictions as branch names)
+	if err := validateWorkspaceName(workspaceName); err != nil {
+		return err
+	}
+
+	// Determine repository
+	var repoName string
+	if r, ok := flags["repo"]; ok {
+		repoName = r
+	} else {
+		// Try to infer from current directory
+		if inferred, err := c.inferRepoFromCwd(); err == nil {
+			repoName = inferred
+		} else {
+			return errors.MultipleRepos()
+		}
+	}
+
+	// Determine branch to start from
+	startBranch := "HEAD" // Default to current branch/HEAD
+	if branch, ok := flags["branch"]; ok {
+		startBranch = branch
+		fmt.Printf("Creating workspace '%s' in repo '%s' from branch '%s'\n", workspaceName, repoName, branch)
+	} else {
+		fmt.Printf("Creating workspace '%s' in repo '%s'\n", workspaceName, repoName)
+	}
+
+	// Check if workspace already exists
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "list_agents",
+		Args: map[string]interface{}{
+			"repo": repoName,
+		},
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("checking existing workspaces", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to check existing workspaces", fmt.Errorf("%s", resp.Error))
+	}
+
+	agents, _ := resp.Data.([]interface{})
+	for _, agent := range agents {
+		if agentMap, ok := agent.(map[string]interface{}); ok {
+			agentType, _ := agentMap["type"].(string)
+			name, _ := agentMap["name"].(string)
+			if agentType == "workspace" && name == workspaceName {
+				return fmt.Errorf("workspace '%s' already exists in repo '%s'", workspaceName, repoName)
+			}
+		}
+	}
+
+	// Get repository path
+	repoPath := c.paths.RepoDir(repoName)
+
+	// Create worktree
+	wt := worktree.NewManager(repoPath)
+	wtPath := c.paths.AgentWorktree(repoName, workspaceName)
+	branchName := fmt.Sprintf("workspace/%s", workspaceName)
+
+	fmt.Printf("Creating worktree at: %s\n", wtPath)
+	if err := wt.CreateNewBranch(wtPath, branchName, startBranch); err != nil {
+		return errors.WorktreeCreationFailed(err)
+	}
+
+	// Get tmux session name
+	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+
+	// Create tmux window for workspace (detached so it doesn't switch focus)
+	fmt.Printf("Creating tmux window: %s\n", workspaceName)
+	cmd := exec.Command("tmux", "new-window", "-d", "-t", tmuxSession, "-n", workspaceName, "-c", wtPath)
+	if err := cmd.Run(); err != nil {
+		return errors.TmuxOperationFailed("create window", err)
+	}
+
+	// Generate session ID for workspace
+	workspaceSessionID, err := generateSessionID()
+	if err != nil {
+		return fmt.Errorf("failed to generate workspace session ID: %w", err)
+	}
+
+	// Write prompt file for workspace
+	workspacePromptFile, err := c.writePromptFile(repoPath, prompts.TypeWorkspace, workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to write workspace prompt: %w", err)
+	}
+
+	// Copy hooks configuration if it exists
+	if err := c.copyHooksConfig(repoPath, wtPath); err != nil {
+		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
+	}
+
+	// Start Claude in workspace window (skip in test mode)
+	var workspacePID int
+	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
+		fmt.Println("Starting Claude Code in workspace window...")
+		pid, err := c.startClaudeInTmux(tmuxSession, workspaceName, wtPath, workspaceSessionID, workspacePromptFile, "")
+		if err != nil {
+			return fmt.Errorf("failed to start workspace Claude: %w", err)
+		}
+		workspacePID = pid
+
+		// Set up output capture for workspace
+		if err := c.setupOutputCapture(tmuxSession, workspaceName, repoName, workspaceName, "workspace"); err != nil {
+			fmt.Printf("Warning: failed to setup output capture for workspace: %v\n", err)
+		}
+	}
+
+	// Register workspace with daemon
+	resp, err = client.Send(socket.Request{
+		Command: "add_agent",
+		Args: map[string]interface{}{
+			"repo":          repoName,
+			"agent":         workspaceName,
+			"type":          "workspace",
+			"worktree_path": wtPath,
+			"tmux_window":   workspaceName,
+			"session_id":    workspaceSessionID,
+			"pid":           workspacePID,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to register workspace: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("failed to register workspace: %s", resp.Error)
+	}
+
+	fmt.Println()
+	fmt.Println("✓ Workspace created successfully!")
+	fmt.Printf("  Name: %s\n", workspaceName)
+	fmt.Printf("  Branch: %s\n", branchName)
+	fmt.Printf("  Worktree: %s\n", wtPath)
+	fmt.Printf("\nConnect to workspace: multiclaude workspace connect %s\n", workspaceName)
+	fmt.Printf("Or use: multiclaude attach %s\n", workspaceName)
+
+	return nil
+}
+
+// removeWorkspace removes a workspace
+func (c *CLI) removeWorkspace(args []string) error {
+	if len(args) < 1 {
+		return errors.InvalidUsage("usage: multiclaude workspace rm <name>")
+	}
+
+	workspaceName := args[0]
+
+	// Determine repository
+	flags, _ := ParseFlags(args[1:])
+	var repoName string
+	if r, ok := flags["repo"]; ok {
+		repoName = r
+	} else {
+		// Try to infer repo from current working directory
+		if inferred, err := c.inferRepoFromCwd(); err == nil {
+			repoName = inferred
+		} else {
+			return errors.MultipleRepos()
+		}
+	}
+
+	fmt.Printf("Removing workspace '%s' from repo '%s'\n", workspaceName, repoName)
+
+	// Get workspace info
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "list_agents",
+		Args: map[string]interface{}{
+			"repo": repoName,
+		},
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("getting workspace info", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to get workspace info", fmt.Errorf("%s", resp.Error))
+	}
+
+	// Find workspace
+	agents, _ := resp.Data.([]interface{})
+	var workspaceInfo map[string]interface{}
+	for _, agent := range agents {
+		if agentMap, ok := agent.(map[string]interface{}); ok {
+			agentType, _ := agentMap["type"].(string)
+			name, _ := agentMap["name"].(string)
+			if agentType == "workspace" && name == workspaceName {
+				workspaceInfo = agentMap
+				break
+			}
+		}
+	}
+
+	if workspaceInfo == nil {
+		return errors.AgentNotFound("workspace", workspaceName, repoName)
+	}
+
+	// Get worktree path
+	wtPath := workspaceInfo["worktree_path"].(string)
+
+	// Check for uncommitted changes
+	hasUncommitted, err := worktree.HasUncommittedChanges(wtPath)
+	if err != nil {
+		fmt.Printf("Warning: failed to check for uncommitted changes: %v\n", err)
+	} else if hasUncommitted {
+		fmt.Println("\nWarning: Workspace has uncommitted changes!")
+		fmt.Println("Files may be lost if you continue with removal.")
+		fmt.Print("Continue with removal? [y/N]: ")
+
+		var response string
+		fmt.Scanln(&response)
+		if response != "y" && response != "Y" {
+			fmt.Println("Removal cancelled")
+			return nil
+		}
+	}
+
+	// Check for unpushed commits
+	hasUnpushed, err := worktree.HasUnpushedCommits(wtPath)
+	if err != nil {
+		// This is ok - might not have a tracking branch
+		fmt.Printf("Note: Could not check for unpushed commits (no tracking branch?)\n")
+	} else if hasUnpushed {
+		fmt.Println("\nWarning: Workspace has unpushed commits!")
+		branch, err := worktree.GetCurrentBranch(wtPath)
+		if err == nil {
+			fmt.Printf("Branch '%s' has commits not pushed to remote.\n", branch)
+		}
+		fmt.Println("These commits may be lost if you continue with removal.")
+		fmt.Print("Continue with removal? [y/N]: ")
+
+		var response string
+		fmt.Scanln(&response)
+		if response != "y" && response != "Y" {
+			fmt.Println("Removal cancelled")
+			return nil
+		}
+	}
+
+	// Kill tmux window
+	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxWindow := workspaceInfo["tmux_window"].(string)
+	fmt.Printf("Killing tmux window: %s\n", tmuxWindow)
+	cmd := exec.Command("tmux", "kill-window", "-t", fmt.Sprintf("%s:%s", tmuxSession, tmuxWindow))
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Warning: failed to kill tmux window: %v\n", err)
+	}
+
+	// Remove worktree
+	repoPath := c.paths.RepoDir(repoName)
+	wt := worktree.NewManager(repoPath)
+
+	fmt.Printf("Removing worktree: %s\n", wtPath)
+	if err := wt.Remove(wtPath, false); err != nil {
+		fmt.Printf("Warning: failed to remove worktree: %v\n", err)
+	}
+
+	// Unregister from daemon
+	resp, err = client.Send(socket.Request{
+		Command: "remove_agent",
+		Args: map[string]interface{}{
+			"repo":  repoName,
+			"agent": workspaceName,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to unregister workspace: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("failed to unregister workspace: %s", resp.Error)
+	}
+
+	fmt.Println("✓ Workspace removed successfully")
+	return nil
+}
+
+// listWorkspaces lists all workspaces in a repository
+func (c *CLI) listWorkspaces(args []string) error {
+	flags, _ := ParseFlags(args)
+
+	// Determine repository
+	var repoName string
+	if r, ok := flags["repo"]; ok {
+		repoName = r
+	} else {
+		// Try to infer repo from current working directory
+		if inferred, err := c.inferRepoFromCwd(); err == nil {
+			repoName = inferred
+		} else {
+			return errors.MultipleRepos()
+		}
+	}
+
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "list_agents",
+		Args: map[string]interface{}{
+			"repo": repoName,
+			"rich": true,
+		},
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("listing workspaces", err)
+	}
+
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to list workspaces", fmt.Errorf("%s", resp.Error))
+	}
+
+	agents, ok := resp.Data.([]interface{})
+	if !ok {
+		return errors.New(errors.CategoryRuntime, "unexpected response format from daemon")
+	}
+
+	// Filter for workspaces
+	workspaces := []map[string]interface{}{}
+	for _, agent := range agents {
+		if agentMap, ok := agent.(map[string]interface{}); ok {
+			agentType, _ := agentMap["type"].(string)
+			if agentType == "workspace" {
+				workspaces = append(workspaces, agentMap)
+			}
+		}
+	}
+
+	if len(workspaces) == 0 {
+		fmt.Printf("No workspaces in repository '%s'\n", repoName)
+		format.Dimmed("\nCreate a workspace with: multiclaude workspace add <name>")
+		return nil
+	}
+
+	format.Header("Workspaces in '%s' (%d):", repoName, len(workspaces))
+	fmt.Println()
+
+	table := format.NewColoredTable("NAME", "BRANCH", "STATUS")
+	for _, ws := range workspaces {
+		name, _ := ws["name"].(string)
+		status, _ := ws["status"].(string)
+		branch, _ := ws["branch"].(string)
+
+		// Format status with color
+		var statusCell format.ColoredCell
+		switch status {
+		case "running":
+			statusCell = format.ColorCell(format.ColoredStatus(format.StatusRunning), nil)
+		case "completed":
+			statusCell = format.ColorCell(format.ColoredStatus(format.StatusCompleted), nil)
+		case "stopped":
+			statusCell = format.ColorCell(format.ColoredStatus(format.StatusError), nil)
+		default:
+			statusCell = format.ColorCell(format.ColoredStatus(format.StatusIdle), nil)
+		}
+
+		// Format branch
+		branchCell := format.ColorCell(branch, format.Cyan)
+		if branch == "" {
+			branchCell = format.ColorCell("-", format.Dim)
+		}
+
+		table.AddRow(
+			format.Cell(name),
+			branchCell,
+			statusCell,
+		)
+	}
+	table.Print()
+
+	return nil
+}
+
+// connectWorkspace attaches to a workspace
+func (c *CLI) connectWorkspace(args []string) error {
+	if len(args) < 1 {
+		return errors.InvalidUsage("usage: multiclaude workspace connect <name>")
+	}
+
+	workspaceName := args[0]
+	flags, _ := ParseFlags(args[1:])
+
+	// Determine repository
+	var repoName string
+	if r, ok := flags["repo"]; ok {
+		repoName = r
+	} else {
+		// Try to infer repo from current working directory
+		if inferred, err := c.inferRepoFromCwd(); err == nil {
+			repoName = inferred
+		} else {
+			return errors.MultipleRepos()
+		}
+	}
+
+	// Get workspace info
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "list_agents",
+		Args: map[string]interface{}{
+			"repo": repoName,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get workspace info: %w (is daemon running?)", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("failed to get workspace info: %s", resp.Error)
+	}
+
+	// Find workspace
+	agents, _ := resp.Data.([]interface{})
+	var workspaceInfo map[string]interface{}
+	for _, agent := range agents {
+		if agentMap, ok := agent.(map[string]interface{}); ok {
+			agentType, _ := agentMap["type"].(string)
+			name, _ := agentMap["name"].(string)
+			if agentType == "workspace" && name == workspaceName {
+				workspaceInfo = agentMap
+				break
+			}
+		}
+	}
+
+	if workspaceInfo == nil {
+		return fmt.Errorf("workspace '%s' not found in repo '%s'", workspaceName, repoName)
+	}
+
+	// Get tmux session and window
+	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxWindow := workspaceInfo["tmux_window"].(string)
+
+	// Attach to tmux
+	target := fmt.Sprintf("%s:%s", tmuxSession, tmuxWindow)
+
+	readOnly := flags["read-only"] == "true" || flags["r"] == "true"
+	tmuxArgs := []string{"attach", "-t", target}
+	if readOnly {
+		tmuxArgs = append(tmuxArgs, "-r")
+	}
+
+	cmd := exec.Command("tmux", tmuxArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
+}
+
+// validateWorkspaceName validates that a workspace name follows branch name restrictions
+func validateWorkspaceName(name string) error {
+	if name == "" {
+		return fmt.Errorf("workspace name cannot be empty")
+	}
+
+	// Git branch name restrictions
+	// - Cannot start with . or -
+	// - Cannot contain consecutive dots ..
+	// - Cannot contain \ or any of these characters: ~ ^ : ? * [ @ { } space
+	// - Cannot end with . or /
+	// - Cannot be "." or ".."
+
+	if name == "." || name == ".." {
+		return fmt.Errorf("workspace name cannot be '.' or '..'")
+	}
+
+	if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "-") {
+		return fmt.Errorf("workspace name cannot start with '.' or '-'")
+	}
+
+	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, "/") {
+		return fmt.Errorf("workspace name cannot end with '.' or '/'")
+	}
+
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("workspace name cannot contain '..'")
+	}
+
+	invalidChars := []string{"\\", "~", "^", ":", "?", "*", "[", "@", "{", "}", " ", "\t", "\n"}
+	for _, char := range invalidChars {
+		if strings.Contains(name, char) {
+			return fmt.Errorf("workspace name cannot contain '%s'", char)
+		}
+	}
+
 	return nil
 }
 
