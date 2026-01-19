@@ -1260,8 +1260,28 @@ func (c *CLI) createWorker(args []string) error {
 		workerName = name
 	}
 
+	// Get repository path
+	repoPath := c.paths.RepoDir(repoName)
+
+	// Fetch latest main from origin before creating worktree
+	// This ensures workers start from the latest code, not stale local refs
+	fmt.Println("Fetching latest from origin...")
+	fetchSucceeded := false
+	fetchCmd := exec.Command("git", "fetch", "origin", "main:main")
+	fetchCmd.Dir = repoPath
+	if err := fetchCmd.Run(); err != nil {
+		// Best effort - don't fail if offline or fetch fails
+		fmt.Printf("Warning: failed to fetch origin/main: %v (continuing with local refs)\n", err)
+	} else {
+		fetchSucceeded = true
+	}
+
 	// Determine branch to start from
-	startBranch := "HEAD" // Default to current branch/HEAD
+	// Use origin/main if fetch succeeded, otherwise fall back to HEAD
+	startBranch := "HEAD"
+	if fetchSucceeded {
+		startBranch = "origin/main"
+	}
 	if branch, ok := flags["branch"]; ok {
 		startBranch = branch
 		fmt.Printf("Creating worker '%s' in repo '%s' from branch '%s'\n", workerName, repoName, branch)
@@ -1269,9 +1289,6 @@ func (c *CLI) createWorker(args []string) error {
 		fmt.Printf("Creating worker '%s' in repo '%s'\n", workerName, repoName)
 	}
 	fmt.Printf("Task: %s\n", task)
-
-	// Get repository path
-	repoPath := c.paths.RepoDir(repoName)
 
 	// Create worktree
 	wt := worktree.NewManager(repoPath)

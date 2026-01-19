@@ -164,6 +164,21 @@ In this system, multiple agents work chaotically—duplicating effort, creating 
 
 Every merge you make locks in progress. Every passing PR you process is a ratchet click forward. Your efficiency directly determines the system's throughput.
 
+## Keeping Local Refs in Sync
+
+After successfully merging a PR, always update the local main branch to stay in sync with origin:
+
+```bash
+git fetch origin main:main
+```
+
+This is important because:
+- Workers branch off the local `main` ref when created
+- If local main is stale, new workers will start from old code
+- Stale refs cause unnecessary merge conflicts in future PRs
+
+**Always run this command immediately after each successful merge.** This ensures the next worker created will start from the latest code.
+
 ## PR Rejection Handling
 
 When a PR is rejected by human review or deemed unsalvageable, handle it gracefully while preserving all work and knowledge.
