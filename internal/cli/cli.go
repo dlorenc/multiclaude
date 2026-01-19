@@ -282,7 +282,7 @@ func (c *CLI) registerCommands() {
 	repoCmd.Subcommands["rm"] = &Command{
 		Name:        "rm",
 		Description: "Remove a tracked repository",
-		Usage:       "multiclaude repo rm <name>",
+		Usage:       "multiclaude repo rm [name]",
 		Run:         c.removeRepo,
 	}
 
@@ -327,7 +327,7 @@ func (c *CLI) registerCommands() {
 	workCmd.Subcommands["rm"] = &Command{
 		Name:        "rm",
 		Description: "Remove a worker",
-		Usage:       "multiclaude work rm <worker-name>",
+		Usage:       "multiclaude work rm [worker-name]",
 		Run:         c.removeWorker,
 	}
 
@@ -352,7 +352,7 @@ func (c *CLI) registerCommands() {
 	workspaceCmd.Subcommands["rm"] = &Command{
 		Name:        "rm",
 		Description: "Remove a workspace",
-		Usage:       "multiclaude workspace rm <name>",
+		Usage:       "multiclaude workspace rm [name]",
 		Run:         c.removeWorkspace,
 	}
 
@@ -365,7 +365,7 @@ func (c *CLI) registerCommands() {
 	workspaceCmd.Subcommands["connect"] = &Command{
 		Name:        "connect",
 		Description: "Connect to a workspace",
-		Usage:       "multiclaude workspace connect <name>",
+		Usage:       "multiclaude workspace connect [name]",
 		Run:         c.connectWorkspace,
 	}
 
@@ -414,7 +414,7 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["attach"] = &Command{
 		Name:        "attach",
 		Description: "Attach to an agent",
-		Usage:       "multiclaude attach <agent-name> [--read-only]",
+		Usage:       "multiclaude attach [agent-name] [--read-only]",
 		Run:         c.attachAgent,
 	}
 
@@ -1095,11 +1095,40 @@ func (c *CLI) listRepos(args []string) error {
 }
 
 func (c *CLI) removeRepo(args []string) error {
-	if len(args) < 1 {
-		return errors.InvalidUsage("usage: multiclaude repo rm <name>")
-	}
+	var repoName string
+	if len(args) > 0 {
+		repoName = args[0]
+	} else {
+		// Interactive selection - list repos
+		client := socket.NewClient(c.paths.DaemonSock)
+		resp, err := client.Send(socket.Request{
+			Command: "list_repos",
+			Args: map[string]interface{}{
+				"rich": true,
+			},
+		})
+		if err != nil {
+			return errors.DaemonCommunicationFailed("listing repositories", err)
+		}
+		if !resp.Success {
+			return errors.Wrap(errors.CategoryRuntime, "failed to list repos", fmt.Errorf("%s", resp.Error))
+		}
 
-	repoName := args[0]
+		repos, _ := resp.Data.([]interface{})
+		items := reposToSelectableItems(repos)
+		if len(items) == 0 {
+			return fmt.Errorf("no repositories found")
+		}
+		selected, err := SelectFromList("Select repository to remove:", items)
+		if err != nil {
+			return err
+		}
+		if selected == "" {
+			fmt.Println("Cancelled")
+			return nil
+		}
+		repoName = selected
+	}
 
 	fmt.Printf("Removing repository '%s'...\n", repoName)
 
@@ -1749,27 +1778,13 @@ func (c *CLI) listWorkers(args []string) error {
 }
 
 func (c *CLI) removeWorker(args []string) error {
-	if len(args) < 1 {
-		return errors.InvalidUsage("usage: multiclaude work rm <worker-name>")
-	}
-
-	workerName := args[0]
+	flags, remainingArgs := ParseFlags(args)
 
 	// Determine repository
-	flags, _ := ParseFlags(args[1:])
-	var repoName string
-	if r, ok := flags["repo"]; ok {
-		repoName = r
-	} else {
-		// Try to infer repo from current working directory
-		if inferred, err := c.inferRepoFromCwd(); err == nil {
-			repoName = inferred
-		} else {
-			return errors.MultipleRepos()
-		}
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
 	}
-
-	fmt.Printf("Removing worker '%s' from repo '%s'\n", workerName, repoName)
 
 	// Get worker info
 	client := socket.NewClient(c.paths.DaemonSock)
@@ -1786,8 +1801,32 @@ func (c *CLI) removeWorker(args []string) error {
 		return errors.Wrap(errors.CategoryRuntime, "failed to get worker info", fmt.Errorf("%s", resp.Error))
 	}
 
-	// Find worker
 	agents, _ := resp.Data.([]interface{})
+
+	// Determine worker name - from args or interactive selection
+	var workerName string
+	if len(remainingArgs) > 0 {
+		workerName = remainingArgs[0]
+	} else {
+		// Interactive selection
+		items := agentsToSelectableItems(agents, []string{"worker"})
+		if len(items) == 0 {
+			return fmt.Errorf("no workers found in repo '%s'", repoName)
+		}
+		selected, err := SelectFromList("Select worker to remove:", items)
+		if err != nil {
+			return err
+		}
+		if selected == "" {
+			fmt.Println("Cancelled")
+			return nil
+		}
+		workerName = selected
+	}
+
+	fmt.Printf("Removing worker '%s' from repo '%s'\n", workerName, repoName)
+
+	// Find worker
 	var workerInfo map[string]interface{}
 	for _, agent := range agents {
 		if agentMap, ok := agent.(map[string]interface{}); ok {
@@ -2057,27 +2096,13 @@ func (c *CLI) addWorkspace(args []string) error {
 
 // removeWorkspace removes a workspace
 func (c *CLI) removeWorkspace(args []string) error {
-	if len(args) < 1 {
-		return errors.InvalidUsage("usage: multiclaude workspace rm <name>")
-	}
-
-	workspaceName := args[0]
+	flags, remainingArgs := ParseFlags(args)
 
 	// Determine repository
-	flags, _ := ParseFlags(args[1:])
-	var repoName string
-	if r, ok := flags["repo"]; ok {
-		repoName = r
-	} else {
-		// Try to infer repo from current working directory
-		if inferred, err := c.inferRepoFromCwd(); err == nil {
-			repoName = inferred
-		} else {
-			return errors.MultipleRepos()
-		}
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
 	}
-
-	fmt.Printf("Removing workspace '%s' from repo '%s'\n", workspaceName, repoName)
 
 	// Get workspace info
 	client := socket.NewClient(c.paths.DaemonSock)
@@ -2094,8 +2119,32 @@ func (c *CLI) removeWorkspace(args []string) error {
 		return errors.Wrap(errors.CategoryRuntime, "failed to get workspace info", fmt.Errorf("%s", resp.Error))
 	}
 
-	// Find workspace
 	agents, _ := resp.Data.([]interface{})
+
+	// Determine workspace name - from args or interactive selection
+	var workspaceName string
+	if len(remainingArgs) > 0 {
+		workspaceName = remainingArgs[0]
+	} else {
+		// Interactive selection
+		items := agentsToSelectableItems(agents, []string{"workspace"})
+		if len(items) == 0 {
+			return fmt.Errorf("no workspaces found in repo '%s'", repoName)
+		}
+		selected, err := SelectFromList("Select workspace to remove:", items)
+		if err != nil {
+			return err
+		}
+		if selected == "" {
+			fmt.Println("Cancelled")
+			return nil
+		}
+		workspaceName = selected
+	}
+
+	fmt.Printf("Removing workspace '%s' from repo '%s'\n", workspaceName, repoName)
+
+	// Find workspace
 	var workspaceInfo map[string]interface{}
 	for _, agent := range agents {
 		if agentMap, ok := agent.(map[string]interface{}); ok {
@@ -2280,12 +2329,7 @@ func (c *CLI) listWorkspaces(args []string) error {
 
 // connectWorkspace attaches to a workspace
 func (c *CLI) connectWorkspace(args []string) error {
-	if len(args) < 1 {
-		return errors.InvalidUsage("usage: multiclaude workspace connect <name>")
-	}
-
-	workspaceName := args[0]
-	flags, _ := ParseFlags(args[1:])
+	flags, remainingArgs := ParseFlags(args)
 
 	// Determine repository
 	repoName, err := c.resolveRepo(flags)
@@ -2308,8 +2352,30 @@ func (c *CLI) connectWorkspace(args []string) error {
 		return fmt.Errorf("failed to get workspace info: %s", resp.Error)
 	}
 
-	// Find workspace
 	agents, _ := resp.Data.([]interface{})
+
+	// Determine workspace name - from args or interactive selection
+	var workspaceName string
+	if len(remainingArgs) > 0 {
+		workspaceName = remainingArgs[0]
+	} else {
+		// Interactive selection
+		items := agentsToSelectableItems(agents, []string{"workspace"})
+		if len(items) == 0 {
+			return fmt.Errorf("no workspaces found in repo '%s'", repoName)
+		}
+		selected, err := SelectFromList("Select workspace to connect:", items)
+		if err != nil {
+			return err
+		}
+		if selected == "" {
+			fmt.Println("Cancelled")
+			return nil
+		}
+		workspaceName = selected
+	}
+
+	// Find workspace
 	var workspaceInfo map[string]interface{}
 	for _, agent := range agents {
 		if agentMap, ok := agent.(map[string]interface{}); ok {
@@ -3179,12 +3245,7 @@ func parseDuration(s string) (time.Duration, error) {
 }
 
 func (c *CLI) attachAgent(args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: multiclaude attach <agent-name> [--read-only]")
-	}
-
-	agentName := args[0]
-	flags, _ := ParseFlags(args[1:])
+	flags, remainingArgs := ParseFlags(args)
 	readOnly := flags["read-only"] == "true" || flags["r"] == "true"
 
 	// Determine repository
@@ -3208,8 +3269,30 @@ func (c *CLI) attachAgent(args []string) error {
 		return fmt.Errorf("failed to get agent info: %s", resp.Error)
 	}
 
-	// Find agent
 	agents, _ := resp.Data.([]interface{})
+
+	// Determine agent name - from args or interactive selection
+	var agentName string
+	if len(remainingArgs) > 0 {
+		agentName = remainingArgs[0]
+	} else {
+		// Interactive selection - all agent types
+		items := agentsToSelectableItems(agents, nil)
+		if len(items) == 0 {
+			return fmt.Errorf("no agents found in repo '%s'", repoName)
+		}
+		selected, err := SelectFromList("Select agent to attach:", items)
+		if err != nil {
+			return err
+		}
+		if selected == "" {
+			fmt.Println("Cancelled")
+			return nil
+		}
+		agentName = selected
+	}
+
+	// Find agent
 	var agentInfo map[string]interface{}
 	for _, agent := range agents {
 		if agentMap, ok := agent.(map[string]interface{}); ok {
