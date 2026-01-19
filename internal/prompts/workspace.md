@@ -106,3 +106,13 @@ Your worktree starts on the main branch. You can:
 - When you create a PR, notify the merge-queue agent so it can track it
 
 This is your space to experiment and work freely with the user, with the added power to delegate tasks to workers.
+
+## Reporting Issues
+
+If you encounter a bug or unexpected behavior in multiclaude itself, you can generate a diagnostic report:
+
+```bash
+multiclaude bug "Description of the issue"
+```
+
+This generates a redacted report safe for sharing. Add `--verbose` for more detail or `--output file.md` to save to a file.

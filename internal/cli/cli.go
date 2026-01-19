@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dlorenc/multiclaude/internal/bugreport"
 	"github.com/dlorenc/multiclaude/internal/daemon"
 	"github.com/dlorenc/multiclaude/internal/errors"
 	"github.com/dlorenc/multiclaude/internal/format"
@@ -22,6 +23,9 @@ import (
 	"github.com/dlorenc/multiclaude/internal/worktree"
 	"github.com/dlorenc/multiclaude/pkg/config"
 )
+
+// Version is the current version of multiclaude (set at build time via ldflags)
+var Version = "dev"
 
 // Command represents a CLI command
 type Command struct {
@@ -431,6 +435,14 @@ func (c *CLI) registerCommands() {
 		Description: "View or modify repository configuration",
 		Usage:       "multiclaude config [repo] [--mq-enabled=true|false] [--mq-track=all|author|assigned]",
 		Run:         c.configRepo,
+	}
+
+	// Bug report command
+	c.rootCmd.Subcommands["bug"] = &Command{
+		Name:        "bug",
+		Description: "Generate a diagnostic bug report",
+		Usage:       "multiclaude bug [--output <file>] [--verbose] [description]",
+		Run:         c.bugReport,
 	}
 }
 
@@ -3780,4 +3792,41 @@ func (c *CLI) startClaudeInTmux(tmuxSession, tmuxWindow, workDir, sessionID, pro
 	}
 
 	return pid, nil
+}
+
+// bugReport generates a diagnostic bug report with redacted sensitive information
+func (c *CLI) bugReport(args []string) error {
+	flags, positionalArgs := ParseFlags(args)
+
+	// Check for verbose flag
+	verbose := flags["verbose"] == "true" || flags["v"] == "true"
+
+	// Get optional description from positional args
+	description := ""
+	if len(positionalArgs) > 0 {
+		description = strings.Join(positionalArgs, " ")
+	}
+
+	// Create collector and generate report
+	collector := bugreport.NewCollector(c.paths, Version)
+	report, err := collector.Collect(description, verbose)
+	if err != nil {
+		return fmt.Errorf("failed to collect diagnostic information: %w", err)
+	}
+
+	// Format as Markdown
+	markdown := bugreport.FormatMarkdown(report)
+
+	// Check if output file specified
+	if outputFile, ok := flags["output"]; ok {
+		if err := os.WriteFile(outputFile, []byte(markdown), 0644); err != nil {
+			return fmt.Errorf("failed to write report to %s: %w", outputFile, err)
+		}
+		fmt.Printf("Bug report written to: %s\n", outputFile)
+		return nil
+	}
+
+	// Print to stdout
+	fmt.Print(markdown)
+	return nil
 }
