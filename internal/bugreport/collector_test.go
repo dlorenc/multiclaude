@@ -41,9 +41,9 @@ func TestCollector_Collect(t *testing.T) {
 				GithubURL:   "https://github.com/test-owner/test-repo",
 				TmuxSession: "test-session",
 				Agents: map[string]state.Agent{
-					"supervisor": {Type: state.AgentTypeSupervisor},
-					"worker-1":   {Type: state.AgentTypeWorker},
-					"worker-2":   {Type: state.AgentTypeWorker},
+					"supervisor":  {Type: state.AgentTypeSupervisor},
+					"worker-1":    {Type: state.AgentTypeWorker},
+					"worker-2":    {Type: state.AgentTypeWorker},
 					"merge-queue": {Type: state.AgentTypeMergeQueue},
 				},
 			},

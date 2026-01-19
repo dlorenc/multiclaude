@@ -22,12 +22,12 @@ const (
 
 // Message represents a message between agents
 type Message struct {
-	ID        string    `json:"id"`
-	From      string    `json:"from"`
-	To        string    `json:"to"`
-	Timestamp time.Time `json:"timestamp"`
-	Body      string    `json:"body"`
-	Status    Status    `json:"status"`
+	ID        string     `json:"id"`
+	From      string     `json:"from"`
+	To        string     `json:"to"`
+	Timestamp time.Time  `json:"timestamp"`
+	Body      string     `json:"body"`
+	Status    Status     `json:"status"`
 	AckedAt   *time.Time `json:"acked_at,omitempty"`
 }
 

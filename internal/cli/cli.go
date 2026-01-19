@@ -18,10 +18,10 @@ import (
 	"github.com/dlorenc/multiclaude/internal/prompts"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
-	"github.com/dlorenc/multiclaude/pkg/tmux"
 	"github.com/dlorenc/multiclaude/internal/worktree"
 	"github.com/dlorenc/multiclaude/pkg/claude"
 	"github.com/dlorenc/multiclaude/pkg/config"
+	"github.com/dlorenc/multiclaude/pkg/tmux"
 )
 
 // Version is the current version of multiclaude (set at build time via ldflags)
@@ -836,11 +836,11 @@ func (c *CLI) initRepo(args []string) error {
 	resp, err := client.Send(socket.Request{
 		Command: "add_repo",
 		Args: map[string]interface{}{
-			"name":             repoName,
-			"github_url":       githubURL,
-			"tmux_session":     tmuxSession,
-			"mq_enabled":       mqConfig.Enabled,
-			"mq_track_mode":    string(mqConfig.TrackMode),
+			"name":          repoName,
+			"github_url":    githubURL,
+			"tmux_session":  tmuxSession,
+			"mq_enabled":    mqConfig.Enabled,
+			"mq_track_mode": string(mqConfig.TrackMode),
 		},
 	})
 	if err != nil {

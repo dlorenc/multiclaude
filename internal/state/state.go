@@ -54,7 +54,7 @@ type Agent struct {
 	TmuxWindow      string    `json:"tmux_window"`
 	SessionID       string    `json:"session_id"`
 	PID             int       `json:"pid"`
-	Task            string    `json:"task,omitempty"`             // Only for workers
+	Task            string    `json:"task,omitempty"` // Only for workers
 	CreatedAt       time.Time `json:"created_at"`
 	LastNudge       time.Time `json:"last_nudge,omitempty"`
 	ReadyForCleanup bool      `json:"ready_for_cleanup,omitempty"` // Only for workers
