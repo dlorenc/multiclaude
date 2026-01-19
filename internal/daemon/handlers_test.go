@@ -1157,3 +1157,145 @@ func TestNilArgsMap(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleSetCurrentRepo tests the set_current_repo handler
+func TestHandleSetCurrentRepo(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupState  func(*state.State)
+		args        map[string]interface{}
+		wantSuccess bool
+		wantError   string
+	}{
+		{
+			name: "missing name",
+			args: map[string]interface{}{},
+			wantSuccess: false,
+			wantError:   "missing 'name'",
+		},
+		{
+			name: "empty name",
+			args: map[string]interface{}{
+				"name": "",
+			},
+			wantSuccess: false,
+			wantError:   "missing 'name'",
+		},
+		{
+			name: "nonexistent repo",
+			args: map[string]interface{}{
+				"name": "nonexistent",
+			},
+			wantSuccess: false,
+			wantError:   "not found",
+		},
+		{
+			name: "success",
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "mc-test-repo",
+					Agents:      make(map[string]state.Agent),
+				})
+			},
+			args: map[string]interface{}{
+				"name": "test-repo",
+			},
+			wantSuccess: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, cleanup := setupTestDaemonWithState(t, tt.setupState)
+			defer cleanup()
+
+			resp := d.handleSetCurrentRepo(socket.Request{
+				Command: "set_current_repo",
+				Args:    tt.args,
+			})
+
+			if resp.Success != tt.wantSuccess {
+				t.Errorf("Success = %v, want %v", resp.Success, tt.wantSuccess)
+			}
+
+			if tt.wantError != "" && resp.Error == "" {
+				t.Errorf("Expected error containing %q, got empty", tt.wantError)
+			}
+		})
+	}
+}
+
+// TestHandleGetCurrentRepo tests the get_current_repo handler
+func TestHandleGetCurrentRepo(t *testing.T) {
+	t.Run("no current repo set", func(t *testing.T) {
+		d, cleanup := setupTestDaemonWithState(t, nil)
+		defer cleanup()
+
+		resp := d.handleGetCurrentRepo(socket.Request{
+			Command: "get_current_repo",
+		})
+
+		if resp.Success {
+			t.Error("Expected failure when no current repo is set")
+		}
+		if resp.Error == "" {
+			t.Error("Expected error message")
+		}
+	})
+
+	t.Run("current repo is set", func(t *testing.T) {
+		d, cleanup := setupTestDaemonWithState(t, func(s *state.State) {
+			s.AddRepo("test-repo", &state.Repository{
+				GithubURL:   "https://github.com/test/repo",
+				TmuxSession: "mc-test-repo",
+				Agents:      make(map[string]state.Agent),
+			})
+			s.SetCurrentRepo("test-repo")
+		})
+		defer cleanup()
+
+		resp := d.handleGetCurrentRepo(socket.Request{
+			Command: "get_current_repo",
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success, got error: %s", resp.Error)
+		}
+
+		if resp.Data != "test-repo" {
+			t.Errorf("Data = %v, want 'test-repo'", resp.Data)
+		}
+	})
+}
+
+// TestHandleClearCurrentRepo tests the clear_current_repo handler
+func TestHandleClearCurrentRepo(t *testing.T) {
+	d, cleanup := setupTestDaemonWithState(t, func(s *state.State) {
+		s.AddRepo("test-repo", &state.Repository{
+			GithubURL:   "https://github.com/test/repo",
+			TmuxSession: "mc-test-repo",
+			Agents:      make(map[string]state.Agent),
+		})
+		s.SetCurrentRepo("test-repo")
+	})
+	defer cleanup()
+
+	// Verify it was set
+	if d.state.GetCurrentRepo() != "test-repo" {
+		t.Fatal("Setup failed: current repo not set")
+	}
+
+	resp := d.handleClearCurrentRepo(socket.Request{
+		Command: "clear_current_repo",
+	})
+
+	if !resp.Success {
+		t.Errorf("Expected success, got error: %s", resp.Error)
+	}
+
+	// Verify it was cleared
+	if d.state.GetCurrentRepo() != "" {
+		t.Errorf("Current repo not cleared, got: %s", d.state.GetCurrentRepo())
+	}
+}
