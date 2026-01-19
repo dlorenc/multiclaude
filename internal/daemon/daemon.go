@@ -1191,10 +1191,19 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 		// Workspace worktree doesn't exist, create it
 		d.logger.Info("Creating workspace worktree for %s", repoName)
 		wt := worktree.NewManager(repoPath)
-		// First try to create with existing branch (if workspace branch exists from previous init)
-		if err := wt.Create(workspacePath, "workspace"); err != nil {
+
+		// Check for and migrate legacy "workspace" branch to "workspace/default"
+		migrated, migrateErr := wt.MigrateLegacyWorkspaceBranch()
+		if migrateErr != nil {
+			d.logger.Warn("Failed to migrate legacy workspace branch for %s: %v", repoName, migrateErr)
+		} else if migrated {
+			d.logger.Info("Migrated legacy 'workspace' branch to 'workspace/default' for %s", repoName)
+		}
+
+		// Try to create with existing branch using new naming convention first
+		if err := wt.Create(workspacePath, "workspace/default"); err != nil {
 			// Branch doesn't exist, create with new branch
-			if err := wt.CreateNewBranch(workspacePath, "workspace", "HEAD"); err != nil {
+			if err := wt.CreateNewBranch(workspacePath, "workspace/default", "HEAD"); err != nil {
 				d.logger.Error("Failed to create workspace worktree for %s: %v", repoName, err)
 			}
 		}

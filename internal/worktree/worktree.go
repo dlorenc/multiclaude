@@ -202,6 +202,110 @@ func parseWorktreeList(output string) []WorktreeInfo {
 	return worktrees
 }
 
+// BranchExists checks if a branch exists in the repository
+func (m *Manager) BranchExists(branchName string) (bool, error) {
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
+	cmd.Dir = m.repoPath
+	err := cmd.Run()
+	if err != nil {
+		// Exit code 1 means branch doesn't exist
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check branch existence: %w", err)
+	}
+	return true, nil
+}
+
+// RenameBranch renames a branch from oldName to newName
+func (m *Manager) RenameBranch(oldName, newName string) error {
+	cmd := exec.Command("git", "branch", "-m", oldName, newName)
+	cmd.Dir = m.repoPath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to rename branch: %w\nOutput: %s", err, output)
+	}
+	return nil
+}
+
+// CanCreateBranchWithPrefix checks if a branch can be created with a given prefix.
+// Returns false if there's a conflicting branch (e.g., "workspace" exists and
+// we're trying to create "workspace/foo").
+func (m *Manager) CanCreateBranchWithPrefix(prefix string) (bool, string, error) {
+	// Check if a branch with the exact prefix name exists (e.g., "workspace")
+	// This would prevent creating "workspace/foo" due to git ref limitations
+	exists, err := m.BranchExists(prefix)
+	if err != nil {
+		return false, "", err
+	}
+	if exists {
+		return false, prefix, nil
+	}
+	return true, "", nil
+}
+
+// MigrateLegacyWorkspaceBranch checks for a legacy "workspace" branch and renames it
+// to "workspace/default" to allow the new workspace/<name> naming convention.
+// Returns:
+//   - migrated: true if migration was performed
+//   - error: any error that occurred
+func (m *Manager) MigrateLegacyWorkspaceBranch() (bool, error) {
+	// Check if legacy "workspace" branch exists
+	legacyExists, err := m.BranchExists("workspace")
+	if err != nil {
+		return false, fmt.Errorf("failed to check for legacy workspace branch: %w", err)
+	}
+
+	if !legacyExists {
+		// No legacy branch, nothing to migrate
+		return false, nil
+	}
+
+	// Check if the new naming convention is already in use (workspace/default exists)
+	newExists, err := m.BranchExists("workspace/default")
+	if err != nil {
+		return false, fmt.Errorf("failed to check for workspace/default branch: %w", err)
+	}
+
+	if newExists {
+		// Both exist - this is a conflict state that shouldn't happen in normal usage
+		return false, fmt.Errorf("both 'workspace' and 'workspace/default' branches exist; manual resolution required")
+	}
+
+	// Rename workspace -> workspace/default
+	if err := m.RenameBranch("workspace", "workspace/default"); err != nil {
+		return false, fmt.Errorf("failed to migrate workspace branch: %w", err)
+	}
+
+	return true, nil
+}
+
+// CheckWorkspaceBranchConflict checks if there's a potential conflict between
+// legacy "workspace" branch and the new workspace/<name> naming convention.
+// Returns:
+//   - hasConflict: true if there's a blocking "workspace" branch
+//   - suggestion: a suggested fix for the user
+func (m *Manager) CheckWorkspaceBranchConflict() (bool, string, error) {
+	exists, err := m.BranchExists("workspace")
+	if err != nil {
+		return false, "", err
+	}
+
+	if exists {
+		suggestion := `A legacy 'workspace' branch exists which conflicts with the new workspace/<name> naming convention.
+
+To fix this, you can either:
+1. Let multiclaude migrate the branch automatically by running:
+   cd ` + m.repoPath + ` && git branch -m workspace workspace/default
+
+2. Or manually rename/delete the legacy branch:
+   cd ` + m.repoPath + ` && git branch -m workspace <new-name>
+   cd ` + m.repoPath + ` && git branch -d workspace`
+		return true, suggestion, nil
+	}
+
+	return false, "", nil
+}
+
 // CleanupOrphaned removes worktree directories that exist on disk but not in git
 func CleanupOrphaned(wtRootDir string, manager *Manager) ([]string, error) {
 	// Get all worktrees from git

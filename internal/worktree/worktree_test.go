@@ -801,3 +801,255 @@ func TestWorktreeErrorHandling(t *testing.T) {
 		t.Error("Should fail when creating worktree from non-existent branch")
 	}
 }
+
+func TestBranchExists(t *testing.T) {
+	repoPath, cleanup := createTestRepo(t)
+	defer cleanup()
+
+	manager := NewManager(repoPath)
+
+	// main branch should exist (created in createTestRepo)
+	exists, err := manager.BranchExists("main")
+	if err != nil {
+		t.Fatalf("Failed to check branch existence: %v", err)
+	}
+	if !exists {
+		t.Error("main branch should exist")
+	}
+
+	// non-existent branch should not exist
+	exists, err = manager.BranchExists("nonexistent-branch")
+	if err != nil {
+		t.Fatalf("Failed to check branch existence: %v", err)
+	}
+	if exists {
+		t.Error("nonexistent-branch should not exist")
+	}
+
+	// Create a new branch and verify it exists
+	createBranch(t, repoPath, "test-branch")
+	exists, err = manager.BranchExists("test-branch")
+	if err != nil {
+		t.Fatalf("Failed to check branch existence: %v", err)
+	}
+	if !exists {
+		t.Error("test-branch should exist after creation")
+	}
+}
+
+func TestRenameBranch(t *testing.T) {
+	repoPath, cleanup := createTestRepo(t)
+	defer cleanup()
+
+	manager := NewManager(repoPath)
+
+	// Create a branch to rename
+	createBranch(t, repoPath, "old-name")
+
+	// Verify old name exists
+	exists, err := manager.BranchExists("old-name")
+	if err != nil {
+		t.Fatalf("Failed to check branch existence: %v", err)
+	}
+	if !exists {
+		t.Error("old-name branch should exist")
+	}
+
+	// Rename the branch
+	if err := manager.RenameBranch("old-name", "new-name"); err != nil {
+		t.Fatalf("Failed to rename branch: %v", err)
+	}
+
+	// Verify old name no longer exists
+	exists, err = manager.BranchExists("old-name")
+	if err != nil {
+		t.Fatalf("Failed to check branch existence: %v", err)
+	}
+	if exists {
+		t.Error("old-name branch should not exist after rename")
+	}
+
+	// Verify new name exists
+	exists, err = manager.BranchExists("new-name")
+	if err != nil {
+		t.Fatalf("Failed to check branch existence: %v", err)
+	}
+	if !exists {
+		t.Error("new-name branch should exist after rename")
+	}
+}
+
+func TestMigrateLegacyWorkspaceBranch(t *testing.T) {
+	t.Run("no legacy branch", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+
+		// No legacy workspace branch exists
+		migrated, err := manager.MigrateLegacyWorkspaceBranch()
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if migrated {
+			t.Error("Should not have migrated when no legacy branch exists")
+		}
+	})
+
+	t.Run("legacy branch exists", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+
+		// Create legacy "workspace" branch
+		createBranch(t, repoPath, "workspace")
+
+		// Migrate should succeed
+		migrated, err := manager.MigrateLegacyWorkspaceBranch()
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if !migrated {
+			t.Error("Should have migrated legacy branch")
+		}
+
+		// Verify old branch no longer exists
+		exists, _ := manager.BranchExists("workspace")
+		if exists {
+			t.Error("Legacy 'workspace' branch should not exist after migration")
+		}
+
+		// Verify new branch exists
+		exists, _ = manager.BranchExists("workspace/default")
+		if !exists {
+			t.Error("'workspace/default' branch should exist after migration")
+		}
+	})
+
+	t.Run("both branches exist - conflict", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+
+		// Note: git prevents creating "workspace/default" when "workspace" exists and vice versa.
+		// So this test simulates the conflict by creating workspace/default first,
+		// then manually creating a "workspace" ref file to simulate a corrupt state.
+		createBranch(t, repoPath, "workspace/default")
+
+		// Manually create a corrupt "workspace" ref (this shouldn't happen in practice
+		// but tests our detection logic)
+		workspaceRefPath := filepath.Join(repoPath, ".git", "refs", "heads", "workspace")
+		mainRef, _ := os.ReadFile(filepath.Join(repoPath, ".git", "refs", "heads", "main"))
+		if err := os.WriteFile(workspaceRefPath, mainRef, 0644); err != nil {
+			t.Skipf("Cannot create corrupt ref for testing: %v", err)
+		}
+
+		// Migrate should fail with conflict error
+		_, err := manager.MigrateLegacyWorkspaceBranch()
+		if err == nil {
+			t.Error("Should have returned error when both branches exist")
+		}
+		if !strings.Contains(err.Error(), "manual resolution required") {
+			t.Errorf("Error should mention manual resolution: %v", err)
+		}
+	})
+
+	t.Run("workspace/default already exists", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+
+		// Only create "workspace/default" (no legacy branch)
+		createBranch(t, repoPath, "workspace/default")
+
+		// Migrate should return false (no migration needed)
+		migrated, err := manager.MigrateLegacyWorkspaceBranch()
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if migrated {
+			t.Error("Should not have migrated when only new branch exists")
+		}
+	})
+}
+
+func TestCanCreateBranchWithPrefix(t *testing.T) {
+	repoPath, cleanup := createTestRepo(t)
+	defer cleanup()
+
+	manager := NewManager(repoPath)
+
+	// Should be able to create workspace/foo when no "workspace" branch exists
+	canCreate, conflictingBranch, err := manager.CanCreateBranchWithPrefix("workspace")
+	if err != nil {
+		t.Fatalf("Failed to check prefix: %v", err)
+	}
+	if !canCreate {
+		t.Error("Should be able to create workspace/* branches when 'workspace' doesn't exist")
+	}
+	if conflictingBranch != "" {
+		t.Errorf("Conflicting branch should be empty, got: %s", conflictingBranch)
+	}
+
+	// Create legacy "workspace" branch
+	createBranch(t, repoPath, "workspace")
+
+	// Now should NOT be able to create workspace/foo
+	canCreate, conflictingBranch, err = manager.CanCreateBranchWithPrefix("workspace")
+	if err != nil {
+		t.Fatalf("Failed to check prefix: %v", err)
+	}
+	if canCreate {
+		t.Error("Should NOT be able to create workspace/* branches when 'workspace' exists")
+	}
+	if conflictingBranch != "workspace" {
+		t.Errorf("Conflicting branch should be 'workspace', got: %s", conflictingBranch)
+	}
+}
+
+func TestCheckWorkspaceBranchConflict(t *testing.T) {
+	t.Run("no conflict", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+
+		hasConflict, suggestion, err := manager.CheckWorkspaceBranchConflict()
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if hasConflict {
+			t.Error("Should not have conflict when 'workspace' branch doesn't exist")
+		}
+		if suggestion != "" {
+			t.Error("Suggestion should be empty when no conflict")
+		}
+	})
+
+	t.Run("conflict exists", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+
+		// Create legacy "workspace" branch
+		createBranch(t, repoPath, "workspace")
+
+		hasConflict, suggestion, err := manager.CheckWorkspaceBranchConflict()
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if !hasConflict {
+			t.Error("Should have conflict when 'workspace' branch exists")
+		}
+		if !strings.Contains(suggestion, "legacy 'workspace' branch exists") {
+			t.Errorf("Suggestion should explain the conflict: %s", suggestion)
+		}
+		if !strings.Contains(suggestion, "git branch -m workspace workspace/default") {
+			t.Errorf("Suggestion should include migration command: %s", suggestion)
+		}
+	})
+}

@@ -845,6 +845,21 @@ func (c *CLI) initRepo(args []string) error {
 	// Create default workspace worktree
 	wt := worktree.NewManager(repoPath)
 	workspacePath := c.paths.AgentWorktree(repoName, "default")
+
+	// Check for and migrate legacy "workspace" branch to "workspace/default"
+	// This allows the new workspace/<name> naming convention to work
+	migrated, err := wt.MigrateLegacyWorkspaceBranch()
+	if err != nil {
+		// Check if it's a conflict state that requires manual resolution
+		hasConflict, suggestion, checkErr := wt.CheckWorkspaceBranchConflict()
+		if checkErr == nil && hasConflict {
+			return fmt.Errorf("workspace branch conflict detected:\n%s", suggestion)
+		}
+		return fmt.Errorf("failed to check workspace branch state: %w", err)
+	}
+	if migrated {
+		fmt.Println("Migrated legacy 'workspace' branch to 'workspace/default'")
+	}
 	workspaceBranch := "workspace/default"
 
 	fmt.Printf("Creating default workspace worktree at: %s\n", workspacePath)
