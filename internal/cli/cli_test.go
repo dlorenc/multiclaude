@@ -1360,6 +1360,121 @@ func TestInferRepoFromCwdWithSymlinks(t *testing.T) {
 	}
 }
 
+func TestInferAgentContext(t *testing.T) {
+	// Create temp directories to simulate multiclaude structure
+	tmpDir := t.TempDir()
+
+	// Resolve symlinks (macOS /tmp -> /private/tmp)
+	tmpDir, err := filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to resolve tmpDir symlinks: %v", err)
+	}
+
+	worktreesDir := filepath.Join(tmpDir, "wts")
+	reposDir := filepath.Join(tmpDir, "repos")
+
+	// Create test directory structure
+	testDirs := []string{
+		filepath.Join(worktreesDir, "myrepo", "worker1"),
+		filepath.Join(worktreesDir, "myrepo", "workspace"),
+		filepath.Join(worktreesDir, "myrepo"), // Just repo level
+		filepath.Join(reposDir, "myrepo"),
+	}
+	for _, d := range testDirs {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("failed to create test dir %s: %v", d, err)
+		}
+	}
+
+	cli := &CLI{
+		paths: &config.Paths{
+			Root:         tmpDir,
+			WorktreesDir: worktreesDir,
+			ReposDir:     reposDir,
+		},
+	}
+
+	// Save original working directory
+	origWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get original working directory: %v", err)
+	}
+	defer os.Chdir(origWd)
+
+	// Test worktree cases - these should work reliably
+	tests := []struct {
+		name       string
+		cwd        string
+		wantRepo   string
+		wantAgent  string
+		wantError  bool
+	}{
+		{
+			name:      "in worker worktree",
+			cwd:       filepath.Join(worktreesDir, "myrepo", "worker1"),
+			wantRepo:  "myrepo",
+			wantAgent: "worker1",
+			wantError: false,
+		},
+		{
+			name:      "in workspace worktree",
+			cwd:       filepath.Join(worktreesDir, "myrepo", "workspace"),
+			wantRepo:  "myrepo",
+			wantAgent: "workspace",
+			wantError: false,
+		},
+		{
+			name:      "in repo worktree dir only",
+			cwd:       filepath.Join(worktreesDir, "myrepo"),
+			wantRepo:  "myrepo",
+			wantAgent: "",
+			wantError: true, // Can't determine agent
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.Chdir(tt.cwd); err != nil {
+				t.Fatalf("failed to change to test directory %s: %v", tt.cwd, err)
+			}
+
+			gotRepo, gotAgent, err := cli.inferAgentContext()
+
+			if tt.wantError {
+				if err == nil {
+					t.Errorf("inferAgentContext() expected error, got repo=%q agent=%q", gotRepo, gotAgent)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("inferAgentContext() unexpected error: %v", err)
+				}
+				if gotRepo != tt.wantRepo {
+					t.Errorf("inferAgentContext() repo = %q, want %q", gotRepo, tt.wantRepo)
+				}
+				if gotAgent != tt.wantAgent {
+					t.Errorf("inferAgentContext() agent = %q, want %q", gotAgent, tt.wantAgent)
+				}
+			}
+		})
+	}
+
+	// Test main repo dir - agent name depends on tmux context, so just verify repo is found
+	t.Run("in main repo dir returns repo", func(t *testing.T) {
+		if err := os.Chdir(filepath.Join(reposDir, "myrepo")); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+
+		gotRepo, _, err := cli.inferAgentContext()
+		if err != nil {
+			t.Errorf("inferAgentContext() unexpected error: %v", err)
+		}
+		if gotRepo != "myrepo" {
+			t.Errorf("inferAgentContext() repo = %q, want %q", gotRepo, "myrepo")
+		}
+		// Agent name may vary based on tmux context - don't assert specific value
+	})
+}
+
 // Workspace command tests
 
 func TestValidateWorkspaceName(t *testing.T) {
@@ -1617,5 +1732,408 @@ func TestCLIWorkspaceConnectMissingName(t *testing.T) {
 	err := cli.Execute([]string{"workspace", "connect"})
 	if err == nil {
 		t.Error("workspace connect without name should fail")
+	}
+}
+
+// Config and additional tests from PR #81
+
+func TestCLIConfigRepoNoArgs(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Config with no args should show help/error
+	err := cli.Execute([]string{"config"})
+	if err == nil {
+		t.Error("config with no args should fail")
+	}
+}
+
+func TestCLIConfigRepoShow(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Add a repo with specific config
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+		MergeQueueConfig: state.MergeQueueConfig{
+			Enabled:   true,
+			TrackMode: state.TrackModeAuthor,
+		},
+	}
+	if err := d.GetState().AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Show config should work
+	err := cli.Execute([]string{"config", "test-repo"})
+	if err != nil {
+		t.Errorf("config show failed: %v", err)
+	}
+}
+
+func TestCLIConfigRepoUpdateViaSocket(t *testing.T) {
+	_, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Add a repo
+	repo := &state.Repository{
+		GithubURL:        "https://github.com/test/repo",
+		TmuxSession:      "mc-test-repo",
+		Agents:           make(map[string]state.Agent),
+		MergeQueueConfig: state.DefaultMergeQueueConfig(),
+	}
+	if err := d.GetState().AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Update config via socket directly (tests the actual update mechanism)
+	client := socket.NewClient(d.GetPaths().DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "update_repo_config",
+		Args: map[string]interface{}{
+			"name":       "test-repo",
+			"mq_enabled": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to send update_repo_config: %v", err)
+	}
+	if !resp.Success {
+		t.Errorf("update_repo_config failed: %s", resp.Error)
+	}
+
+	// Verify the update took effect
+	updatedRepo, _ := d.GetState().GetRepo("test-repo")
+	if updatedRepo.MergeQueueConfig.Enabled != false {
+		t.Error("MergeQueueConfig.Enabled should be false after update")
+	}
+}
+
+func TestCLIConfigRepoNonexistent(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Config for nonexistent repo should fail
+	err := cli.Execute([]string{"config", "nonexistent-repo"})
+	if err == nil {
+		t.Error("config for nonexistent repo should fail")
+	}
+}
+
+func TestCLIRemoveWorkerNonexistent(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Add a repo
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Remove nonexistent worker should fail
+	err := cli.Execute([]string{"work", "rm", "nonexistent-worker", "--repo", "test-repo"})
+	if err == nil {
+		t.Error("removing nonexistent worker should fail")
+	}
+}
+
+func TestCLIRemoveWorkerWithRealTmux(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available, skipping test")
+	}
+
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	paths := d.GetPaths()
+	repoName := "test-repo"
+
+	// Create tmux session
+	tmuxSession := "mc-test-rm"
+	if err := tmuxClient.CreateSession(tmuxSession, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(tmuxSession)
+
+	// Create worker window
+	if err := tmuxClient.CreateWindow(tmuxSession, "test-worker"); err != nil {
+		t.Fatalf("Failed to create window: %v", err)
+	}
+
+	// Add repo to daemon
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: tmuxSession,
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo(repoName, repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Add agent to state
+	agent := state.Agent{
+		Type:         state.AgentTypeWorker,
+		WorktreePath: paths.AgentWorktree(repoName, "test-worker"),
+		TmuxWindow:   "test-worker",
+		Task:         "Test task",
+		CreatedAt:    time.Now(),
+	}
+	if err := d.GetState().AddAgent(repoName, "test-worker", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	// Verify agent exists
+	_, exists := d.GetState().GetAgent(repoName, "test-worker")
+	if !exists {
+		t.Fatal("Agent should exist before removal")
+	}
+
+	// Remove worker
+	err := cli.Execute([]string{"work", "rm", "test-worker", "--repo", repoName})
+	if err != nil {
+		t.Errorf("work rm failed: %v", err)
+	}
+
+	// Verify agent was removed from state
+	_, exists = d.GetState().GetAgent(repoName, "test-worker")
+	if exists {
+		t.Error("Agent should not exist after removal")
+	}
+}
+
+func TestCLIAgentCompleteViaSocket(t *testing.T) {
+	_, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	repoName := "test-repo"
+	paths := d.GetPaths()
+
+	// Add a repo
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo(repoName, repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Add agent
+	agent := state.Agent{
+		Type:         state.AgentTypeWorker,
+		WorktreePath: paths.AgentWorktree(repoName, "test-worker"),
+		TmuxWindow:   "test-worker",
+		CreatedAt:    time.Now(),
+	}
+	if err := d.GetState().AddAgent(repoName, "test-worker", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	// Test complete_agent directly via socket (the core functionality)
+	client := socket.NewClient(paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "complete_agent",
+		Args: map[string]interface{}{
+			"repo":  repoName,
+			"agent": "test-worker",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to send complete_agent: %v", err)
+	}
+	if !resp.Success {
+		t.Errorf("complete_agent failed: %s", resp.Error)
+	}
+
+	// Verify agent is marked for cleanup
+	updatedAgent, _ := d.GetState().GetAgent(repoName, "test-worker")
+	if !updatedAgent.ReadyForCleanup {
+		t.Error("Agent should be marked for cleanup")
+	}
+}
+
+func TestCLIReviewInvalidURL(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Add a repo
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Invalid URL format should fail
+	err := cli.Execute([]string{"review", "not-a-url"})
+	if err == nil {
+		t.Error("review with invalid URL should fail")
+	}
+}
+
+func TestCLIGetReposList(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Initially empty
+	repos := cli.getReposList()
+	if len(repos) != 0 {
+		t.Errorf("Expected 0 repos, got %d", len(repos))
+	}
+
+	// Add some repos
+	for _, name := range []string{"repo1", "repo2", "repo3"} {
+		repo := &state.Repository{
+			GithubURL:   "https://github.com/test/" + name,
+			TmuxSession: "mc-" + name,
+			Agents:      make(map[string]state.Agent),
+		}
+		if err := d.GetState().AddRepo(name, repo); err != nil {
+			t.Fatalf("Failed to add repo: %v", err)
+		}
+	}
+
+	// Should now have 3 repos
+	repos = cli.getReposList()
+	if len(repos) != 3 {
+		t.Errorf("Expected 3 repos, got %d", len(repos))
+	}
+}
+
+func TestCLIBugCommand(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Bug command should work (generates diagnostic report)
+	// Note: This might print to stdout but shouldn't fail
+	err := cli.Execute([]string{"bug", "test description"})
+	// Bug command may or may not be implemented, just verify it doesn't panic
+	_ = err
+}
+
+func TestCLIAgentListMessages(t *testing.T) {
+	_, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	repoName := "test-repo"
+	paths := d.GetPaths()
+
+	// Add a repo
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo(repoName, repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Add agents
+	for _, name := range []string{"supervisor", "worker1"} {
+		agent := state.Agent{
+			Type:       state.AgentTypeSupervisor,
+			TmuxWindow: name,
+			CreatedAt:  time.Now(),
+		}
+		if err := d.GetState().AddAgent(repoName, name, agent); err != nil {
+			t.Fatalf("Failed to add agent: %v", err)
+		}
+	}
+
+	// Create and send a message using message manager
+	msgMgr := messages.NewManager(paths.MessagesDir)
+	msg, err := msgMgr.Send(repoName, "supervisor", "worker1", "Test message content")
+	if err != nil {
+		t.Fatalf("Failed to send message: %v", err)
+	}
+
+	// Verify message was created
+	if msg.ID == "" {
+		t.Error("Message ID should not be empty")
+	}
+	if msg.Status != messages.StatusPending {
+		t.Errorf("Message status = %s, want pending", msg.Status)
+	}
+
+	// List messages for worker1
+	msgs, err := msgMgr.List(repoName, "worker1")
+	if err != nil {
+		t.Fatalf("Failed to list messages: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Errorf("Expected 1 message, got %d", len(msgs))
+	}
+
+	// Get specific message
+	retrieved, err := msgMgr.Get(repoName, "worker1", msg.ID)
+	if err != nil {
+		t.Fatalf("Failed to get message: %v", err)
+	}
+	if retrieved.Body != "Test message content" {
+		t.Errorf("Message body = %q, want %q", retrieved.Body, "Test message content")
+	}
+
+	// Ack message
+	if err := msgMgr.Ack(repoName, "worker1", msg.ID); err != nil {
+		t.Fatalf("Failed to ack message: %v", err)
+	}
+
+	// Verify status changed
+	acked, _ := msgMgr.Get(repoName, "worker1", msg.ID)
+	if acked.Status != messages.StatusAcked {
+		t.Errorf("Message status = %s, want acked", acked.Status)
+	}
+}
+
+func TestCLIRepoRm(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Add a repo
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Verify repo exists
+	_, exists := d.GetState().GetRepo("test-repo")
+	if !exists {
+		t.Fatal("Repo should exist before removal")
+	}
+
+	// Remove repo
+	err := cli.Execute([]string{"repo", "rm", "test-repo"})
+	if err != nil {
+		t.Errorf("repo rm failed: %v", err)
+	}
+
+	// Verify repo was removed
+	_, exists = d.GetState().GetRepo("test-repo")
+	if exists {
+		t.Error("Repo should not exist after removal")
+	}
+}
+
+func TestCLIRepoRmNonexistent(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Remove nonexistent repo should fail
+	err := cli.Execute([]string{"repo", "rm", "nonexistent"})
+	if err == nil {
+		t.Error("removing nonexistent repo should fail")
 	}
 }

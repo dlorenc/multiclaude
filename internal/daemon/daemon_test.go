@@ -1398,3 +1398,659 @@ func TestDaemonRouteMessagesTriggersDelivery(t *testing.T) {
 	// 2. The routing function is triggered without errors/panics
 	// 3. The message was processed (in production, status would change to "delivered")
 }
+
+// Tests for log rotation functions
+
+func TestIsLogFile(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		{"standard log file", "/path/to/agent.log", true},
+		{"log in nested dir", "/path/to/output/repo/agent.log", true},
+		{"rotated log file", "/path/to/agent.log.20240115-120000", false},
+		{"non-log file", "/path/to/file.txt", false},
+		{"json file", "/path/to/config.json", false},
+		{"short name", "/a.log", true},
+		{"no extension", "/path/to/logfile", false},
+		{"log in name but wrong ext", "/path/to/log.txt", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isLogFile(tt.path)
+			if result != tt.expected {
+				t.Errorf("isLogFile(%q) = %v, want %v", tt.path, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestRotateLog(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a test log file
+	logPath := filepath.Join(d.paths.OutputDir, "test.log")
+	testContent := []byte("test log content\n")
+	if err := os.WriteFile(logPath, testContent, 0644); err != nil {
+		t.Fatalf("Failed to create test log: %v", err)
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatalf("Test log file should exist: %v", err)
+	}
+
+	// Rotate the log
+	if err := d.rotateLog(logPath); err != nil {
+		t.Fatalf("rotateLog() failed: %v", err)
+	}
+
+	// Original file should no longer exist
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Error("Original log file should not exist after rotation")
+	}
+
+	// Find the rotated file
+	entries, err := os.ReadDir(d.paths.OutputDir)
+	if err != nil {
+		t.Fatalf("Failed to read output dir: %v", err)
+	}
+
+	var rotatedFile string
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".log" && len(entry.Name()) > len("test.log.") {
+			rotatedFile = entry.Name()
+			break
+		}
+	}
+
+	if rotatedFile == "" {
+		t.Fatal("Rotated log file not found")
+	}
+
+	// Verify rotated file has timestamp suffix pattern (YYYYMMDD-HHMMSS)
+	if len(rotatedFile) < len("test.log.20060102-150405") {
+		t.Errorf("Rotated file name %q is too short", rotatedFile)
+	}
+
+	// Verify content was preserved
+	rotatedPath := filepath.Join(d.paths.OutputDir, rotatedFile)
+	content, err := os.ReadFile(rotatedPath)
+	if err != nil {
+		t.Fatalf("Failed to read rotated file: %v", err)
+	}
+	if string(content) != string(testContent) {
+		t.Errorf("Rotated file content = %q, want %q", content, testContent)
+	}
+}
+
+func TestRotateLogsIfNeeded(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a small log file (should not be rotated)
+	smallLogPath := filepath.Join(d.paths.OutputDir, "small.log")
+	if err := os.WriteFile(smallLogPath, []byte("small content"), 0644); err != nil {
+		t.Fatalf("Failed to create small log: %v", err)
+	}
+
+	// Create a large log file (should be rotated)
+	largeLogPath := filepath.Join(d.paths.OutputDir, "large.log")
+	largeContent := make([]byte, MaxLogFileSize+1000)
+	for i := range largeContent {
+		largeContent[i] = 'X'
+	}
+	if err := os.WriteFile(largeLogPath, largeContent, 0644); err != nil {
+		t.Fatalf("Failed to create large log: %v", err)
+	}
+
+	// Run log rotation check
+	d.rotateLogsIfNeeded()
+
+	// Small log should still exist
+	if _, err := os.Stat(smallLogPath); err != nil {
+		t.Error("Small log file should still exist")
+	}
+
+	// Large log should be rotated (original gone)
+	if _, err := os.Stat(largeLogPath); !os.IsNotExist(err) {
+		t.Error("Large log file should have been rotated")
+	}
+
+	// Verify rotated large file exists
+	entries, err := os.ReadDir(d.paths.OutputDir)
+	if err != nil {
+		t.Fatalf("Failed to read output dir: %v", err)
+	}
+
+	hasRotatedLarge := false
+	for _, entry := range entries {
+		if len(entry.Name()) > len("large.log.") && entry.Name()[:9] == "large.log" {
+			hasRotatedLarge = true
+			break
+		}
+	}
+	if !hasRotatedLarge {
+		t.Error("Rotated large log file should exist")
+	}
+}
+
+// Tests for prompt file functions
+
+func TestWritePromptFile(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create repo directory structure
+	repoName := "test-repo"
+	repoPath := d.paths.RepoDir(repoName)
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("Failed to create repo dir: %v", err)
+	}
+
+	// Write prompt file for supervisor
+	promptPath, err := d.writePromptFile(repoName, "supervisor", "supervisor")
+	if err != nil {
+		t.Fatalf("writePromptFile() failed: %v", err)
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(promptPath); err != nil {
+		t.Errorf("Prompt file should exist at %s: %v", promptPath, err)
+	}
+
+	// Read and verify content contains expected elements
+	content, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("Failed to read prompt file: %v", err)
+	}
+
+	// Should contain supervisor-specific content
+	if len(content) == 0 {
+		t.Error("Prompt file should not be empty")
+	}
+}
+
+func TestWritePromptFileWorker(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create repo directory structure
+	repoName := "test-repo"
+	repoPath := d.paths.RepoDir(repoName)
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("Failed to create repo dir: %v", err)
+	}
+
+	// Write prompt file for worker
+	promptPath, err := d.writePromptFile(repoName, "worker", "my-worker")
+	if err != nil {
+		t.Fatalf("writePromptFile() failed: %v", err)
+	}
+
+	// Verify file path is unique to agent name
+	expectedPath := filepath.Join(d.paths.Root, "prompts", "my-worker.md")
+	if promptPath != expectedPath {
+		t.Errorf("Prompt path = %s, want %s", promptPath, expectedPath)
+	}
+
+	// Verify file exists and is non-empty
+	info, err := os.Stat(promptPath)
+	if err != nil {
+		t.Fatalf("Prompt file should exist: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Error("Prompt file should not be empty")
+	}
+}
+
+func TestCopyHooksConfig(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create repo directory
+	repoName := "test-repo"
+	repoPath := d.paths.RepoDir(repoName)
+	if err := os.MkdirAll(filepath.Join(repoPath, ".multiclaude"), 0755); err != nil {
+		t.Fatalf("Failed to create .multiclaude dir: %v", err)
+	}
+
+	// Create hooks.json
+	hooksContent := `{"hooks": [{"event": "test", "command": "echo test"}]}`
+	hooksPath := filepath.Join(repoPath, ".multiclaude", "hooks.json")
+	if err := os.WriteFile(hooksPath, []byte(hooksContent), 0644); err != nil {
+		t.Fatalf("Failed to create hooks.json: %v", err)
+	}
+
+	// Create work directory
+	workDir := filepath.Join(d.paths.WorktreesDir, repoName, "test-agent")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatalf("Failed to create work dir: %v", err)
+	}
+
+	// Copy hooks config
+	if err := d.copyHooksConfig(repoPath, workDir); err != nil {
+		t.Fatalf("copyHooksConfig() failed: %v", err)
+	}
+
+	// Verify settings.json was created
+	settingsPath := filepath.Join(workDir, ".claude", "settings.json")
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("Failed to read settings.json: %v", err)
+	}
+
+	if string(content) != hooksContent {
+		t.Errorf("settings.json content = %s, want %s", content, hooksContent)
+	}
+}
+
+func TestCopyHooksConfigNoHooksFile(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create repo directory WITHOUT hooks.json
+	repoName := "test-repo"
+	repoPath := d.paths.RepoDir(repoName)
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("Failed to create repo dir: %v", err)
+	}
+
+	workDir := filepath.Join(d.paths.WorktreesDir, repoName, "test-agent")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatalf("Failed to create work dir: %v", err)
+	}
+
+	// Should not error when hooks.json doesn't exist
+	if err := d.copyHooksConfig(repoPath, workDir); err != nil {
+		t.Errorf("copyHooksConfig() should not error for missing hooks.json: %v", err)
+	}
+
+	// .claude directory should not be created
+	claudeDir := filepath.Join(workDir, ".claude")
+	if _, err := os.Stat(claudeDir); !os.IsNotExist(err) {
+		t.Error(".claude directory should not be created when no hooks.json exists")
+	}
+}
+
+// Tests for tracking mode prompt generation
+
+func TestGenerateTrackingModePrompt(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	tests := []struct {
+		name          string
+		trackMode     state.TrackMode
+		wantContains  []string
+		wantNotContain []string
+	}{
+		{
+			name:      "all mode",
+			trackMode: state.TrackModeAll,
+			wantContains: []string{
+				"All PRs",
+				"gh pr list --label multiclaude",
+				"regardless of author or assignee",
+			},
+			wantNotContain: []string{
+				"--author @me",
+				"--assignee @me",
+			},
+		},
+		{
+			name:      "author mode",
+			trackMode: state.TrackModeAuthor,
+			wantContains: []string{
+				"Author Only",
+				"gh pr list --author @me --label multiclaude",
+				"Do NOT process or attempt to merge PRs authored by others",
+			},
+			wantNotContain: []string{
+				"--assignee @me",
+			},
+		},
+		{
+			name:      "assigned mode",
+			trackMode: state.TrackModeAssigned,
+			wantContains: []string{
+				"Assigned Only",
+				"gh pr list --assignee @me --label multiclaude",
+				"assigned to you",
+			},
+			wantNotContain: []string{
+				"--author @me",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := d.generateTrackingModePrompt(tt.trackMode)
+
+			for _, want := range tt.wantContains {
+				if !contains(result, want) {
+					t.Errorf("generateTrackingModePrompt(%s) should contain %q", tt.trackMode, want)
+				}
+			}
+
+			for _, notWant := range tt.wantNotContain {
+				if contains(result, notWant) {
+					t.Errorf("generateTrackingModePrompt(%s) should NOT contain %q", tt.trackMode, notWant)
+				}
+			}
+		})
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// Tests for restore functionality
+
+func TestRestoreTrackedReposNoRepos(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Call restore with no repos - should not panic
+	d.restoreTrackedRepos()
+
+	// Verify no repos were created
+	repos := d.state.ListRepos()
+	if len(repos) != 0 {
+		t.Errorf("Expected 0 repos, got %d", len(repos))
+	}
+}
+
+func TestRestoreTrackedReposExistingSession(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a tmux session
+	sessionName := "mc-test-restore-existing"
+	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(sessionName)
+
+	// Add repo with existing session
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Call restore - should skip since session exists
+	d.restoreTrackedRepos()
+
+	// Session should still exist and no agents should be created
+	// (agents would only be created during actual init)
+	hasSession, _ := tmuxClient.HasSession(sessionName)
+	if !hasSession {
+		t.Error("Session should still exist after restore check")
+	}
+}
+
+func TestRestoreRepoAgentsMissingRepoPath(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Try to restore for a repo whose path doesn't exist
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-nonexistent",
+		Agents:      make(map[string]state.Agent),
+	}
+
+	err := d.restoreRepoAgents("nonexistent-repo", repo)
+	if err == nil {
+		t.Error("restoreRepoAgents should fail when repo path doesn't exist")
+	}
+
+	expectedError := "repository path does not exist"
+	if !contains(err.Error(), expectedError) {
+		t.Errorf("Error should mention %q, got: %v", expectedError, err)
+	}
+}
+
+// Tests for handle functions error cases
+
+func TestHandleGetRepoConfigMissingName(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	resp := d.handleGetRepoConfig(socket.Request{
+		Command: "get_repo_config",
+		Args:    map[string]interface{}{},
+	})
+
+	if resp.Success {
+		t.Error("Should fail with missing name")
+	}
+	if !contains(resp.Error, "missing") {
+		t.Errorf("Error should mention 'missing', got: %s", resp.Error)
+	}
+}
+
+func TestHandleGetRepoConfigNonexistentRepo(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	resp := d.handleGetRepoConfig(socket.Request{
+		Command: "get_repo_config",
+		Args: map[string]interface{}{
+			"name": "nonexistent",
+		},
+	})
+
+	if resp.Success {
+		t.Error("Should fail for nonexistent repo")
+	}
+	if !contains(resp.Error, "not found") {
+		t.Errorf("Error should mention 'not found', got: %s", resp.Error)
+	}
+}
+
+func TestHandleGetRepoConfigSuccess(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a repo with specific config
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "test-session",
+		Agents:      make(map[string]state.Agent),
+		MergeQueueConfig: state.MergeQueueConfig{
+			Enabled:   true,
+			TrackMode: state.TrackModeAuthor,
+		},
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	resp := d.handleGetRepoConfig(socket.Request{
+		Command: "get_repo_config",
+		Args: map[string]interface{}{
+			"name": "test-repo",
+		},
+	})
+
+	if !resp.Success {
+		t.Errorf("handleGetRepoConfig() failed: %s", resp.Error)
+	}
+
+	data, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		t.Fatal("Response data should be a map")
+	}
+
+	if data["mq_enabled"] != true {
+		t.Errorf("mq_enabled = %v, want true", data["mq_enabled"])
+	}
+	if data["mq_track_mode"] != "author" {
+		t.Errorf("mq_track_mode = %v, want 'author'", data["mq_track_mode"])
+	}
+}
+
+func TestHandleUpdateRepoConfigInvalidTrackMode(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a repo first
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "test-session",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	resp := d.handleUpdateRepoConfig(socket.Request{
+		Command: "update_repo_config",
+		Args: map[string]interface{}{
+			"name":          "test-repo",
+			"mq_track_mode": "invalid-mode",
+		},
+	})
+
+	if resp.Success {
+		t.Error("Should fail with invalid track mode")
+	}
+	if !contains(resp.Error, "invalid track mode") {
+		t.Errorf("Error should mention 'invalid track mode', got: %s", resp.Error)
+	}
+}
+
+func TestHandleUpdateRepoConfigSuccess(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a repo first
+	repo := &state.Repository{
+		GithubURL:        "https://github.com/test/repo",
+		TmuxSession:      "test-session",
+		Agents:           make(map[string]state.Agent),
+		MergeQueueConfig: state.DefaultMergeQueueConfig(),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Update config
+	resp := d.handleUpdateRepoConfig(socket.Request{
+		Command: "update_repo_config",
+		Args: map[string]interface{}{
+			"name":          "test-repo",
+			"mq_enabled":    false,
+			"mq_track_mode": "assigned",
+		},
+	})
+
+	if !resp.Success {
+		t.Errorf("handleUpdateRepoConfig() failed: %s", resp.Error)
+	}
+
+	// Verify config was updated
+	updatedRepo, _ := d.state.GetRepo("test-repo")
+	if updatedRepo.MergeQueueConfig.Enabled != false {
+		t.Error("MergeQueueConfig.Enabled should be false")
+	}
+	if updatedRepo.MergeQueueConfig.TrackMode != state.TrackModeAssigned {
+		t.Errorf("TrackMode = %s, want assigned", updatedRepo.MergeQueueConfig.TrackMode)
+	}
+}
+
+func TestHandleListReposRichFormat(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create tmux session (optional for rich format test)
+	sessionName := "mc-test-rich"
+	sessionExists := false
+	if tmuxClient.IsTmuxAvailable() {
+		if err := tmuxClient.CreateSession(sessionName, true); err == nil {
+			sessionExists = true
+			defer tmuxClient.KillSession(sessionName)
+		}
+	}
+
+	// Add a repo with agents
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	agent := state.Agent{
+		Type:       state.AgentTypeWorker,
+		TmuxWindow: "worker1",
+		CreatedAt:  time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "worker1", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	// Request rich format
+	resp := d.handleListRepos(socket.Request{
+		Command: "list_repos",
+		Args: map[string]interface{}{
+			"rich": true,
+		},
+	})
+
+	if !resp.Success {
+		t.Errorf("handleListRepos(rich) failed: %s", resp.Error)
+	}
+
+	data, ok := resp.Data.([]map[string]interface{})
+	if !ok {
+		t.Fatal("Rich response should be []map[string]interface{}")
+	}
+
+	if len(data) != 1 {
+		t.Fatalf("Expected 1 repo, got %d", len(data))
+	}
+
+	repoData := data[0]
+	if repoData["name"] != "test-repo" {
+		t.Errorf("name = %v, want 'test-repo'", repoData["name"])
+	}
+	if repoData["total_agents"].(int) != 1 {
+		t.Errorf("total_agents = %v, want 1", repoData["total_agents"])
+	}
+	if repoData["worker_count"].(int) != 1 {
+		t.Errorf("worker_count = %v, want 1", repoData["worker_count"])
+	}
+
+	// session_healthy should match whether we created a real session
+	if sessionExists && !repoData["session_healthy"].(bool) {
+		t.Error("session_healthy should be true when session exists")
+	}
+}
