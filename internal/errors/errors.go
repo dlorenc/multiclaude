@@ -172,15 +172,6 @@ func AgentNotFound(agentType, name, repo string) *CLIError {
 	}
 }
 
-// RepoNotFound creates an error for when a repository is not found
-func RepoNotFound(name string) *CLIError {
-	return &CLIError{
-		Category:   CategoryNotFound,
-		Message:    fmt.Sprintf("repository '%s' is not tracked", name),
-		Suggestion: "multiclaude list",
-	}
-}
-
 // InvalidPRURL creates an error for invalid PR URLs
 func InvalidPRURL() *CLIError {
 	return &CLIError{

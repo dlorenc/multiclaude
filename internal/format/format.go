@@ -78,26 +78,6 @@ func Header(format string, args ...interface{}) {
 	Bold.Printf(format+"\n", args...)
 }
 
-// Success prints a green success message
-func Success(format string, args ...interface{}) {
-	Green.Printf("✓ "+format+"\n", args...)
-}
-
-// Warning prints a yellow warning message
-func Warning(format string, args ...interface{}) {
-	Yellow.Printf("⚠ "+format+"\n", args...)
-}
-
-// Error prints a red error message
-func Error(format string, args ...interface{}) {
-	Red.Printf("✗ "+format+"\n", args...)
-}
-
-// Info prints an info message
-func Info(format string, args ...interface{}) {
-	Cyan.Printf(format+"\n", args...)
-}
-
 // Dimmed prints dimmed/muted text
 func Dimmed(format string, args ...interface{}) {
 	Dim.Printf(format+"\n", args...)
@@ -215,11 +195,6 @@ func (t *Table) String() string {
 	return sb.String()
 }
 
-// Print prints the table
-func (t *Table) Print() {
-	fmt.Print(t.String())
-}
-
 // ColoredTable is a table that supports colored cells
 type ColoredTable struct {
 	headers      []string
@@ -325,9 +300,4 @@ func MessageBadge(pending, total int) string {
 		return Yellow.Sprintf("%d/%d", pending, total)
 	}
 	return Dim.Sprintf("0/%d", total)
-}
-
-// BranchName formats a branch name with color
-func BranchName(branch string) string {
-	return Cyan.Sprint(branch)
 }

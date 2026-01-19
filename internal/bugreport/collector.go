@@ -3,7 +3,6 @@ package bugreport
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -218,17 +217,3 @@ func (c *Collector) collectDaemonLog() string {
 	return c.redactor.Text(tail)
 }
 
-// GetRedactor returns the redactor for additional redaction operations
-func (c *Collector) GetRedactor() *redact.Redactor {
-	return c.redactor
-}
-
-// RedactPath is a helper to redact file paths
-func (c *Collector) RedactPath(path string) string {
-	return c.redactor.Path(path)
-}
-
-// RedactedLogPath returns the redacted path to the daemon log
-func (c *Collector) RedactedLogPath() string {
-	return c.redactor.Path(filepath.Join(c.paths.Root, "daemon.log"))
-}

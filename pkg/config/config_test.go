@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -23,25 +24,25 @@ func TestDefaultPaths(t *testing.T) {
 	}
 
 	// Test that all paths are under the root
-	if !filepath.HasPrefix(paths.DaemonPID, paths.Root) {
+	if !strings.HasPrefix(paths.DaemonPID, paths.Root) {
 		t.Errorf("DaemonPID not under Root: %s", paths.DaemonPID)
 	}
-	if !filepath.HasPrefix(paths.DaemonSock, paths.Root) {
+	if !strings.HasPrefix(paths.DaemonSock, paths.Root) {
 		t.Errorf("DaemonSock not under Root: %s", paths.DaemonSock)
 	}
-	if !filepath.HasPrefix(paths.DaemonLog, paths.Root) {
+	if !strings.HasPrefix(paths.DaemonLog, paths.Root) {
 		t.Errorf("DaemonLog not under Root: %s", paths.DaemonLog)
 	}
-	if !filepath.HasPrefix(paths.StateFile, paths.Root) {
+	if !strings.HasPrefix(paths.StateFile, paths.Root) {
 		t.Errorf("StateFile not under Root: %s", paths.StateFile)
 	}
-	if !filepath.HasPrefix(paths.ReposDir, paths.Root) {
+	if !strings.HasPrefix(paths.ReposDir, paths.Root) {
 		t.Errorf("ReposDir not under Root: %s", paths.ReposDir)
 	}
-	if !filepath.HasPrefix(paths.WorktreesDir, paths.Root) {
+	if !strings.HasPrefix(paths.WorktreesDir, paths.Root) {
 		t.Errorf("WorktreesDir not under Root: %s", paths.WorktreesDir)
 	}
-	if !filepath.HasPrefix(paths.MessagesDir, paths.Root) {
+	if !strings.HasPrefix(paths.MessagesDir, paths.Root) {
 		t.Errorf("MessagesDir not under Root: %s", paths.MessagesDir)
 	}
 }
