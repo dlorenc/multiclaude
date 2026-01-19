@@ -8,8 +8,8 @@ import (
 
 func TestStatusColor(t *testing.T) {
 	tests := []struct {
-		status   Status
-		wantNil  bool
+		status  Status
+		wantNil bool
 	}{
 		{StatusHealthy, false},
 		{StatusRunning, false},

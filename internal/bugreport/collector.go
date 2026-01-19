@@ -49,10 +49,10 @@ type Report struct {
 
 // RepoStat contains per-repo statistics for verbose mode
 type RepoStat struct {
-	Name         string // redacted
-	WorkerCount  int
-	HasSupervisor bool
-	HasMergeQueue bool
+	Name           string // redacted
+	WorkerCount    int
+	HasSupervisor  bool
+	HasMergeQueue  bool
 	WorkspaceCount int
 }
 
@@ -216,4 +216,3 @@ func (c *Collector) collectDaemonLog() string {
 	// Redact sensitive information
 	return c.redactor.Text(tail)
 }
-

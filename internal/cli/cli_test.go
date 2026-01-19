@@ -12,75 +12,75 @@ import (
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
-	"github.com/dlorenc/multiclaude/pkg/tmux"
 	"github.com/dlorenc/multiclaude/pkg/config"
+	"github.com/dlorenc/multiclaude/pkg/tmux"
 )
 
 func TestParseFlags(t *testing.T) {
 	tests := []struct {
-		name         string
-		args         []string
-		wantFlags    map[string]string
+		name           string
+		args           []string
+		wantFlags      map[string]string
 		wantPositional []string
 	}{
 		{
-			name:         "empty args",
-			args:         []string{},
-			wantFlags:    map[string]string{},
+			name:           "empty args",
+			args:           []string{},
+			wantFlags:      map[string]string{},
 			wantPositional: nil,
 		},
 		{
-			name:         "positional only",
-			args:         []string{"arg1", "arg2", "arg3"},
-			wantFlags:    map[string]string{},
+			name:           "positional only",
+			args:           []string{"arg1", "arg2", "arg3"},
+			wantFlags:      map[string]string{},
 			wantPositional: []string{"arg1", "arg2", "arg3"},
 		},
 		{
-			name:         "long flag with value",
-			args:         []string{"--repo", "myrepo"},
-			wantFlags:    map[string]string{"repo": "myrepo"},
+			name:           "long flag with value",
+			args:           []string{"--repo", "myrepo"},
+			wantFlags:      map[string]string{"repo": "myrepo"},
 			wantPositional: nil,
 		},
 		{
-			name:         "long flag boolean",
-			args:         []string{"--verbose"},
-			wantFlags:    map[string]string{"verbose": "true"},
+			name:           "long flag boolean",
+			args:           []string{"--verbose"},
+			wantFlags:      map[string]string{"verbose": "true"},
 			wantPositional: nil,
 		},
 		{
-			name:         "short flag with value",
-			args:         []string{"-r", "myrepo"},
-			wantFlags:    map[string]string{"r": "myrepo"},
+			name:           "short flag with value",
+			args:           []string{"-r", "myrepo"},
+			wantFlags:      map[string]string{"r": "myrepo"},
 			wantPositional: nil,
 		},
 		{
-			name:         "short flag boolean",
-			args:         []string{"-v"},
-			wantFlags:    map[string]string{"v": "true"},
+			name:           "short flag boolean",
+			args:           []string{"-v"},
+			wantFlags:      map[string]string{"v": "true"},
 			wantPositional: nil,
 		},
 		{
-			name:         "mixed flags and positional",
-			args:         []string{"--repo", "myrepo", "task", "description", "-v"},
-			wantFlags:    map[string]string{"repo": "myrepo", "v": "true"},
+			name:           "mixed flags and positional",
+			args:           []string{"--repo", "myrepo", "task", "description", "-v"},
+			wantFlags:      map[string]string{"repo": "myrepo", "v": "true"},
 			wantPositional: []string{"task", "description"},
 		},
 		{
-			name:         "multiple long flags",
-			args:         []string{"--name", "worker1", "--branch", "main", "--dry-run"},
-			wantFlags:    map[string]string{"name": "worker1", "branch": "main", "dry-run": "true"},
+			name:           "multiple long flags",
+			args:           []string{"--name", "worker1", "--branch", "main", "--dry-run"},
+			wantFlags:      map[string]string{"name": "worker1", "branch": "main", "dry-run": "true"},
 			wantPositional: nil,
 		},
 		{
-			name:         "flag followed by flag (boolean)",
-			args:         []string{"--verbose", "--debug"},
-			wantFlags:    map[string]string{"verbose": "true", "debug": "true"},
+			name:           "flag followed by flag (boolean)",
+			args:           []string{"--verbose", "--debug"},
+			wantFlags:      map[string]string{"verbose": "true", "debug": "true"},
 			wantPositional: nil,
 		},
 		{
-			name:         "positional before flags",
-			args:         []string{"command", "--flag", "value"},
-			wantFlags:    map[string]string{"flag": "value"},
+			name:           "positional before flags",
+			args:           []string{"command", "--flag", "value"},
+			wantFlags:      map[string]string{"flag": "value"},
 			wantPositional: []string{"command"},
 		},
 	}
@@ -1042,19 +1042,16 @@ func TestNewWithPaths(t *testing.T) {
 		OutputDir:    filepath.Join(tmpDir, "output"),
 	}
 
-	// Test with empty claude path
+	// Test CLI creation (second parameter is now ignored, provider resolved at runtime)
 	cli := NewWithPaths(paths, "")
 	if cli == nil {
 		t.Fatal("CLI should not be nil")
 	}
-	if cli.claudeBinaryPath != "claude" {
-		t.Errorf("claudeBinaryPath = %s, want 'claude'", cli.claudeBinaryPath)
-	}
 
-	// Test with custom claude path
+	// Test with custom path (now ignored - provider resolved per-repo at runtime)
 	cli = NewWithPaths(paths, "/custom/path/claude")
-	if cli.claudeBinaryPath != "/custom/path/claude" {
-		t.Errorf("claudeBinaryPath = %s, want '/custom/path/claude'", cli.claudeBinaryPath)
+	if cli == nil {
+		t.Fatal("CLI should not be nil")
 	}
 
 	// Verify commands are registered
@@ -1374,11 +1371,11 @@ func TestInferAgentContext(t *testing.T) {
 
 	// Test worktree cases - these should work reliably
 	tests := []struct {
-		name       string
-		cwd        string
-		wantRepo   string
-		wantAgent  string
-		wantError  bool
+		name      string
+		cwd       string
+		wantRepo  string
+		wantAgent string
+		wantError bool
 	}{
 		{
 			name:      "in worker worktree",

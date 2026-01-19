@@ -124,8 +124,8 @@ func TestOutputPaths(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	paths := &Paths{
-		Root:         tmpDir,
-		OutputDir:    filepath.Join(tmpDir, "output"),
+		Root:      tmpDir,
+		OutputDir: filepath.Join(tmpDir, "output"),
 	}
 
 	repoName := "test-repo"
