@@ -221,36 +221,7 @@ func TestTruncateString(t *testing.T) {
 	}
 }
 
-func TestGenerateSessionID(t *testing.T) {
-	// Generate multiple session IDs and verify uniqueness
-	ids := make(map[string]bool)
-	for i := 0; i < 100; i++ {
-		id, err := generateSessionID()
-		if err != nil {
-			t.Fatalf("generateSessionID() error = %v", err)
-		}
-
-		// Check format: UUID v4 format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-		parts := strings.Split(id, "-")
-		if len(parts) != 5 {
-			t.Errorf("generateSessionID() = %q, expected 5 parts separated by dashes", id)
-		}
-
-		// Check part lengths: 8-4-4-4-12
-		expectedLens := []int{8, 4, 4, 4, 12}
-		for j, part := range parts {
-			if len(part) != expectedLens[j] {
-				t.Errorf("generateSessionID() part %d len = %d, want %d", j, len(part), expectedLens[j])
-			}
-		}
-
-		// Check uniqueness
-		if ids[id] {
-			t.Errorf("generateSessionID() generated duplicate ID: %q", id)
-		}
-		ids[id] = true
-	}
-}
+// TestGenerateSessionID is now in pkg/claude/claude_test.go
 
 func TestGenerateDocumentation(t *testing.T) {
 	// Create a minimal CLI with commands registered
@@ -2135,5 +2106,54 @@ func TestCLIRepoRmNonexistent(t *testing.T) {
 	err := cli.Execute([]string{"repo", "rm", "nonexistent"})
 	if err == nil {
 		t.Error("removing nonexistent repo should fail")
+	}
+}
+
+func TestInitRejectsEmptyRepoName(t *testing.T) {
+	tests := []struct {
+		name        string
+		url         string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:    "normal URL parses name correctly",
+			url:     "https://github.com/user/repo",
+			wantErr: false,
+		},
+		{
+			name:    "URL with trailing slash parses name correctly",
+			url:     "https://github.com/user/repo/",
+			wantErr: false,
+		},
+		{
+			name:        "URL with only slashes fails",
+			url:         "///",
+			wantErr:     true,
+			errContains: "could not determine repository name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cli, _, cleanup := setupTestEnvironment(t)
+			defer cleanup()
+
+			err := cli.Execute([]string{"init", tt.url})
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error but got none")
+				} else if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("error %q should contain %q", err.Error(), tt.errContains)
+				}
+			} else {
+				// For valid URLs, we expect the error to be about something other than the name
+				// (e.g., git clone failing because the repo doesn't exist)
+				if err != nil && strings.Contains(err.Error(), "could not determine repository name") {
+					t.Errorf("unexpected name parsing error: %v", err)
+				}
+			}
+		})
 	}
 }

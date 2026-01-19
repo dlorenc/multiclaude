@@ -899,3 +899,69 @@ func TestTrackModeConstants(t *testing.T) {
 		t.Errorf("TrackModeAssigned = %q, want 'assigned'", TrackModeAssigned)
 	}
 }
+
+func TestCurrentRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Initially no current repo
+	if current := s.GetCurrentRepo(); current != "" {
+		t.Errorf("GetCurrentRepo() = %q, want empty string", current)
+	}
+
+	// Add a repo first
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Set current repo
+	if err := s.SetCurrentRepo("test-repo"); err != nil {
+		t.Errorf("SetCurrentRepo() failed: %v", err)
+	}
+
+	if current := s.GetCurrentRepo(); current != "test-repo" {
+		t.Errorf("GetCurrentRepo() = %q, want 'test-repo'", current)
+	}
+
+	// Setting non-existent repo should fail
+	if err := s.SetCurrentRepo("nonexistent"); err == nil {
+		t.Error("SetCurrentRepo() should fail for nonexistent repo")
+	}
+
+	// Clear current repo
+	if err := s.ClearCurrentRepo(); err != nil {
+		t.Errorf("ClearCurrentRepo() failed: %v", err)
+	}
+
+	if current := s.GetCurrentRepo(); current != "" {
+		t.Errorf("GetCurrentRepo() after clear = %q, want empty string", current)
+	}
+
+	// Test persistence
+	s2, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Set and save
+	if err := s2.SetCurrentRepo("test-repo"); err != nil {
+		t.Fatalf("SetCurrentRepo() failed: %v", err)
+	}
+
+	// Reload and verify
+	s3, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if current := s3.GetCurrentRepo(); current != "test-repo" {
+		t.Errorf("GetCurrentRepo() after reload = %q, want 'test-repo'", current)
+	}
+}

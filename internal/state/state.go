@@ -70,9 +70,10 @@ type Repository struct {
 
 // State represents the entire daemon state
 type State struct {
-	Repos map[string]*Repository `json:"repos"`
-	mu    sync.RWMutex
-	path  string
+	Repos       map[string]*Repository `json:"repos"`
+	CurrentRepo string                 `json:"current_repo,omitempty"`
+	mu          sync.RWMutex
+	path        string
 }
 
 // New creates a new empty state
@@ -181,6 +182,36 @@ func (s *State) ListRepos() []string {
 		repos = append(repos, name)
 	}
 	return repos
+}
+
+// SetCurrentRepo sets the current/default repository
+func (s *State) SetCurrentRepo(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Verify the repo exists
+	if _, exists := s.Repos[name]; !exists {
+		return fmt.Errorf("repository %q not found", name)
+	}
+
+	s.CurrentRepo = name
+	return s.saveUnlocked()
+}
+
+// GetCurrentRepo returns the current/default repository name
+func (s *State) GetCurrentRepo() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.CurrentRepo
+}
+
+// ClearCurrentRepo clears the current/default repository
+func (s *State) ClearCurrentRepo() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.CurrentRepo = ""
+	return s.saveUnlocked()
 }
 
 // GetAllRepos returns a snapshot of all repositories

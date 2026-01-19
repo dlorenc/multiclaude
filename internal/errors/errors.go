@@ -191,14 +191,36 @@ func GitOperationFailed(operation string, cause error) *CLIError {
 	}
 }
 
-// TmuxOperationFailed creates an error for tmux operation failures
+// TmuxOperationFailed creates an error for tmux operation failures with specific suggestions
 func TmuxOperationFailed(operation string, cause error) *CLIError {
+	suggestion := tmuxSuggestionForOperation(operation, cause)
 	return &CLIError{
 		Category:   CategoryRuntime,
 		Message:    fmt.Sprintf("tmux %s failed", operation),
 		Cause:      cause,
-		Suggestion: "ensure tmux is installed and no conflicting sessions exist",
+		Suggestion: suggestion,
 	}
+}
+
+// tmuxSuggestionForOperation provides specific suggestions based on the operation and error
+func tmuxSuggestionForOperation(operation string, cause error) string {
+	errMsg := ""
+	if cause != nil {
+		errMsg = cause.Error()
+	}
+
+	// tmux binary not found
+	if strings.Contains(errMsg, "executable file not found") || strings.Contains(errMsg, "not found in") {
+		return "could not find 'tmux' binary in PATH"
+	}
+
+	// Session already exists
+	if strings.Contains(errMsg, "duplicate session") || strings.Contains(errMsg, "already exists") {
+		return "a tmux session with this name already exists; kill it with: tmux kill-session -t <session-name>"
+	}
+
+	// Default: no specific suggestion
+	return ""
 }
 
 // WorktreeCreationFailed creates an error for worktree creation failures

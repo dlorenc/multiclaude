@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,6 +20,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/pkg/tmux"
 	"github.com/dlorenc/multiclaude/internal/worktree"
+	"github.com/dlorenc/multiclaude/pkg/claude"
 	"github.com/dlorenc/multiclaude/pkg/config"
 )
 
@@ -40,8 +40,9 @@ type Command struct {
 type CLI struct {
 	rootCmd          *Command
 	paths            *config.Paths
-	claudeBinaryPath string // Full path to claude binary to prevent version drift
-	documentation    string // Auto-generated CLI documentation for prompts
+	claudeBinaryPath string         // Full path to claude binary to prevent version drift
+	claudeRunner     *claude.Runner // Runner for starting Claude instances
+	documentation    string         // Auto-generated CLI documentation for prompts
 }
 
 // New creates a new CLI
@@ -60,6 +61,7 @@ func New() (*CLI, error) {
 	cli := &CLI{
 		paths:            paths,
 		claudeBinaryPath: claudePath,
+		claudeRunner:     claude.NewRunner(claude.WithBinaryPath(claudePath), claude.WithTerminal(tmux.NewClient())),
 		rootCmd: &Command{
 			Name:        "multiclaude",
 			Description: "repo-centric orchestrator for Claude Code",
@@ -85,6 +87,7 @@ func NewWithPaths(paths *config.Paths, claudePath string) *CLI {
 	cli := &CLI{
 		paths:            paths,
 		claudeBinaryPath: claudePath,
+		claudeRunner:     claude.NewRunner(claude.WithBinaryPath(claudePath), claude.WithTerminal(tmux.NewClient())),
 		rootCmd: &Command{
 			Name:        "multiclaude",
 			Description: "repo-centric orchestrator for Claude Code",
@@ -255,6 +258,27 @@ func (c *CLI) registerCommands() {
 		Description: "Remove a tracked repository",
 		Usage:       "multiclaude repo rm <name>",
 		Run:         c.removeRepo,
+	}
+
+	repoCmd.Subcommands["use"] = &Command{
+		Name:        "use",
+		Description: "Set the current/default repository",
+		Usage:       "multiclaude repo use <name>",
+		Run:         c.setCurrentRepo,
+	}
+
+	repoCmd.Subcommands["current"] = &Command{
+		Name:        "current",
+		Description: "Show the current/default repository",
+		Usage:       "multiclaude repo current",
+		Run:         c.getCurrentRepo,
+	}
+
+	repoCmd.Subcommands["unset"] = &Command{
+		Name:        "unset",
+		Description: "Clear the current/default repository",
+		Usage:       "multiclaude repo unset",
+		Run:         c.clearCurrentRepo,
 	}
 
 	c.rootCmd.Subcommands["repo"] = repoCmd
@@ -652,7 +676,7 @@ func (c *CLI) initRepo(args []string) error {
 		return errors.InvalidUsage("usage: multiclaude init <github-url> [name] [--no-merge-queue] [--mq-track=all|author|assigned]")
 	}
 
-	githubURL := posArgs[0]
+	githubURL := strings.TrimRight(posArgs[0], "/")
 
 	// Parse repository name from URL if not provided
 	var repoName string
@@ -662,6 +686,11 @@ func (c *CLI) initRepo(args []string) error {
 		// Extract repo name from URL (e.g., github.com/user/repo -> repo)
 		parts := strings.Split(githubURL, "/")
 		repoName = strings.TrimSuffix(parts[len(parts)-1], ".git")
+	}
+
+	// Validate repository name before any operations
+	if repoName == "" {
+		return errors.InvalidUsage("could not determine repository name from URL; please provide a name: multiclaude init <url> <name>")
 	}
 
 	// Parse merge queue configuration flags
@@ -713,6 +742,9 @@ func (c *CLI) initRepo(args []string) error {
 
 	// Create tmux session
 	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	if tmuxSession == "mc-" {
+		return fmt.Errorf("invalid tmux session name: repository name cannot be empty")
+	}
 
 	fmt.Printf("Creating tmux session: %s\n", tmuxSession)
 
@@ -731,14 +763,14 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	// Generate session IDs for agents
-	supervisorSessionID, err := generateSessionID()
+	supervisorSessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate supervisor session ID: %w", err)
 	}
 
 	var mergeQueueSessionID string
 	if mqEnabled {
-		mergeQueueSessionID, err = generateSessionID()
+		mergeQueueSessionID, err = claude.GenerateSessionID()
 		if err != nil {
 			return fmt.Errorf("failed to generate merge-queue session ID: %w", err)
 		}
@@ -767,11 +799,14 @@ func (c *CLI) initRepo(args []string) error {
 	var supervisorPID, mergeQueuePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
 		fmt.Println("Starting Claude Code in supervisor window...")
-		pid, err := c.startClaudeInTmux(tmuxSession, "supervisor", repoPath, supervisorSessionID, supervisorPromptFile, "")
+		result, err := c.claudeRunner.Start(tmuxSession, "supervisor", claude.Config{
+			SessionID:        supervisorSessionID,
+			SystemPromptFile: supervisorPromptFile,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to start supervisor Claude: %w", err)
 		}
-		supervisorPID = pid
+		supervisorPID = result.PID
 
 		// Set up output capture for supervisor
 		if err := c.setupOutputCapture(tmuxSession, "supervisor", repoName, "supervisor", "supervisor"); err != nil {
@@ -781,11 +816,14 @@ func (c *CLI) initRepo(args []string) error {
 		// Start Claude in merge-queue window only if enabled
 		if mqEnabled {
 			fmt.Println("Starting Claude Code in merge-queue window...")
-			pid, err = c.startClaudeInTmux(tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, "")
+			result, err = c.claudeRunner.Start(tmuxSession, "merge-queue", claude.Config{
+				SessionID:        mergeQueueSessionID,
+				SystemPromptFile: mergeQueuePromptFile,
+			})
 			if err != nil {
 				return fmt.Errorf("failed to start merge-queue Claude: %w", err)
 			}
-			mergeQueuePID = pid
+			mergeQueuePID = result.PID
 
 			// Set up output capture for merge-queue
 			if err := c.setupOutputCapture(tmuxSession, "merge-queue", repoName, "merge-queue", "merge-queue"); err != nil {
@@ -886,7 +924,7 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	// Generate session ID for workspace
-	workspaceSessionID, err := generateSessionID()
+	workspaceSessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate workspace session ID: %w", err)
 	}
@@ -906,11 +944,14 @@ func (c *CLI) initRepo(args []string) error {
 	var workspacePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
 		fmt.Println("Starting Claude Code in default workspace window...")
-		pid, err := c.startClaudeInTmux(tmuxSession, "default", workspacePath, workspaceSessionID, workspacePromptFile, "")
+		result, err := c.claudeRunner.Start(tmuxSession, "default", claude.Config{
+			SessionID:        workspaceSessionID,
+			SystemPromptFile: workspacePromptFile,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to start default workspace Claude: %w", err)
 		}
-		workspacePID = pid
+		workspacePID = result.PID
 
 		// Set up output capture for default workspace
 		if err := c.setupOutputCapture(tmuxSession, "default", repoName, "default", "workspace"); err != nil {
@@ -1142,6 +1183,69 @@ func (c *CLI) removeRepo(args []string) error {
 	return nil
 }
 
+func (c *CLI) setCurrentRepo(args []string) error {
+	if len(args) < 1 {
+		return errors.InvalidUsage("usage: multiclaude repo use <name>")
+	}
+
+	repoName := args[0]
+
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "set_current_repo",
+		Args: map[string]interface{}{
+			"name": repoName,
+		},
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("setting current repo", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to set current repo", fmt.Errorf("%s", resp.Error))
+	}
+
+	fmt.Printf("Current repository set to: %s\n", repoName)
+	return nil
+}
+
+func (c *CLI) getCurrentRepo(args []string) error {
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "get_current_repo",
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("getting current repo", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to get current repo", fmt.Errorf("%s", resp.Error))
+	}
+
+	currentRepo, _ := resp.Data.(string)
+	if currentRepo == "" {
+		fmt.Println("No current repository set")
+		fmt.Println("\nUse 'multiclaude repo use <name>' to set one")
+	} else {
+		fmt.Printf("Current repository: %s\n", currentRepo)
+	}
+	return nil
+}
+
+func (c *CLI) clearCurrentRepo(args []string) error {
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "clear_current_repo",
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("clearing current repo", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to clear current repo", fmt.Errorf("%s", resp.Error))
+	}
+
+	fmt.Println("Current repository cleared")
+	return nil
+}
+
 func (c *CLI) configRepo(args []string) error {
 	flags, posArgs := ParseFlags(args)
 
@@ -1293,30 +1397,10 @@ func (c *CLI) createWorker(args []string) error {
 		return errors.InvalidUsage("usage: multiclaude work <task description>")
 	}
 
-	// Determine repository (from flag or current directory)
-	var repoName string
-	if r, ok := flags["repo"]; ok {
-		repoName = r
-	} else {
-		// Try to infer from current directory
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
-		}
-
-		// Check if we're in a tracked repo
-		repos := c.getReposList()
-		for _, repo := range repos {
-			repoPath := c.paths.RepoDir(repo)
-			if strings.HasPrefix(cwd, repoPath) {
-				repoName = repo
-				break
-			}
-		}
-
-		if repoName == "" {
-			return errors.NotInRepo()
-		}
+	// Determine repository
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
 	}
 
 	// Generate worker name (Docker-style)
@@ -1394,7 +1478,7 @@ func (c *CLI) createWorker(args []string) error {
 	}
 
 	// Generate session ID for worker
-	workerSessionID, err := generateSessionID()
+	workerSessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate worker session ID: %w", err)
 	}
@@ -1415,11 +1499,15 @@ func (c *CLI) createWorker(args []string) error {
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
 		fmt.Println("Starting Claude Code in worker window...")
 		initialMessage := fmt.Sprintf("Task: %s", task)
-		pid, err := c.startClaudeInTmux(tmuxSession, workerName, wtPath, workerSessionID, workerPromptFile, initialMessage)
+		result, err := c.claudeRunner.Start(tmuxSession, workerName, claude.Config{
+			SessionID:        workerSessionID,
+			SystemPromptFile: workerPromptFile,
+			InitialMessage:   initialMessage,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to start worker Claude: %w", err)
 		}
-		workerPID = pid
+		workerPID = result.PID
 
 		// Set up output capture for worker
 		if err := c.setupOutputCapture(tmuxSession, workerName, repoName, workerName, "worker"); err != nil {
@@ -1463,16 +1551,9 @@ func (c *CLI) listWorkers(args []string) error {
 	flags, _ := ParseFlags(args)
 
 	// Determine repository
-	var repoName string
-	if r, ok := flags["repo"]; ok {
-		repoName = r
-	} else {
-		// Try to infer repo from current working directory
-		if inferred, err := c.inferRepoFromCwd(); err == nil {
-			repoName = inferred
-		} else {
-			return errors.MultipleRepos()
-		}
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
 	}
 
 	client := socket.NewClient(c.paths.DaemonSock)
@@ -1829,7 +1910,7 @@ func (c *CLI) addWorkspace(args []string) error {
 	}
 
 	// Generate session ID for workspace
-	workspaceSessionID, err := generateSessionID()
+	workspaceSessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate workspace session ID: %w", err)
 	}
@@ -1849,11 +1930,14 @@ func (c *CLI) addWorkspace(args []string) error {
 	var workspacePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
 		fmt.Println("Starting Claude Code in workspace window...")
-		pid, err := c.startClaudeInTmux(tmuxSession, workspaceName, wtPath, workspaceSessionID, workspacePromptFile, "")
+		result, err := c.claudeRunner.Start(tmuxSession, workspaceName, claude.Config{
+			SessionID:        workspaceSessionID,
+			SystemPromptFile: workspacePromptFile,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to start workspace Claude: %w", err)
 		}
-		workspacePID = pid
+		workspacePID = result.PID
 
 		// Set up output capture for workspace
 		if err := c.setupOutputCapture(tmuxSession, workspaceName, repoName, workspaceName, "workspace"); err != nil {
@@ -2033,16 +2117,9 @@ func (c *CLI) listWorkspaces(args []string) error {
 	flags, _ := ParseFlags(args)
 
 	// Determine repository
-	var repoName string
-	if r, ok := flags["repo"]; ok {
-		repoName = r
-	} else {
-		// Try to infer repo from current working directory
-		if inferred, err := c.inferRepoFromCwd(); err == nil {
-			repoName = inferred
-		} else {
-			return errors.MultipleRepos()
-		}
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
 	}
 
 	client := socket.NewClient(c.paths.DaemonSock)
@@ -2132,16 +2209,9 @@ func (c *CLI) connectWorkspace(args []string) error {
 	flags, _ := ParseFlags(args[1:])
 
 	// Determine repository
-	var repoName string
-	if r, ok := flags["repo"]; ok {
-		repoName = r
-	} else {
-		// Try to infer repo from current working directory
-		if inferred, err := c.inferRepoFromCwd(); err == nil {
-			repoName = inferred
-		} else {
-			return errors.MultipleRepos()
-		}
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
 	}
 
 	// Get workspace info
@@ -2441,6 +2511,35 @@ func (c *CLI) inferRepoFromCwd() (string, error) {
 	return "", fmt.Errorf("not in a multiclaude directory")
 }
 
+// resolveRepo determines the repository to use based on:
+// 1. Explicit --repo flag (highest priority)
+// 2. Current working directory (if in a multiclaude directory)
+// 3. Current repo set via 'multiclaude repo use' (lowest priority)
+func (c *CLI) resolveRepo(flags map[string]string) (string, error) {
+	// 1. Check explicit --repo flag
+	if r, ok := flags["repo"]; ok {
+		return r, nil
+	}
+
+	// 2. Try to infer from current working directory
+	if inferred, err := c.inferRepoFromCwd(); err == nil {
+		return inferred, nil
+	}
+
+	// 3. Check current repo from daemon
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "get_current_repo",
+	})
+	if err == nil && resp.Success {
+		if currentRepo, ok := resp.Data.(string); ok && currentRepo != "" {
+			return currentRepo, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not determine repository; use --repo flag or run 'multiclaude repo use <name>'")
+}
+
 // inferAgentContext infers the current agent and repo from working directory
 func (c *CLI) inferAgentContext() (repoName, agentName string, err error) {
 	cwd, err := os.Getwd()
@@ -2621,26 +2720,16 @@ func (c *CLI) reviewPR(args []string) error {
 	// Get repository path
 	repoPath := c.paths.RepoDir(repoName)
 
-	// Get the PR branch name using gh CLI
-	fmt.Printf("Fetching PR branch information...\n")
-	cmd := exec.Command("gh", "pr", "view", prNumber, "--repo", fmt.Sprintf("%s/%s", parts[1], parts[2]), "--json", "headRefName", "-q", ".headRefName")
+	// Fetch the PR using GitHub's PR refs - this works for both same-repo and fork PRs
+	// The refs/pull/<number>/head ref always exists and points to the PR's head commit
+	fmt.Printf("Fetching PR #%s...\n", prNumber)
+	prRef := fmt.Sprintf("refs/pull/%s/head", prNumber)
+	localRef := fmt.Sprintf("refs/multiclaude/pr-%s", prNumber)
+	cmd := exec.Command("git", "fetch", "origin", fmt.Sprintf("%s:%s", prRef, localRef))
 	cmd.Dir = repoPath
-	branchOutput, err := cmd.Output()
-	if err != nil {
-		return errors.Wrap(errors.CategoryRuntime, "failed to get PR branch info", err).WithSuggestion("ensure 'gh' CLI is installed and authenticated: gh auth login")
-	}
-	prBranch := strings.TrimSpace(string(branchOutput))
-	if prBranch == "" {
-		return errors.New(errors.CategoryRuntime, "could not determine PR branch name - the PR may not exist or be accessible")
-	}
-
-	fmt.Printf("PR branch: %s\n", prBranch)
-
-	// Fetch the PR branch
-	cmd = exec.Command("git", "fetch", "origin", prBranch)
-	cmd.Dir = repoPath
-	if err := cmd.Run(); err != nil {
-		return errors.GitOperationFailed("fetch", err)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return errors.Wrap(errors.CategoryRuntime, fmt.Sprintf("failed to fetch PR #%s: %s", prNumber, strings.TrimSpace(string(output))), err).
+			WithSuggestion("ensure the PR exists and you have access to the repository")
 	}
 
 	// Create worktree for review
@@ -2649,7 +2738,7 @@ func (c *CLI) reviewPR(args []string) error {
 	reviewBranch := fmt.Sprintf("review/%s", reviewerName)
 
 	fmt.Printf("Creating worktree at: %s\n", wtPath)
-	if err := wt.CreateNewBranch(wtPath, reviewBranch, fmt.Sprintf("origin/%s", prBranch)); err != nil {
+	if err := wt.CreateNewBranch(wtPath, reviewBranch, localRef); err != nil {
 		return fmt.Errorf("failed to create worktree: %w", err)
 	}
 
@@ -2664,7 +2753,7 @@ func (c *CLI) reviewPR(args []string) error {
 	}
 
 	// Generate session ID for reviewer
-	reviewerSessionID, err := generateSessionID()
+	reviewerSessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate reviewer session ID: %w", err)
 	}
@@ -2685,11 +2774,15 @@ func (c *CLI) reviewPR(args []string) error {
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
 		fmt.Println("Starting Claude Code in reviewer window...")
 		initialMessage := fmt.Sprintf("Review PR #%s: https://github.com/%s/%s/pull/%s", prNumber, parts[1], parts[2], prNumber)
-		pid, err := c.startClaudeInTmux(tmuxSession, reviewerName, wtPath, reviewerSessionID, reviewerPromptFile, initialMessage)
+		result, err := c.claudeRunner.Start(tmuxSession, reviewerName, claude.Config{
+			SessionID:        reviewerSessionID,
+			SystemPromptFile: reviewerPromptFile,
+			InitialMessage:   initialMessage,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to start reviewer Claude: %w", err)
 		}
-		reviewerPID = pid
+		reviewerPID = result.PID
 
 		// Set up output capture for reviewer
 		if err := c.setupOutputCapture(tmuxSession, reviewerName, repoName, reviewerName, "review"); err != nil {
@@ -3014,16 +3107,9 @@ func (c *CLI) attachAgent(args []string) error {
 	readOnly := flags["read-only"] == "true" || flags["r"] == "true"
 
 	// Determine repository
-	var repoName string
-	if r, ok := flags["repo"]; ok {
-		repoName = r
-	} else {
-		// Try to infer repo from current working directory
-		if inferred, err := c.inferRepoFromCwd(); err == nil {
-			repoName = inferred
-		} else {
-			return errors.MultipleRepos()
-		}
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
 	}
 
 	// Get agent info to find tmux session and window
@@ -3635,27 +3721,6 @@ func ParseFlags(args []string) (map[string]string, []string) {
 	return flags, positional
 }
 
-// generateSessionID generates a unique UUID v4 session ID for an agent
-func generateSessionID() (string, error) {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("failed to generate session ID: %w", err)
-	}
-
-	// Set version (4) and variant bits for UUID v4
-	bytes[6] = (bytes[6] & 0x0f) | 0x40 // Version 4
-	bytes[8] = (bytes[8] & 0x3f) | 0x80 // Variant 10
-
-	// Format as UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-	return fmt.Sprintf("%x-%x-%x-%x-%x",
-		bytes[0:4],
-		bytes[4:6],
-		bytes[6:8],
-		bytes[8:10],
-		bytes[10:16],
-	), nil
-}
-
 // writePromptFile writes the agent prompt to a temporary file and returns the path
 func (c *CLI) writePromptFile(repoPath string, agentType prompts.AgentType, agentName string) (string, error) {
 	// Get the complete prompt (default + custom + CLI docs)
@@ -3798,51 +3863,6 @@ func (c *CLI) setupOutputCapture(tmuxSession, tmuxWindow, repoName, agentName, a
 	}
 
 	return nil
-}
-
-// startClaudeInTmux starts Claude Code in a tmux window with the given configuration
-// Returns the PID of the Claude process
-func (c *CLI) startClaudeInTmux(tmuxSession, tmuxWindow, workDir, sessionID, promptFile string, initialMessage string) (int, error) {
-	// Build Claude command using the full path to prevent version drift
-	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions", c.claudeBinaryPath, sessionID)
-
-	// Add prompt file if provided
-	if promptFile != "" {
-		claudeCmd += fmt.Sprintf(" --append-system-prompt-file %s", promptFile)
-	}
-
-	// Send command to tmux window
-	target := fmt.Sprintf("%s:%s", tmuxSession, tmuxWindow)
-	cmd := exec.Command("tmux", "send-keys", "-t", target, claudeCmd, "C-m")
-	if err := cmd.Run(); err != nil {
-		return 0, fmt.Errorf("failed to start Claude in tmux: %w", err)
-	}
-
-	// Wait a moment for Claude to start
-	time.Sleep(500 * time.Millisecond)
-
-	// Get the PID of the Claude process
-	tmuxClient := tmux.NewClient()
-	pid, err := tmuxClient.GetPanePID(tmuxSession, tmuxWindow)
-	if err != nil {
-		// Non-fatal - we'll just not have the PID
-		fmt.Printf("Warning: failed to get Claude PID: %v\n", err)
-		pid = 0
-	}
-
-	// If there's an initial message, send it after Claude is ready
-	if initialMessage != "" {
-		// Wait a bit more for Claude to fully initialize
-		time.Sleep(1 * time.Second)
-
-		// Send message using atomic method to avoid race conditions (issue #63)
-		// The atomic method sends text + Enter in a single exec call
-		if err := tmuxClient.SendKeysLiteralWithEnter(tmuxSession, tmuxWindow, initialMessage); err != nil {
-			return pid, fmt.Errorf("failed to send initial message to Claude: %w", err)
-		}
-	}
-
-	return pid, nil
 }
 
 // bugReport generates a diagnostic bug report with redacted sensitive information
