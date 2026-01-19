@@ -1342,9 +1342,14 @@ func (c *CLI) createWorker(args []string) error {
 	}
 
 	// Determine branch to start from
-	// Always use origin/main as the default - the fetch updates this ref
-	// even when we can't update the local main branch
-	startBranch := "origin/main"
+	// Prefer origin/main if it exists (updated by fetch), otherwise fall back to HEAD
+	// This handles both normal repos and test repos without remotes
+	startBranch := "HEAD"
+	checkOriginCmd := exec.Command("git", "rev-parse", "--verify", "origin/main")
+	checkOriginCmd.Dir = repoPath
+	if err := checkOriginCmd.Run(); err == nil {
+		startBranch = "origin/main"
+	}
 	if branch, ok := flags["branch"]; ok {
 		startBranch = branch
 		fmt.Printf("Creating worker '%s' in repo '%s' from branch '%s'\n", workerName, repoName, branch)
