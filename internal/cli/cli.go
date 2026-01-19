@@ -1330,21 +1330,24 @@ func (c *CLI) createWorker(args []string) error {
 
 	// Fetch latest main from origin before creating worktree
 	// This ensures workers start from the latest code, not stale local refs
+	// Note: We use "git fetch origin main" (not "main:main") because the latter
+	// fails when main is checked out in the bare repo with:
+	// "fatal: refusing to fetch into branch 'refs/heads/main' checked out at ..."
 	fmt.Println("Fetching latest from origin...")
-	fetchSucceeded := false
-	fetchCmd := exec.Command("git", "fetch", "origin", "main:main")
+	fetchCmd := exec.Command("git", "fetch", "origin", "main")
 	fetchCmd.Dir = repoPath
 	if err := fetchCmd.Run(); err != nil {
 		// Best effort - don't fail if offline or fetch fails
 		fmt.Printf("Warning: failed to fetch origin/main: %v (continuing with local refs)\n", err)
-	} else {
-		fetchSucceeded = true
 	}
 
 	// Determine branch to start from
-	// Use origin/main if fetch succeeded, otherwise fall back to HEAD
+	// Prefer origin/main if it exists (updated by fetch), otherwise fall back to HEAD
+	// This handles both normal repos and test repos without remotes
 	startBranch := "HEAD"
-	if fetchSucceeded {
+	checkOriginCmd := exec.Command("git", "rev-parse", "--verify", "origin/main")
+	checkOriginCmd.Dir = repoPath
+	if err := checkOriginCmd.Run(); err == nil {
 		startBranch = "origin/main"
 	}
 	if branch, ok := flags["branch"]; ok {
