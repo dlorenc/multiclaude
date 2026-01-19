@@ -501,7 +501,7 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	default:
 		return socket.Response{
 			Success: false,
-			Error:   fmt.Sprintf("unknown command: %s", req.Command),
+			Error:   fmt.Sprintf("unknown command: %q. Run 'multiclaude --help' for available commands", req.Command),
 		}
 	}
 }
@@ -1057,14 +1057,14 @@ func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
 func (d *Daemon) handleSetCurrentRepo(req socket.Request) socket.Response {
 	name, ok := req.Args["name"].(string)
 	if !ok || name == "" {
-		return socket.Response{Success: false, Error: "missing or invalid 'name' argument"}
+		return socket.Response{Success: false, Error: "missing 'name': repository name is required"}
 	}
 
 	if err := d.state.SetCurrentRepo(name); err != nil {
 		return socket.Response{Success: false, Error: err.Error()}
 	}
 
-	d.logger.Info("Set current repo to: %s", name)
+	d.logger.Info("Set current repository to: %s", name)
 	return socket.Response{Success: true, Data: name}
 }
 
@@ -1083,7 +1083,7 @@ func (d *Daemon) handleClearCurrentRepo(req socket.Request) socket.Response {
 		return socket.Response{Success: false, Error: err.Error()}
 	}
 
-	d.logger.Info("Cleared current repo")
+	d.logger.Info("Cleared current repository")
 	return socket.Response{Success: true}
 }
 
