@@ -141,6 +141,27 @@ func (c *Client) SendEnter(session, windowName string) error {
 	return nil
 }
 
+// SendKeysLiteralWithEnter sends text + Enter atomically in a single exec call.
+// This prevents race conditions where Enter might be lost between separate exec calls.
+// Uses tmux command chaining (set-buffer ; paste-buffer ; send-keys) to ensure
+// the entire message and Enter are delivered atomically in a single exec.
+// This approach works reliably for both single-line and multiline messages.
+func (c *Client) SendKeysLiteralWithEnter(session, windowName, text string) error {
+	target := fmt.Sprintf("%s:%s", session, windowName)
+
+	// Use set-buffer + paste-buffer + send-keys Enter for all messages
+	// This is the most reliable approach as it handles all special characters
+	// and ensures atomic delivery of text + Enter in a single exec call
+	cmd := exec.Command("tmux",
+		"set-buffer", text, ";",
+		"paste-buffer", "-t", target, ";",
+		"send-keys", "-t", target, "C-m")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to send keys atomically: %w", err)
+	}
+	return nil
+}
+
 // ListSessions returns a list of all tmux sessions
 func (c *Client) ListSessions() ([]string, error) {
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")

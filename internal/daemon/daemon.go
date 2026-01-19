@@ -349,16 +349,10 @@ func (d *Daemon) routeMessages() {
 				// Format message for delivery
 				messageText := fmt.Sprintf("📨 Message from %s: %s", msg.From, msg.Body)
 
-				// Send via tmux using literal mode to avoid escaping issues
-				// First send the text literally, then send Enter
-				if err := d.tmux.SendKeysLiteral(repo.TmuxSession, agent.TmuxWindow, messageText); err != nil {
-					d.logger.Error("Failed to deliver message text %s to %s/%s: %v", msg.ID, repoName, agentName, err)
-					continue
-				}
-
-				// Send Enter key to submit the message
-				if err := d.tmux.SendEnter(repo.TmuxSession, agent.TmuxWindow); err != nil {
-					d.logger.Error("Failed to send Enter for message %s to %s/%s: %v", msg.ID, repoName, agentName, err)
+				// Send via tmux using atomic method to avoid race conditions
+				// where Enter might be lost between separate exec calls (issue #63)
+				if err := d.tmux.SendKeysLiteralWithEnter(repo.TmuxSession, agent.TmuxWindow, messageText); err != nil {
+					d.logger.Error("Failed to deliver message %s to %s/%s: %v", msg.ID, repoName, agentName, err)
 					continue
 				}
 
@@ -431,13 +425,9 @@ func (d *Daemon) wakeAgents() {
 				message = "Status check: Update on your review progress?"
 			}
 
-			// Send message using literal mode to avoid escaping issues
-			if err := d.tmux.SendKeysLiteral(repo.TmuxSession, agent.TmuxWindow, message); err != nil {
+			// Send message using atomic method to avoid race conditions (issue #63)
+			if err := d.tmux.SendKeysLiteralWithEnter(repo.TmuxSession, agent.TmuxWindow, message); err != nil {
 				d.logger.Error("Failed to send wake message to agent %s: %v", agentName, err)
-				continue
-			}
-			if err := d.tmux.SendEnter(repo.TmuxSession, agent.TmuxWindow); err != nil {
-				d.logger.Error("Failed to send Enter for wake message to agent %s: %v", agentName, err)
 				continue
 			}
 

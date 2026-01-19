@@ -3201,16 +3201,10 @@ func (c *CLI) startClaudeInTmux(tmuxSession, tmuxWindow, workDir, sessionID, pro
 		// Wait a bit more for Claude to fully initialize
 		time.Sleep(1 * time.Second)
 
-		// Send message using literal mode to ensure it's processed correctly
-		if err := tmuxClient.SendKeysLiteral(tmuxSession, tmuxWindow, initialMessage); err != nil {
-			return pid, fmt.Errorf("failed to send initial message text to Claude: %w", err)
-		}
-		if err := tmuxClient.SendEnter(tmuxSession, tmuxWindow); err != nil {
-			return pid, fmt.Errorf("failed to send Enter for initial message to Claude: %w", err)
-		}
-		// Send Enter twice - Claude Code may swallow the first Enter when processing large pasted text
-		if err := tmuxClient.SendEnter(tmuxSession, tmuxWindow); err != nil {
-			return pid, fmt.Errorf("failed to send second Enter for initial message to Claude: %w", err)
+		// Send message using atomic method to avoid race conditions (issue #63)
+		// The atomic method sends text + Enter in a single exec call
+		if err := tmuxClient.SendKeysLiteralWithEnter(tmuxSession, tmuxWindow, initialMessage); err != nil {
+			return pid, fmt.Errorf("failed to send initial message to Claude: %w", err)
 		}
 	}
 
