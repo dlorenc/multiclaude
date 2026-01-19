@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,6 +20,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/pkg/tmux"
 	"github.com/dlorenc/multiclaude/internal/worktree"
+	"github.com/dlorenc/multiclaude/pkg/claude"
 	"github.com/dlorenc/multiclaude/pkg/config"
 )
 
@@ -40,8 +40,9 @@ type Command struct {
 type CLI struct {
 	rootCmd          *Command
 	paths            *config.Paths
-	claudeBinaryPath string // Full path to claude binary to prevent version drift
-	documentation    string // Auto-generated CLI documentation for prompts
+	claudeBinaryPath string         // Full path to claude binary to prevent version drift
+	claudeRunner     *claude.Runner // Runner for starting Claude instances
+	documentation    string         // Auto-generated CLI documentation for prompts
 }
 
 // New creates a new CLI
@@ -60,6 +61,7 @@ func New() (*CLI, error) {
 	cli := &CLI{
 		paths:            paths,
 		claudeBinaryPath: claudePath,
+		claudeRunner:     claude.NewRunner(claude.WithBinaryPath(claudePath), claude.WithTerminal(tmux.NewClient())),
 		rootCmd: &Command{
 			Name:        "multiclaude",
 			Description: "repo-centric orchestrator for Claude Code",
@@ -85,6 +87,7 @@ func NewWithPaths(paths *config.Paths, claudePath string) *CLI {
 	cli := &CLI{
 		paths:            paths,
 		claudeBinaryPath: claudePath,
+		claudeRunner:     claude.NewRunner(claude.WithBinaryPath(claudePath), claude.WithTerminal(tmux.NewClient())),
 		rootCmd: &Command{
 			Name:        "multiclaude",
 			Description: "repo-centric orchestrator for Claude Code",
@@ -731,14 +734,14 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	// Generate session IDs for agents
-	supervisorSessionID, err := generateSessionID()
+	supervisorSessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate supervisor session ID: %w", err)
 	}
 
 	var mergeQueueSessionID string
 	if mqEnabled {
-		mergeQueueSessionID, err = generateSessionID()
+		mergeQueueSessionID, err = claude.GenerateSessionID()
 		if err != nil {
 			return fmt.Errorf("failed to generate merge-queue session ID: %w", err)
 		}
@@ -767,11 +770,14 @@ func (c *CLI) initRepo(args []string) error {
 	var supervisorPID, mergeQueuePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
 		fmt.Println("Starting Claude Code in supervisor window...")
-		pid, err := c.startClaudeInTmux(tmuxSession, "supervisor", repoPath, supervisorSessionID, supervisorPromptFile, "")
+		result, err := c.claudeRunner.Start(tmuxSession, "supervisor", claude.Config{
+			SessionID:        supervisorSessionID,
+			SystemPromptFile: supervisorPromptFile,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to start supervisor Claude: %w", err)
 		}
-		supervisorPID = pid
+		supervisorPID = result.PID
 
 		// Set up output capture for supervisor
 		if err := c.setupOutputCapture(tmuxSession, "supervisor", repoName, "supervisor", "supervisor"); err != nil {
@@ -781,11 +787,14 @@ func (c *CLI) initRepo(args []string) error {
 		// Start Claude in merge-queue window only if enabled
 		if mqEnabled {
 			fmt.Println("Starting Claude Code in merge-queue window...")
-			pid, err = c.startClaudeInTmux(tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, "")
+			result, err = c.claudeRunner.Start(tmuxSession, "merge-queue", claude.Config{
+				SessionID:        mergeQueueSessionID,
+				SystemPromptFile: mergeQueuePromptFile,
+			})
 			if err != nil {
 				return fmt.Errorf("failed to start merge-queue Claude: %w", err)
 			}
-			mergeQueuePID = pid
+			mergeQueuePID = result.PID
 
 			// Set up output capture for merge-queue
 			if err := c.setupOutputCapture(tmuxSession, "merge-queue", repoName, "merge-queue", "merge-queue"); err != nil {
@@ -886,7 +895,7 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	// Generate session ID for workspace
-	workspaceSessionID, err := generateSessionID()
+	workspaceSessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate workspace session ID: %w", err)
 	}
@@ -906,11 +915,14 @@ func (c *CLI) initRepo(args []string) error {
 	var workspacePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
 		fmt.Println("Starting Claude Code in default workspace window...")
-		pid, err := c.startClaudeInTmux(tmuxSession, "default", workspacePath, workspaceSessionID, workspacePromptFile, "")
+		result, err := c.claudeRunner.Start(tmuxSession, "default", claude.Config{
+			SessionID:        workspaceSessionID,
+			SystemPromptFile: workspacePromptFile,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to start default workspace Claude: %w", err)
 		}
-		workspacePID = pid
+		workspacePID = result.PID
 
 		// Set up output capture for default workspace
 		if err := c.setupOutputCapture(tmuxSession, "default", repoName, "default", "workspace"); err != nil {
@@ -1394,7 +1406,7 @@ func (c *CLI) createWorker(args []string) error {
 	}
 
 	// Generate session ID for worker
-	workerSessionID, err := generateSessionID()
+	workerSessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate worker session ID: %w", err)
 	}
@@ -1415,11 +1427,15 @@ func (c *CLI) createWorker(args []string) error {
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
 		fmt.Println("Starting Claude Code in worker window...")
 		initialMessage := fmt.Sprintf("Task: %s", task)
-		pid, err := c.startClaudeInTmux(tmuxSession, workerName, wtPath, workerSessionID, workerPromptFile, initialMessage)
+		result, err := c.claudeRunner.Start(tmuxSession, workerName, claude.Config{
+			SessionID:        workerSessionID,
+			SystemPromptFile: workerPromptFile,
+			InitialMessage:   initialMessage,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to start worker Claude: %w", err)
 		}
-		workerPID = pid
+		workerPID = result.PID
 
 		// Set up output capture for worker
 		if err := c.setupOutputCapture(tmuxSession, workerName, repoName, workerName, "worker"); err != nil {
@@ -1829,7 +1845,7 @@ func (c *CLI) addWorkspace(args []string) error {
 	}
 
 	// Generate session ID for workspace
-	workspaceSessionID, err := generateSessionID()
+	workspaceSessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate workspace session ID: %w", err)
 	}
@@ -1849,11 +1865,14 @@ func (c *CLI) addWorkspace(args []string) error {
 	var workspacePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
 		fmt.Println("Starting Claude Code in workspace window...")
-		pid, err := c.startClaudeInTmux(tmuxSession, workspaceName, wtPath, workspaceSessionID, workspacePromptFile, "")
+		result, err := c.claudeRunner.Start(tmuxSession, workspaceName, claude.Config{
+			SessionID:        workspaceSessionID,
+			SystemPromptFile: workspacePromptFile,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to start workspace Claude: %w", err)
 		}
-		workspacePID = pid
+		workspacePID = result.PID
 
 		// Set up output capture for workspace
 		if err := c.setupOutputCapture(tmuxSession, workspaceName, repoName, workspaceName, "workspace"); err != nil {
@@ -2664,7 +2683,7 @@ func (c *CLI) reviewPR(args []string) error {
 	}
 
 	// Generate session ID for reviewer
-	reviewerSessionID, err := generateSessionID()
+	reviewerSessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate reviewer session ID: %w", err)
 	}
@@ -2685,11 +2704,15 @@ func (c *CLI) reviewPR(args []string) error {
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
 		fmt.Println("Starting Claude Code in reviewer window...")
 		initialMessage := fmt.Sprintf("Review PR #%s: https://github.com/%s/%s/pull/%s", prNumber, parts[1], parts[2], prNumber)
-		pid, err := c.startClaudeInTmux(tmuxSession, reviewerName, wtPath, reviewerSessionID, reviewerPromptFile, initialMessage)
+		result, err := c.claudeRunner.Start(tmuxSession, reviewerName, claude.Config{
+			SessionID:        reviewerSessionID,
+			SystemPromptFile: reviewerPromptFile,
+			InitialMessage:   initialMessage,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to start reviewer Claude: %w", err)
 		}
-		reviewerPID = pid
+		reviewerPID = result.PID
 
 		// Set up output capture for reviewer
 		if err := c.setupOutputCapture(tmuxSession, reviewerName, repoName, reviewerName, "review"); err != nil {
@@ -3635,27 +3658,6 @@ func ParseFlags(args []string) (map[string]string, []string) {
 	return flags, positional
 }
 
-// generateSessionID generates a unique UUID v4 session ID for an agent
-func generateSessionID() (string, error) {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("failed to generate session ID: %w", err)
-	}
-
-	// Set version (4) and variant bits for UUID v4
-	bytes[6] = (bytes[6] & 0x0f) | 0x40 // Version 4
-	bytes[8] = (bytes[8] & 0x3f) | 0x80 // Variant 10
-
-	// Format as UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-	return fmt.Sprintf("%x-%x-%x-%x-%x",
-		bytes[0:4],
-		bytes[4:6],
-		bytes[6:8],
-		bytes[8:10],
-		bytes[10:16],
-	), nil
-}
-
 // writePromptFile writes the agent prompt to a temporary file and returns the path
 func (c *CLI) writePromptFile(repoPath string, agentType prompts.AgentType, agentName string) (string, error) {
 	// Get the complete prompt (default + custom + CLI docs)
@@ -3798,51 +3800,6 @@ func (c *CLI) setupOutputCapture(tmuxSession, tmuxWindow, repoName, agentName, a
 	}
 
 	return nil
-}
-
-// startClaudeInTmux starts Claude Code in a tmux window with the given configuration
-// Returns the PID of the Claude process
-func (c *CLI) startClaudeInTmux(tmuxSession, tmuxWindow, workDir, sessionID, promptFile string, initialMessage string) (int, error) {
-	// Build Claude command using the full path to prevent version drift
-	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions", c.claudeBinaryPath, sessionID)
-
-	// Add prompt file if provided
-	if promptFile != "" {
-		claudeCmd += fmt.Sprintf(" --append-system-prompt-file %s", promptFile)
-	}
-
-	// Send command to tmux window
-	target := fmt.Sprintf("%s:%s", tmuxSession, tmuxWindow)
-	cmd := exec.Command("tmux", "send-keys", "-t", target, claudeCmd, "C-m")
-	if err := cmd.Run(); err != nil {
-		return 0, fmt.Errorf("failed to start Claude in tmux: %w", err)
-	}
-
-	// Wait a moment for Claude to start
-	time.Sleep(500 * time.Millisecond)
-
-	// Get the PID of the Claude process
-	tmuxClient := tmux.NewClient()
-	pid, err := tmuxClient.GetPanePID(tmuxSession, tmuxWindow)
-	if err != nil {
-		// Non-fatal - we'll just not have the PID
-		fmt.Printf("Warning: failed to get Claude PID: %v\n", err)
-		pid = 0
-	}
-
-	// If there's an initial message, send it after Claude is ready
-	if initialMessage != "" {
-		// Wait a bit more for Claude to fully initialize
-		time.Sleep(1 * time.Second)
-
-		// Send message using atomic method to avoid race conditions (issue #63)
-		// The atomic method sends text + Enter in a single exec call
-		if err := tmuxClient.SendKeysLiteralWithEnter(tmuxSession, tmuxWindow, initialMessage); err != nil {
-			return pid, fmt.Errorf("failed to send initial message to Claude: %w", err)
-		}
-	}
-
-	return pid, nil
 }
 
 // bugReport generates a diagnostic bug report with redacted sensitive information

@@ -221,36 +221,7 @@ func TestTruncateString(t *testing.T) {
 	}
 }
 
-func TestGenerateSessionID(t *testing.T) {
-	// Generate multiple session IDs and verify uniqueness
-	ids := make(map[string]bool)
-	for i := 0; i < 100; i++ {
-		id, err := generateSessionID()
-		if err != nil {
-			t.Fatalf("generateSessionID() error = %v", err)
-		}
-
-		// Check format: UUID v4 format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-		parts := strings.Split(id, "-")
-		if len(parts) != 5 {
-			t.Errorf("generateSessionID() = %q, expected 5 parts separated by dashes", id)
-		}
-
-		// Check part lengths: 8-4-4-4-12
-		expectedLens := []int{8, 4, 4, 4, 12}
-		for j, part := range parts {
-			if len(part) != expectedLens[j] {
-				t.Errorf("generateSessionID() part %d len = %d, want %d", j, len(part), expectedLens[j])
-			}
-		}
-
-		// Check uniqueness
-		if ids[id] {
-			t.Errorf("generateSessionID() generated duplicate ID: %q", id)
-		}
-		ids[id] = true
-	}
-}
+// TestGenerateSessionID is now in pkg/claude/claude_test.go
 
 func TestGenerateDocumentation(t *testing.T) {
 	// Create a minimal CLI with commands registered

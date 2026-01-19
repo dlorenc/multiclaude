@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"log"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/pkg/tmux"
 	"github.com/dlorenc/multiclaude/internal/worktree"
+	"github.com/dlorenc/multiclaude/pkg/claude"
 	"github.com/dlorenc/multiclaude/pkg/config"
 )
 
@@ -30,7 +30,8 @@ type Daemon struct {
 	logger           *logging.Logger
 	server           *socket.Server
 	pidFile          *PIDFile
-	claudeBinaryPath string // Full path to claude binary
+	claudeBinaryPath string         // Full path to claude binary
+	claudeRunner     *claude.Runner // Runner for starting Claude instances
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -72,6 +73,7 @@ func New(paths *config.Paths) (*Daemon, error) {
 		logger:           logger,
 		pidFile:          NewPIDFile(paths.DaemonPID),
 		claudeBinaryPath: claudePath,
+		claudeRunner:     claude.NewRunner(claude.WithBinaryPath(claudePath), claude.WithTerminal(tmux.NewClient())),
 		ctx:              ctx,
 		cancel:           cancel,
 	}
@@ -1227,7 +1229,7 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 // startAgent starts a Claude agent in a tmux window and registers it with state
 func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName string, agentType prompts.AgentType, workDir string) error {
 	// Generate session ID
-	sessionID, err := generateSessionID()
+	sessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate session ID: %w", err)
 	}
@@ -1244,25 +1246,13 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
-	// Build Claude command
-	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
-		d.claudeBinaryPath, sessionID, promptFile)
-
-	// Send command to tmux window
-	target := fmt.Sprintf("%s:%s", repo.TmuxSession, agentName)
-	cmd := exec.Command("tmux", "send-keys", "-t", target, claudeCmd, "C-m")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to start Claude in tmux: %w", err)
-	}
-
-	// Wait a moment for Claude to start
-	time.Sleep(500 * time.Millisecond)
-
-	// Get PID
-	pid, err := d.tmux.GetPanePID(repo.TmuxSession, agentName)
+	// Start Claude using the runner
+	result, err := d.claudeRunner.Start(repo.TmuxSession, agentName, claude.Config{
+		SessionID:        sessionID,
+		SystemPromptFile: promptFile,
+	})
 	if err != nil {
-		d.logger.Warn("Failed to get PID for %s: %v", agentName, err)
-		pid = 0
+		return fmt.Errorf("failed to start Claude in tmux: %w", err)
 	}
 
 	// Register agent with state
@@ -1271,7 +1261,7 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 		WorktreePath: workDir,
 		TmuxWindow:   agentName,
 		SessionID:    sessionID,
-		PID:          pid,
+		PID:          result.PID,
 		CreatedAt:    time.Now(),
 	}
 
@@ -1286,7 +1276,7 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 // startMergeQueueAgent starts a merge-queue agent with tracking mode configuration
 func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, workDir string, mqConfig state.MergeQueueConfig) error {
 	// Generate session ID
-	sessionID, err := generateSessionID()
+	sessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate session ID: %w", err)
 	}
@@ -1303,25 +1293,13 @@ func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, w
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
-	// Build Claude command
-	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
-		d.claudeBinaryPath, sessionID, promptFile)
-
-	// Send command to tmux window
-	target := fmt.Sprintf("%s:merge-queue", repo.TmuxSession)
-	cmd := exec.Command("tmux", "send-keys", "-t", target, claudeCmd, "C-m")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to start Claude in tmux: %w", err)
-	}
-
-	// Wait a moment for Claude to start
-	time.Sleep(500 * time.Millisecond)
-
-	// Get PID
-	pid, err := d.tmux.GetPanePID(repo.TmuxSession, "merge-queue")
+	// Start Claude using the runner
+	result, err := d.claudeRunner.Start(repo.TmuxSession, "merge-queue", claude.Config{
+		SessionID:        sessionID,
+		SystemPromptFile: promptFile,
+	})
 	if err != nil {
-		d.logger.Warn("Failed to get PID for merge-queue: %v", err)
-		pid = 0
+		return fmt.Errorf("failed to start Claude in tmux: %w", err)
 	}
 
 	// Register agent with state
@@ -1330,7 +1308,7 @@ func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, w
 		WorktreePath: workDir,
 		TmuxWindow:   "merge-queue",
 		SessionID:    sessionID,
-		PID:          pid,
+		PID:          result.PID,
 		CreatedAt:    time.Now(),
 	}
 
@@ -1464,26 +1442,6 @@ func (d *Daemon) copyHooksConfig(repoPath, workDir string) error {
 	}
 
 	return nil
-}
-
-// generateSessionID generates a unique UUID v4 session ID
-func generateSessionID() (string, error) {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("failed to generate session ID: %w", err)
-	}
-
-	// Set version (4) and variant bits for UUID v4
-	bytes[6] = (bytes[6] & 0x0f) | 0x40 // Version 4
-	bytes[8] = (bytes[8] & 0x3f) | 0x80 // Variant 10
-
-	return fmt.Sprintf("%x-%x-%x-%x-%x",
-		bytes[0:4],
-		bytes[4:6],
-		bytes[6:8],
-		bytes[8:10],
-		bytes[10:16],
-	), nil
 }
 
 // isProcessAlive checks if a process is running
