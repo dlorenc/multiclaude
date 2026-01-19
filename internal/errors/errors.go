@@ -243,6 +243,38 @@ func ClaudeNotFound(cause error) *CLIError {
 	}
 }
 
+// ProviderNotFound creates an error for when a provider binary is not found
+func ProviderNotFound(provider string, cause error) *CLIError {
+	suggestion := "install Claude Code CLI: https://docs.anthropic.com/claude-code"
+	if provider == "happy" {
+		suggestion = "install Happy CLI: https://happy.engineering/docs"
+	}
+	return &CLIError{
+		Category:   CategoryConfig,
+		Message:    fmt.Sprintf("%s binary not found in PATH", provider),
+		Cause:      cause,
+		Suggestion: suggestion,
+	}
+}
+
+// ProviderAuthNotConfigured creates an error for unconfigured provider auth
+func ProviderAuthNotConfigured(provider string) *CLIError {
+	return &CLIError{
+		Category:   CategoryConfig,
+		Message:    fmt.Sprintf("%s authentication not configured", provider),
+		Suggestion: fmt.Sprintf("run '%s auth login' to authenticate", provider),
+	}
+}
+
+// InvalidProvider creates an error for invalid provider values
+func InvalidProvider(value string) *CLIError {
+	return &CLIError{
+		Category:   CategoryUsage,
+		Message:    fmt.Sprintf("invalid provider: %s", value),
+		Suggestion: "use 'claude' or 'happy'",
+	}
+}
+
 // MissingArgument creates an error for missing required arguments
 func MissingArgument(argName, expectedType string) *CLIError {
 	msg := fmt.Sprintf("missing required argument: %s", argName)

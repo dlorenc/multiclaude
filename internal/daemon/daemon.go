@@ -14,6 +14,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/logging"
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/prompts"
+	"github.com/dlorenc/multiclaude/internal/provider"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/pkg/tmux"
@@ -24,14 +25,12 @@ import (
 
 // Daemon represents the main daemon process
 type Daemon struct {
-	paths            *config.Paths
-	state            *state.State
-	tmux             *tmux.Client
-	logger           *logging.Logger
-	server           *socket.Server
-	pidFile          *PIDFile
-	claudeBinaryPath string         // Full path to claude binary
-	claudeRunner     *claude.Runner // Runner for starting Claude instances
+	paths   *config.Paths
+	state   *state.State
+	tmux    *tmux.Client
+	logger  *logging.Logger
+	server  *socket.Server
+	pidFile *PIDFile
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -57,25 +56,16 @@ func New(paths *config.Paths) (*Daemon, error) {
 		return nil, fmt.Errorf("failed to load state: %w", err)
 	}
 
-	// Resolve claude binary path
-	claudePath, err := exec.LookPath("claude")
-	if err != nil {
-		logger.Warn("Claude binary not found in PATH: %v", err)
-		claudePath = "claude" // Fall back to just "claude"
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 
 	d := &Daemon{
-		paths:            paths,
-		state:            st,
-		tmux:             tmux.NewClient(),
-		logger:           logger,
-		pidFile:          NewPIDFile(paths.DaemonPID),
-		claudeBinaryPath: claudePath,
-		claudeRunner:     claude.NewRunner(claude.WithBinaryPath(claudePath), claude.WithTerminal(tmux.NewClient())),
-		ctx:              ctx,
-		cancel:           cancel,
+		paths:   paths,
+		state:   st,
+		tmux:    tmux.NewClient(),
+		logger:  logger,
+		pidFile: NewPIDFile(paths.DaemonPID),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 
 	// Create socket server
@@ -968,7 +958,7 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 	}
 }
 
-// handleGetRepoConfig returns the merge queue configuration for a repository
+// handleGetRepoConfig returns the configuration for a repository
 func (d *Daemon) handleGetRepoConfig(req socket.Request) socket.Response {
 	name, ok := req.Args["name"].(string)
 	if !ok {
@@ -986,51 +976,80 @@ func (d *Daemon) handleGetRepoConfig(req socket.Request) socket.Response {
 		mqConfig = state.DefaultMergeQueueConfig()
 	}
 
+	// Get provider config (use default if not set for backward compatibility)
+	providerConfig := repo.ProviderConfig
+	if providerConfig.Provider == "" {
+		providerConfig = state.DefaultProviderConfig()
+	}
+
 	return socket.Response{
 		Success: true,
 		Data: map[string]interface{}{
 			"mq_enabled":    mqConfig.Enabled,
 			"mq_track_mode": string(mqConfig.TrackMode),
+			"provider":      string(providerConfig.Provider),
 		},
 	}
 }
 
-// handleUpdateRepoConfig updates the merge queue configuration for a repository
+// handleUpdateRepoConfig updates the configuration for a repository
 func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
 	name, ok := req.Args["name"].(string)
 	if !ok {
 		return socket.Response{Success: false, Error: "missing or invalid 'name' argument"}
 	}
 
-	// Get current config
-	currentConfig, err := d.state.GetMergeQueueConfig(name)
+	// Get current merge queue config
+	currentMQConfig, err := d.state.GetMergeQueueConfig(name)
 	if err != nil {
 		return socket.Response{Success: false, Error: err.Error()}
 	}
 
-	// Update with provided values
+	// Update merge queue config with provided values
+	mqUpdated := false
 	if mqEnabled, ok := req.Args["mq_enabled"].(bool); ok {
-		currentConfig.Enabled = mqEnabled
+		currentMQConfig.Enabled = mqEnabled
+		mqUpdated = true
 	}
 	if mqTrackMode, ok := req.Args["mq_track_mode"].(string); ok {
 		switch mqTrackMode {
 		case "all":
-			currentConfig.TrackMode = state.TrackModeAll
+			currentMQConfig.TrackMode = state.TrackModeAll
 		case "author":
-			currentConfig.TrackMode = state.TrackModeAuthor
+			currentMQConfig.TrackMode = state.TrackModeAuthor
 		case "assigned":
-			currentConfig.TrackMode = state.TrackModeAssigned
+			currentMQConfig.TrackMode = state.TrackModeAssigned
 		default:
 			return socket.Response{Success: false, Error: fmt.Sprintf("invalid track mode: %s", mqTrackMode)}
 		}
+		mqUpdated = true
 	}
 
-	// Save updated config
-	if err := d.state.UpdateMergeQueueConfig(name, currentConfig); err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+	if mqUpdated {
+		if err := d.state.UpdateMergeQueueConfig(name, currentMQConfig); err != nil {
+			return socket.Response{Success: false, Error: err.Error()}
+		}
+		d.logger.Info("Updated merge queue config for repo %s: enabled=%v, track=%s", name, currentMQConfig.Enabled, currentMQConfig.TrackMode)
 	}
 
-	d.logger.Info("Updated merge queue config for repo %s: enabled=%v, track=%s", name, currentConfig.Enabled, currentConfig.TrackMode)
+	// Handle provider config update
+	if providerVal, ok := req.Args["provider"].(string); ok {
+		switch providerVal {
+		case "claude", "happy":
+			// Validate the provider is available before setting
+			if _, err := provider.Resolve(state.ProviderType(providerVal)); err != nil {
+				return socket.Response{Success: false, Error: fmt.Sprintf("provider %s not available: %v", providerVal, err)}
+			}
+			providerConfig := state.ProviderConfig{Provider: state.ProviderType(providerVal)}
+			if err := d.state.UpdateProviderConfig(name, providerConfig); err != nil {
+				return socket.Response{Success: false, Error: err.Error()}
+			}
+			d.logger.Info("Updated provider for repo %s: %s", name, providerVal)
+		default:
+			return socket.Response{Success: false, Error: fmt.Sprintf("invalid provider: %s (must be 'claude' or 'happy')", providerVal)}
+		}
+	}
+
 	return socket.Response{Success: true}
 }
 
@@ -1266,8 +1285,29 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 	return nil
 }
 
+// getProviderBinaryPath resolves the CLI binary path for a repository based on its provider config
+func (d *Daemon) getProviderBinaryPath(repoName string) (string, error) {
+	providerConfig, err := d.state.GetProviderConfig(repoName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get provider config: %w", err)
+	}
+
+	info, err := provider.Resolve(providerConfig.Provider)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve provider: %w", err)
+	}
+
+	return info.BinaryPath, nil
+}
+
 // startAgent starts a Claude agent in a tmux window and registers it with state
 func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName string, agentType prompts.AgentType, workDir string) error {
+	// Resolve provider binary path for this repo
+	binaryPath, err := d.getProviderBinaryPath(repoName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve provider: %w", err)
+	}
+
 	// Generate session ID
 	sessionID, err := claude.GenerateSessionID()
 	if err != nil {
@@ -1286,13 +1326,24 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
-	// Start Claude using the runner
-	result, err := d.claudeRunner.Start(repo.TmuxSession, agentName, claude.Config{
-		SessionID:        sessionID,
-		SystemPromptFile: promptFile,
-	})
-	if err != nil {
+	// Build CLI command
+	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
+		binaryPath, sessionID, promptFile)
+
+	// Send command to tmux window
+	target := fmt.Sprintf("%s:%s", repo.TmuxSession, agentName)
+	cmd := exec.Command("tmux", "send-keys", "-t", target, claudeCmd, "C-m")
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to start Claude in tmux: %w", err)
+	}
+
+	// Wait a moment for Claude to start
+	time.Sleep(500 * time.Millisecond)
+
+	// Get PID
+	pid, err := d.tmux.GetPanePID(repo.TmuxSession, agentName)
+	if err != nil {
+		return fmt.Errorf("failed to get Claude PID: %w", err)
 	}
 
 	// Register agent with state
@@ -1301,7 +1352,7 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 		WorktreePath: workDir,
 		TmuxWindow:   agentName,
 		SessionID:    sessionID,
-		PID:          result.PID,
+		PID:          pid,
 		CreatedAt:    time.Now(),
 	}
 
@@ -1315,6 +1366,12 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 
 // startMergeQueueAgent starts a merge-queue agent with tracking mode configuration
 func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, workDir string, mqConfig state.MergeQueueConfig) error {
+	// Resolve provider binary path for this repo
+	binaryPath, err := d.getProviderBinaryPath(repoName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve provider: %w", err)
+	}
+
 	// Generate session ID
 	sessionID, err := claude.GenerateSessionID()
 	if err != nil {
@@ -1333,13 +1390,24 @@ func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, w
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
-	// Start Claude using the runner
-	result, err := d.claudeRunner.Start(repo.TmuxSession, "merge-queue", claude.Config{
-		SessionID:        sessionID,
-		SystemPromptFile: promptFile,
-	})
-	if err != nil {
+	// Build CLI command
+	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
+		binaryPath, sessionID, promptFile)
+
+	// Send command to tmux window
+	target := fmt.Sprintf("%s:merge-queue", repo.TmuxSession)
+	cmd := exec.Command("tmux", "send-keys", "-t", target, claudeCmd, "C-m")
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to start Claude in tmux: %w", err)
+	}
+
+	// Wait a moment for Claude to start
+	time.Sleep(500 * time.Millisecond)
+
+	// Get PID
+	pid, err := d.tmux.GetPanePID(repo.TmuxSession, "merge-queue")
+	if err != nil {
+		return fmt.Errorf("failed to get Claude PID: %w", err)
 	}
 
 	// Register agent with state
@@ -1348,7 +1416,7 @@ func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, w
 		WorktreePath: workDir,
 		TmuxWindow:   "merge-queue",
 		SessionID:    sessionID,
-		PID:          result.PID,
+		PID:          pid,
 		CreatedAt:    time.Now(),
 	}
 

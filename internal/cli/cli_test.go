@@ -1042,19 +1042,16 @@ func TestNewWithPaths(t *testing.T) {
 		OutputDir:    filepath.Join(tmpDir, "output"),
 	}
 
-	// Test with empty claude path
+	// Test CLI creation (second parameter is now ignored, provider resolved at runtime)
 	cli := NewWithPaths(paths, "")
 	if cli == nil {
 		t.Fatal("CLI should not be nil")
 	}
-	if cli.claudeBinaryPath != "claude" {
-		t.Errorf("claudeBinaryPath = %s, want 'claude'", cli.claudeBinaryPath)
-	}
 
-	// Test with custom claude path
+	// Test with custom path (now ignored - provider resolved per-repo at runtime)
 	cli = NewWithPaths(paths, "/custom/path/claude")
-	if cli.claudeBinaryPath != "/custom/path/claude" {
-		t.Errorf("claudeBinaryPath = %s, want '/custom/path/claude'", cli.claudeBinaryPath)
+	if cli == nil {
+		t.Fatal("CLI should not be nil")
 	}
 
 	// Verify commands are registered
