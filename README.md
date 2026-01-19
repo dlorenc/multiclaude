@@ -150,7 +150,28 @@ multiclaude stop-all --clean   # Stop and remove all state files
 multiclaude init <github-url>              # Initialize repository tracking
 multiclaude init <github-url> [path] [name] # With custom local path or name
 multiclaude list                           # List tracked repositories
+multiclaude repo rm <name>                 # Remove a tracked repository
 ```
+
+### Workspaces
+
+Workspaces are persistent Claude sessions where you interact with the codebase, spawn workers, and manage your development flow. Each workspace has its own git worktree, tmux window, and Claude instance.
+
+```bash
+multiclaude workspace add <name>           # Create a new workspace
+multiclaude workspace add <name> --branch main  # Create from specific branch
+multiclaude workspace list                 # List all workspaces
+multiclaude workspace connect <name>       # Attach to a workspace
+multiclaude workspace rm <name>            # Remove workspace (warns if uncommitted work)
+multiclaude workspace                      # List workspaces (shorthand)
+multiclaude workspace <name>               # Connect to workspace (shorthand)
+```
+
+**Notes:**
+- Workspaces use the branch naming convention `workspace/<name>`
+- Workspace names follow git branch naming rules (no spaces, special characters, etc.)
+- A "default" workspace is created automatically when you run `multiclaude init`
+- Use `multiclaude attach <workspace-name>` as an alternative to `workspace connect`
 
 ### Workers
 
