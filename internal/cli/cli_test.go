@@ -325,6 +325,13 @@ func setupTestEnvironment(t *testing.T) (*CLI, *daemon.Daemon, func()) {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 
+	// Resolve symlinks to handle macOS /var -> /private/var symlink
+	// This ensures paths match when compared with os.Getwd() results
+	tmpDir, err = filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to resolve symlinks: %v", err)
+	}
+
 	// Create paths
 	paths := &config.Paths{
 		Root:         tmpDir,
@@ -562,6 +569,178 @@ func TestCLIAgentMessaging(t *testing.T) {
 	ackedMsg, _ := msgMgr.Get(repoName, "test-worker", msg.ID)
 	if ackedMsg.Status != messages.StatusAcked {
 		t.Errorf("Message status = %s, want acked", ackedMsg.Status)
+	}
+}
+
+func TestCLISendMessageTriggersImmediateRouting(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	repoName := "test-repo"
+	paths := d.GetPaths()
+
+	// Add a repo and agents
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo(repoName, repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	supervisor := state.Agent{
+		Type:         state.AgentTypeSupervisor,
+		WorktreePath: paths.RepoDir(repoName),
+		TmuxWindow:   "supervisor",
+		CreatedAt:    time.Now(),
+	}
+	if err := d.GetState().AddAgent(repoName, "supervisor", supervisor); err != nil {
+		t.Fatalf("Failed to add supervisor: %v", err)
+	}
+
+	worker := state.Agent{
+		Type:         state.AgentTypeWorker,
+		WorktreePath: filepath.Join(paths.WorktreesDir, repoName, "test-worker"),
+		TmuxWindow:   "test-worker",
+		Task:         "Test task",
+		CreatedAt:    time.Now(),
+	}
+	if err := d.GetState().AddAgent(repoName, "test-worker", worker); err != nil {
+		t.Fatalf("Failed to add worker: %v", err)
+	}
+
+	// Create the worktree directory structure so inferAgentContext works
+	worktreeDir := filepath.Join(paths.WorktreesDir, repoName, "test-worker")
+	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
+		t.Fatalf("Failed to create worktree dir: %v", err)
+	}
+
+	// Save current directory and change to worktree
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	if err := os.Chdir(worktreeDir); err != nil {
+		t.Fatalf("Failed to change to worktree: %v", err)
+	}
+
+	// Test that sendMessage can be called and triggers route_messages
+	// The route_messages call is best-effort, so we verify:
+	// 1. Message is created successfully
+	// 2. Socket call doesn't cause errors (it's ignored if it fails)
+
+	err := cli.sendMessage([]string{"supervisor", "Test message for immediate routing"})
+	if err != nil {
+		t.Fatalf("sendMessage failed: %v", err)
+	}
+
+	// Verify message was created
+	msgMgr := messages.NewManager(paths.MessagesDir)
+	msgs, err := msgMgr.List(repoName, "supervisor")
+	if err != nil {
+		t.Fatalf("Failed to list messages: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].From != "test-worker" {
+		t.Errorf("Message from = %s, want test-worker", msgs[0].From)
+	}
+	if msgs[0].Body != "Test message for immediate routing" {
+		t.Errorf("Message body = %s, want 'Test message for immediate routing'", msgs[0].Body)
+	}
+
+	// Verify the route_messages socket command works (daemon should be running)
+	client := socket.NewClient(paths.DaemonSock)
+	resp, err := client.Send(socket.Request{Command: "route_messages"})
+	if err != nil {
+		t.Fatalf("Failed to send route_messages: %v", err)
+	}
+	if !resp.Success {
+		t.Errorf("route_messages failed: %s", resp.Error)
+	}
+}
+
+func TestCLISendMessageFallbackWhenDaemonUnavailable(t *testing.T) {
+	// This test verifies that send-message works even when the daemon
+	// socket is unavailable (the socket call is best-effort)
+
+	// Create a temp directory for test paths
+	tmpDir, err := os.MkdirTemp("", "cli-sendmessage-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Resolve symlinks to handle macOS /var -> /private/var symlink
+	tmpDir, err = filepath.EvalSymlinks(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to resolve symlinks: %v", err)
+	}
+
+	// Create paths pointing to non-existent socket
+	paths := &config.Paths{
+		Root:         tmpDir,
+		DaemonPID:    filepath.Join(tmpDir, "daemon.pid"),
+		DaemonSock:   filepath.Join(tmpDir, "nonexistent.sock"), // Socket doesn't exist
+		DaemonLog:    filepath.Join(tmpDir, "daemon.log"),
+		StateFile:    filepath.Join(tmpDir, "state.json"),
+		ReposDir:     filepath.Join(tmpDir, "repos"),
+		WorktreesDir: filepath.Join(tmpDir, "wts"),
+		MessagesDir:  filepath.Join(tmpDir, "messages"),
+		OutputDir:    filepath.Join(tmpDir, "output"),
+	}
+
+	if err := paths.EnsureDirectories(); err != nil {
+		t.Fatalf("Failed to create directories: %v", err)
+	}
+
+	// Create state with repo and agent
+	st := state.New(paths.StateFile)
+
+	repoName := "fallback-repo"
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-fallback-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := st.AddRepo(repoName, repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Create worktree directory for agent context
+	worktreeDir := filepath.Join(paths.WorktreesDir, repoName, "sender-agent")
+	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
+		t.Fatalf("Failed to create worktree dir: %v", err)
+	}
+
+	// Create CLI
+	cli := NewWithPaths(paths, "")
+
+	// Change to worktree directory
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	if err := os.Chdir(worktreeDir); err != nil {
+		t.Fatalf("Failed to change to worktree: %v", err)
+	}
+
+	// Send message - should succeed even though daemon is not running
+	// The socket call will fail silently (best-effort)
+	err = cli.sendMessage([]string{"supervisor", "Fallback test message"})
+	if err != nil {
+		t.Fatalf("sendMessage failed when daemon unavailable: %v", err)
+	}
+
+	// Verify message was created (fallback to polling works)
+	msgMgr := messages.NewManager(paths.MessagesDir)
+	msgs, err := msgMgr.List(repoName, "supervisor")
+	if err != nil {
+		t.Fatalf("Failed to list messages: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Errorf("Expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Body != "Fallback test message" {
+		t.Errorf("Message body = %s, want 'Fallback test message'", msgs[0].Body)
 	}
 }
 

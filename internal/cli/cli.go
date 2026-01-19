@@ -1689,6 +1689,11 @@ func (c *CLI) sendMessage(args []string) error {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 
+	// Trigger immediate routing (best-effort, polling is fallback)
+	client := socket.NewClient(c.paths.DaemonSock)
+	_, _ = client.Send(socket.Request{Command: "route_messages"})
+	// Ignore errors - 2-minute polling fallback will catch it
+
 	fmt.Printf("Message sent to %s (ID: %s)\n", to, msg.ID)
 	return nil
 }

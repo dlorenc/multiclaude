@@ -503,6 +503,10 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	case "update_repo_config":
 		return d.handleUpdateRepoConfig(req)
 
+	case "route_messages":
+		go d.routeMessages()
+		return socket.Response{Success: true, Data: "Message routing triggered"}
+
 	default:
 		return socket.Response{
 			Success: false,
