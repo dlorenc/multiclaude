@@ -2106,27 +2106,43 @@ func TestCLIRepoRmNonexistent(t *testing.T) {
 	}
 }
 
-func TestInitRejectsEmptyRepoName(t *testing.T) {
+func TestInitRepoNameParsing(t *testing.T) {
 	tests := []struct {
 		name        string
 		url         string
-		wantErr     bool
+		wantError   bool
 		errContains string
 	}{
 		{
-			name:    "normal URL parses name correctly",
-			url:     "https://github.com/user/repo",
-			wantErr: false,
+			name:      "normal URL",
+			url:       "https://github.com/user/repo",
+			wantError: false, // Will fail later, but name parsing succeeds
 		},
 		{
-			name:    "URL with trailing slash parses name correctly",
-			url:     "https://github.com/user/repo/",
-			wantErr: false,
+			name:      "URL with .git suffix",
+			url:       "https://github.com/user/repo.git",
+			wantError: false,
 		},
 		{
-			name:        "URL with only slashes fails",
+			name:      "URL with trailing slash",
+			url:       "https://github.com/user/repo/",
+			wantError: false, // Should work - trailing slash is trimmed
+		},
+		{
+			name:      "URL with multiple trailing slashes",
+			url:       "https://github.com/user/repo///",
+			wantError: false, // TrimRight removes all trailing slashes
+		},
+		{
+			name:        "URL that is just slashes",
 			url:         "///",
-			wantErr:     true,
+			wantError:   true,
+			errContains: "could not determine repository name",
+		},
+		{
+			name:        "domain only URL with trailing slash",
+			url:         "https://github.com/",
+			wantError:   true,
 			errContains: "could not determine repository name",
 		},
 	}
@@ -2138,7 +2154,7 @@ func TestInitRejectsEmptyRepoName(t *testing.T) {
 
 			err := cli.Execute([]string{"init", tt.url})
 
-			if tt.wantErr {
+			if tt.wantError {
 				if err == nil {
 					t.Error("expected error but got none")
 				} else if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {

@@ -710,7 +710,12 @@ func (c *CLI) initRepo(args []string) error {
 		repoName = posArgs[1]
 	} else {
 		// Extract repo name from URL (e.g., github.com/user/repo -> repo)
+		// A valid GitHub URL has format: https://github.com/owner/repo
+		// When split by "/": ["https:", "", "github.com", "owner", "repo"] - 5+ parts
 		parts := strings.Split(githubURL, "/")
+		if len(parts) < 5 {
+			return errors.InvalidUsage("could not determine repository name from URL; please provide a name: multiclaude init <url> <name>")
+		}
 		repoName = strings.TrimSuffix(parts[len(parts)-1], ".git")
 	}
 
