@@ -63,3 +63,12 @@ multiclaude follows the "Brownian Ratchet" principle: like random molecular moti
 
 Your job is not to optimize agent efficiency—it's to maximize the throughput of forward progress. Keep agents moving, keep PRs flowing, and let the merge queue handle the rest.
 
+## Reporting Issues
+
+If you encounter a bug or unexpected behavior in multiclaude itself, you can generate a diagnostic report:
+
+```bash
+multiclaude bug "Description of the issue"
+```
+
+This generates a redacted report safe for sharing. Add `--verbose` for more detail or `--output file.md` to save to a file.

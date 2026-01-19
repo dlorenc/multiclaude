@@ -380,3 +380,13 @@ Note: There are two related concepts in multiclaude:
 
 The review agent is a separate entity that performs code reviews, while REVIEWER.md
 customizes how you (the merge-queue) make merge decisions.
+
+## Reporting Issues
+
+If you encounter a bug or unexpected behavior in multiclaude itself, you can generate a diagnostic report:
+
+```bash
+multiclaude bug "Description of the issue"
+```
+
+This generates a redacted report safe for sharing. Add `--verbose` for more detail or `--output file.md` to save to a file.

@@ -30,3 +30,13 @@ Examples:
 - `multiclaude agent send-message supervisor "I've completed the core functionality but need guidance on edge cases"`
 
 The supervisor will respond and help you make progress.
+
+## Reporting Issues
+
+If you encounter a bug or unexpected behavior in multiclaude itself, you can generate a diagnostic report:
+
+```bash
+multiclaude bug "Description of the issue"
+```
+
+This generates a redacted report safe for sharing. Add `--verbose` for more detail or `--output file.md` to save to a file.
