@@ -158,6 +158,19 @@ func (s *State) GetRepo(name string) (*Repository, bool) {
 	return repo, exists
 }
 
+// RemoveRepo removes a repository from the state
+func (s *State) RemoveRepo(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.Repos[name]; !exists {
+		return fmt.Errorf("repository %q not found", name)
+	}
+
+	delete(s.Repos, name)
+	return s.saveUnlocked()
+}
+
 // ListRepos returns all repository names
 func (s *State) ListRepos() []string {
 	s.mu.RLock()

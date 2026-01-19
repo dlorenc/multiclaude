@@ -422,6 +422,58 @@ func TestHandleAddRepo(t *testing.T) {
 	}
 }
 
+func TestHandleRemoveRepo(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// First add a repo
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "test-session",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Missing name
+	resp := d.handleRemoveRepo(socket.Request{
+		Command: "remove_repo",
+		Args:    map[string]interface{}{},
+	})
+	if resp.Success {
+		t.Error("handleRemoveRepo() should fail with missing name")
+	}
+
+	// Non-existent repo
+	resp = d.handleRemoveRepo(socket.Request{
+		Command: "remove_repo",
+		Args: map[string]interface{}{
+			"name": "nonexistent",
+		},
+	})
+	if resp.Success {
+		t.Error("handleRemoveRepo() should fail for nonexistent repo")
+	}
+
+	// Valid request
+	resp = d.handleRemoveRepo(socket.Request{
+		Command: "remove_repo",
+		Args: map[string]interface{}{
+			"name": "test-repo",
+		},
+	})
+	if !resp.Success {
+		t.Errorf("handleRemoveRepo() failed: %s", resp.Error)
+	}
+
+	// Verify repo was removed
+	_, exists := d.state.GetRepo("test-repo")
+	if exists {
+		t.Error("handleRemoveRepo() did not remove repo from state")
+	}
+}
+
 func TestHandleAddAgent(t *testing.T) {
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()

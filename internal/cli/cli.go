@@ -239,6 +239,22 @@ func (c *CLI) registerCommands() {
 		Run:         c.listRepos,
 	}
 
+	// Repository commands (repo subcommand)
+	repoCmd := &Command{
+		Name:        "repo",
+		Description: "Manage repositories",
+		Subcommands: make(map[string]*Command),
+	}
+
+	repoCmd.Subcommands["rm"] = &Command{
+		Name:        "rm",
+		Description: "Remove a tracked repository",
+		Usage:       "multiclaude repo rm <name>",
+		Run:         c.removeRepo,
+	}
+
+	c.rootCmd.Subcommands["repo"] = repoCmd
+
 	// Worker commands
 	workCmd := &Command{
 		Name:        "work",
@@ -940,6 +956,124 @@ func (c *CLI) listRepos(args []string) error {
 	}
 	table.Print()
 
+	return nil
+}
+
+func (c *CLI) removeRepo(args []string) error {
+	if len(args) < 1 {
+		return errors.InvalidUsage("usage: multiclaude repo rm <name>")
+	}
+
+	repoName := args[0]
+
+	fmt.Printf("Removing repository '%s'...\n", repoName)
+
+	// Get repo info from daemon
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "list_agents",
+		Args: map[string]interface{}{
+			"repo": repoName,
+		},
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("getting repo info", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to get repo info", fmt.Errorf("%s", resp.Error))
+	}
+
+	// Get list of agents
+	agents, _ := resp.Data.([]interface{})
+
+	// Check for any workers with uncommitted changes
+	for _, agent := range agents {
+		if agentMap, ok := agent.(map[string]interface{}); ok {
+			agentType, _ := agentMap["type"].(string)
+			if agentType == "worker" || agentType == "review" {
+				wtPath, _ := agentMap["worktree_path"].(string)
+				if wtPath != "" {
+					hasUncommitted, err := worktree.HasUncommittedChanges(wtPath)
+					if err == nil && hasUncommitted {
+						agentName, _ := agentMap["name"].(string)
+						fmt.Printf("\nWarning: Agent '%s' has uncommitted changes!\n", agentName)
+						fmt.Println("Files may be lost if you continue.")
+						fmt.Print("Continue with removal? [y/N]: ")
+
+						var response string
+						fmt.Scanln(&response)
+						if response != "y" && response != "Y" {
+							fmt.Println("Removal cancelled")
+							return nil
+						}
+						break // Only ask once
+					}
+				}
+			}
+		}
+	}
+
+	// Kill tmux session
+	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxClient := tmux.NewClient()
+	if exists, err := tmuxClient.HasSession(tmuxSession); err == nil && exists {
+		fmt.Printf("Killing tmux session: %s\n", tmuxSession)
+		if err := tmuxClient.KillSession(tmuxSession); err != nil {
+			fmt.Printf("Warning: failed to kill tmux session: %v\n", err)
+		}
+	}
+
+	// Remove worktrees for all agents
+	repoPath := c.paths.RepoDir(repoName)
+	wt := worktree.NewManager(repoPath)
+	for _, agent := range agents {
+		if agentMap, ok := agent.(map[string]interface{}); ok {
+			wtPath, _ := agentMap["worktree_path"].(string)
+			agentName, _ := agentMap["name"].(string)
+			if wtPath != "" && wtPath != repoPath {
+				fmt.Printf("Removing worktree for '%s': %s\n", agentName, wtPath)
+				if err := wt.Remove(wtPath, true); err != nil {
+					fmt.Printf("Warning: failed to remove worktree: %v\n", err)
+				}
+			}
+		}
+	}
+
+	// Remove the worktrees directory for this repo
+	wtDir := c.paths.WorktreeDir(repoName)
+	if _, err := os.Stat(wtDir); err == nil {
+		fmt.Printf("Removing worktrees directory: %s\n", wtDir)
+		if err := os.RemoveAll(wtDir); err != nil {
+			fmt.Printf("Warning: failed to remove worktrees directory: %v\n", err)
+		}
+	}
+
+	// Clean up messages directory for this repo
+	msgDir := filepath.Join(c.paths.MessagesDir, repoName)
+	if _, err := os.Stat(msgDir); err == nil {
+		fmt.Printf("Removing messages directory: %s\n", msgDir)
+		if err := os.RemoveAll(msgDir); err != nil {
+			fmt.Printf("Warning: failed to remove messages directory: %v\n", err)
+		}
+	}
+
+	// Unregister from daemon
+	resp, err = client.Send(socket.Request{
+		Command: "remove_repo",
+		Args: map[string]interface{}{
+			"name": repoName,
+		},
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("removing repo", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to remove repo from state", fmt.Errorf("%s", resp.Error))
+	}
+
+	fmt.Println("✓ Repository removed successfully")
+	fmt.Printf("\nNote: The cloned repository at '%s' was NOT deleted.\n", repoPath)
+	fmt.Println("Delete it manually if you no longer need it.")
 	return nil
 }
 

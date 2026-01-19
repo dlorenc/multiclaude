@@ -476,6 +476,9 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	case "add_repo":
 		return d.handleAddRepo(req)
 
+	case "remove_repo":
+		return d.handleRemoveRepo(req)
+
 	case "add_agent":
 		return d.handleAddAgent(req)
 
@@ -620,6 +623,21 @@ func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
 	}
 
 	d.logger.Info("Added repository: %s (merge queue: enabled=%v, track=%s)", name, mqConfig.Enabled, mqConfig.TrackMode)
+	return socket.Response{Success: true}
+}
+
+// handleRemoveRepo removes a repository from state
+func (d *Daemon) handleRemoveRepo(req socket.Request) socket.Response {
+	name, ok := req.Args["name"].(string)
+	if !ok || name == "" {
+		return socket.Response{Success: false, Error: "missing 'name': repository name is required"}
+	}
+
+	if err := d.state.RemoveRepo(name); err != nil {
+		return socket.Response{Success: false, Error: err.Error()}
+	}
+
+	d.logger.Info("Removed repository: %s", name)
 	return socket.Response{Success: true}
 }
 

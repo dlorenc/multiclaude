@@ -133,6 +133,52 @@ func TestGetRepoNonExistent(t *testing.T) {
 	}
 }
 
+func TestRemoveRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Add a repo
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "multiclaude-test-repo",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Verify it exists
+	_, exists := s.GetRepo("test-repo")
+	if !exists {
+		t.Fatal("Repository not found after add")
+	}
+
+	// Remove it
+	if err := s.RemoveRepo("test-repo"); err != nil {
+		t.Fatalf("RemoveRepo() failed: %v", err)
+	}
+
+	// Verify it's gone
+	_, exists = s.GetRepo("test-repo")
+	if exists {
+		t.Error("Repository still exists after removal")
+	}
+}
+
+func TestRemoveRepoNonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Removing a non-existent repo should fail
+	if err := s.RemoveRepo("nonexistent"); err == nil {
+		t.Error("RemoveRepo() succeeded for nonexistent repo")
+	}
+}
+
 func TestListRepos(t *testing.T) {
 	tmpDir := t.TempDir()
 	statePath := filepath.Join(tmpDir, "state.json")
