@@ -1127,6 +1127,65 @@ func TestArgumentTypeCoercion(t *testing.T) {
 	}
 }
 
+// TestHandleGetCurrentRepo tests handleGetCurrentRepo with various scenarios
+func TestHandleGetCurrentRepo(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupState  func(*state.State)
+		wantSuccess bool
+		wantError   string
+		wantData    string
+	}{
+		{
+			name:        "no_current_repo_set",
+			setupState:  nil,
+			wantSuccess: false,
+			wantError:   "no current repository set",
+		},
+		{
+			name: "current_repo_is_set",
+			setupState: func(s *state.State) {
+				s.AddRepo("my-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+				s.SetCurrentRepo("my-repo")
+			},
+			wantSuccess: true,
+			wantData:    "my-repo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, cleanup := setupTestDaemonWithState(t, tt.setupState)
+			defer cleanup()
+
+			resp := d.handleGetCurrentRepo(socket.Request{
+				Command: "get_current_repo",
+			})
+
+			if resp.Success != tt.wantSuccess {
+				t.Errorf("handleGetCurrentRepo() success = %v, want %v (error: %s)", resp.Success, tt.wantSuccess, resp.Error)
+			}
+
+			if tt.wantError != "" && resp.Error == "" {
+				t.Errorf("handleGetCurrentRepo() expected error containing %q, got empty error", tt.wantError)
+			}
+
+			if tt.wantSuccess {
+				data, ok := resp.Data.(string)
+				if !ok {
+					t.Errorf("handleGetCurrentRepo() data is not a string")
+				} else if data != tt.wantData {
+					t.Errorf("handleGetCurrentRepo() data = %q, want %q", data, tt.wantData)
+				}
+			}
+		})
+	}
+}
+
 // TestNilArgsMap tests handlers when Args is nil
 func TestNilArgsMap(t *testing.T) {
 	d, cleanup := setupTestDaemonWithState(t, nil)
