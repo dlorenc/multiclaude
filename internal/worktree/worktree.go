@@ -6,11 +6,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Manager handles git worktree operations
 type Manager struct {
 	repoPath string
+	mu       sync.Mutex // protects concurrent git worktree operations
 }
 
 // NewManager creates a new worktree manager for a repository
@@ -20,6 +22,9 @@ func NewManager(repoPath string) *Manager {
 
 // Create creates a new git worktree
 func (m *Manager) Create(path, branch string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	cmd := exec.Command("git", "worktree", "add", path, branch)
 	cmd.Dir = m.repoPath
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -30,6 +35,9 @@ func (m *Manager) Create(path, branch string) error {
 
 // CreateNewBranch creates a new worktree with a new branch
 func (m *Manager) CreateNewBranch(path, newBranch, startPoint string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	cmd := exec.Command("git", "worktree", "add", "-b", newBranch, path, startPoint)
 	cmd.Dir = m.repoPath
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -40,6 +48,9 @@ func (m *Manager) CreateNewBranch(path, newBranch, startPoint string) error {
 
 // Remove removes a git worktree
 func (m *Manager) Remove(path string, force bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	args := []string{"worktree", "remove", path}
 	if force {
 		args = append(args, "--force")
@@ -102,6 +113,9 @@ func (m *Manager) Exists(path string) (bool, error) {
 
 // Prune removes worktree information for missing paths
 func (m *Manager) Prune() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	cmd := exec.Command("git", "worktree", "prune")
 	cmd.Dir = m.repoPath
 	if output, err := cmd.CombinedOutput(); err != nil {
