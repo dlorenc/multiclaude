@@ -319,6 +319,13 @@ func TestRepoInitializationIntegration(t *testing.T) {
 		}
 	}
 
+	// Update bare repo HEAD to point to main (git init --bare defaults to master/main based on config)
+	cmd := exec.Command("git", "symbolic-ref", "HEAD", "refs/heads/main")
+	cmd.Dir = remoteRepoPath
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to update bare repo HEAD: %v", err)
+	}
+
 	// Create and start daemon
 	d, err := daemon.New(paths)
 	if err != nil {
@@ -446,13 +453,26 @@ func TestRepoInitializationWithMergeQueueDisabled(t *testing.T) {
 	setupTestGitRepo(t, sourceRepo)
 	cmd := exec.Command("git", "remote", "add", "origin", remoteRepoPath)
 	cmd.Dir = sourceRepo
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to add remote: %v", err)
+	}
 	cmd = exec.Command("git", "branch", "-M", "main")
 	cmd.Dir = sourceRepo
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to rename branch: %v", err)
+	}
 	cmd = exec.Command("git", "push", "-u", "origin", "main")
 	cmd.Dir = sourceRepo
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to push: %v", err)
+	}
+
+	// Update bare repo HEAD to point to main (git init --bare defaults to master/main based on config)
+	cmd = exec.Command("git", "symbolic-ref", "HEAD", "refs/heads/main")
+	cmd.Dir = remoteRepoPath
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to update bare repo HEAD: %v", err)
+	}
 
 	d, _ := daemon.New(paths)
 	d.Start()
