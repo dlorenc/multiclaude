@@ -1,0 +1,92 @@
+name: Large PR Warning
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  check-pr-size:
+    name: Check PR Size
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Check files changed and manage warning comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const MAX_FILES = 10;
+            const WARNING_MARKER = '<!-- large-pr-warning-bot -->';
+
+            // Get list of files changed in this PR
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100
+            });
+
+            const fileCount = files.length;
+            console.log(`PR #${context.payload.pull_request.number} has ${fileCount} files changed`);
+
+            // Get existing comments to find our warning comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number
+            });
+
+            const existingWarning = comments.find(comment =>
+              comment.body.includes(WARNING_MARKER)
+            );
+
+            if (fileCount > MAX_FILES) {
+              const warningBody = `${WARNING_MARKER}
+            ## :warning: Large PR Warning
+
+            This pull request modifies **${fileCount} files**, which exceeds the recommended maximum of ${MAX_FILES} files.
+
+            Large PRs are harder to review and more likely to introduce bugs. Consider:
+            - Breaking this into smaller, focused PRs
+            - Separating refactoring from feature changes
+            - Splitting unrelated changes into separate PRs
+
+            <details>
+            <summary>Files changed (${fileCount})</summary>
+
+            ${files.map(f => `- \`${f.filename}\` (+${f.additions}/-${f.deletions})`).join('\n')}
+
+            </details>`;
+
+              if (existingWarning) {
+                // Update existing comment
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingWarning.id,
+                  body: warningBody
+                });
+                console.log('Updated existing warning comment');
+              } else {
+                // Create new comment
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: warningBody
+                });
+                console.log('Created new warning comment');
+              }
+            } else {
+              // PR is now under threshold - remove warning if it exists
+              if (existingWarning) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingWarning.id
+                });
+                console.log('Removed warning comment - PR is now under threshold');
+              } else {
+                console.log('PR size is acceptable, no action needed');
+              }
+            }
