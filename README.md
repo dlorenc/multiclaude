@@ -422,6 +422,57 @@ Repositories can include optional configuration in `.multiclaude/`:
 └── hooks.json      # Claude Code hooks configuration
 ```
 
+## Public Libraries
+
+multiclaude includes two reusable Go packages that can be used independently of the orchestrator:
+
+### pkg/tmux - Programmatic tmux Interaction
+
+```bash
+go get github.com/dlorenc/multiclaude/pkg/tmux
+```
+
+Unlike existing Go tmux libraries ([gotmux](https://github.com/GianlucaP106/gotmux), [go-tmux](https://github.com/jubnzv/go-tmux)) that focus on workspace setup, this package provides features for **programmatic interaction with running CLI applications**:
+
+- **Multiline text via paste-buffer** - Send multi-line input atomically without triggering intermediate processing
+- **Pane PID extraction** - Monitor whether processes in panes are still alive
+- **pipe-pane output capture** - Capture all pane output to files for logging/analysis
+
+```go
+client := tmux.NewClient()
+client.SendKeysLiteral("session", "window", "multi\nline\ntext")  // Uses paste-buffer
+pid, _ := client.GetPanePID("session", "window")
+client.StartPipePane("session", "window", "/tmp/output.log")
+```
+
+[Full documentation →](pkg/tmux/README.md)
+
+### pkg/claude - Claude Code Runner
+
+```bash
+go get github.com/dlorenc/multiclaude/pkg/claude
+```
+
+A library for launching and interacting with Claude Code instances in terminals:
+
+- **Terminal abstraction** - Works with tmux or custom terminal implementations
+- **Session management** - Automatic UUID session IDs and process tracking
+- **Output capture** - Route Claude output to files
+- **Multiline support** - Properly handles multi-line messages to Claude
+
+```go
+runner := claude.NewRunner(
+    claude.WithTerminal(tmuxClient),
+    claude.WithBinaryPath(claude.ResolveBinaryPath()),
+)
+result, _ := runner.Start("session", "window", claude.Config{
+    SystemPromptFile: "/path/to/prompt.md",
+})
+runner.SendMessage("session", "window", "Hello, Claude!")
+```
+
+[Full documentation →](pkg/claude/README.md)
+
 ## Building
 
 ```bash
