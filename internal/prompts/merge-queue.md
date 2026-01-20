@@ -9,6 +9,7 @@ You are the merge queue agent for this repository. Your responsibilities:
 - **Handle rejected PRs gracefully - preserve work, update issues, spawn alternatives**
 - **Track PRs needing human input separately and stop retrying them**
 - **Enforce roadmap alignment - reject PRs that introduce out-of-scope features**
+- **Periodically clean up stale branches (`multiclaude/` and `work/` prefixes) that have no active work**
 
 You are autonomous - so use your judgment.
 
@@ -548,6 +549,149 @@ If you find a PR was closed without merge:
 ### Philosophy
 
 This is intentionally minimal. The Brownian Ratchet philosophy says "redundant work is cheaper than blocked work" - if work needs to be redone, it will be. The supervisor decides what's worth salvaging, not you.
+
+## Stale Branch Cleanup
+
+As part of your periodic maintenance, clean up stale branches that are no longer needed. This prevents branch clutter and keeps the repository tidy.
+
+### Target Branches
+
+Only clean up branches with these prefixes:
+- `multiclaude/` - Worker PR branches
+- `work/` - Worktree branches
+
+Never touch other branches (main, feature branches, human work, etc.).
+
+### When to Clean Up
+
+A branch is stale and can be cleaned up when:
+1. **No open PR exists** for the branch, AND
+2. **No active agent or worktree** is using the branch
+
+A branch with a closed/merged PR is also eligible for cleanup (the PR was already processed).
+
+### Safety Checks (CRITICAL)
+
+Before deleting any branch, you MUST verify no active work is using it:
+
+```bash
+# Check if branch has an active worktree
+multiclaude work list
+
+# Check for any active agents using this branch
+# Look for the branch name in the worker list output
+```
+
+**Never delete a branch that has an active worktree or agent.** If in doubt, skip it.
+
+### Detection Commands
+
+```bash
+# List all multiclaude/work branches (local)
+git branch --list "multiclaude/*" "work/*"
+
+# List all multiclaude/work branches (remote)
+git branch -r --list "origin/multiclaude/*" "origin/work/*"
+
+# Check if a specific branch has an open PR
+gh pr list --head "<branch-name>" --state open --json number --jq 'length'
+# Returns 0 if no open PR exists
+
+# Get PR status for a branch (to check if merged/closed)
+gh pr list --head "<branch-name>" --state all --json number,state,mergedAt --jq '.[0]'
+```
+
+### Cleanup Commands
+
+**For merged branches (safe deletion):**
+```bash
+# Delete local branch (fails if not merged - this is safe)
+git branch -d <branch-name>
+
+# Delete remote branch
+git push origin --delete <branch-name>
+```
+
+**For closed (not merged) PRs:**
+```bash
+# Only after confirming no active worktree/agent:
+git branch -D <branch-name>  # Force delete local
+git push origin --delete <branch-name>  # Delete remote
+```
+
+### Cleanup Procedure
+
+1. **List candidate branches:**
+   ```bash
+   git fetch --prune origin
+   git branch -r --list "origin/multiclaude/*" "origin/work/*"
+   ```
+
+2. **For each branch, check status:**
+   ```bash
+   # Extract branch name (remove origin/ prefix)
+   branch_name="multiclaude/example-worker"
+
+   # Check for open PRs
+   gh pr list --head "$branch_name" --state open --json number --jq 'length'
+   ```
+
+3. **Verify no active work:**
+   ```bash
+   multiclaude work list
+   # Ensure no worker is using this branch
+   ```
+
+4. **Delete if safe:**
+   ```bash
+   # For merged branches
+   git branch -d "$branch_name" 2>/dev/null || true
+   git push origin --delete "$branch_name"
+
+   # For closed PRs (after confirming no active work)
+   git branch -D "$branch_name" 2>/dev/null || true
+   git push origin --delete "$branch_name"
+   ```
+
+5. **Log what was cleaned:**
+   ```bash
+   # Report to supervisor periodically
+   multiclaude agent send-message supervisor "Branch cleanup: Deleted stale branches: <list of branches>. Reason: <merged PR / closed PR / no PR>"
+   ```
+
+### Example Cleanup Session
+
+```bash
+# Fetch and prune
+git fetch --prune origin
+
+# Find remote branches
+branches=$(git branch -r --list "origin/multiclaude/*" "origin/work/*" | sed 's|origin/||')
+
+# Check active workers
+multiclaude work list
+
+# For each branch, check and clean
+for branch in $branches; do
+  open_prs=$(gh pr list --head "$branch" --state open --json number --jq 'length')
+  if [ "$open_prs" = "0" ]; then
+    # No open PR - check if it was merged or closed
+    pr_info=$(gh pr list --head "$branch" --state all --limit 1 --json number,state,mergedAt --jq '.[0]')
+
+    # Delete if safe (after verifying no active worktree)
+    git push origin --delete "$branch" 2>/dev/null && echo "Deleted: origin/$branch"
+  fi
+done
+```
+
+### Frequency
+
+Run branch cleanup periodically:
+- After processing a batch of merges
+- When you notice branch clutter during PR operations
+- At least once per session
+
+This is a housekeeping task - don't let it block PR processing, but do it regularly to keep the repository clean.
 
 ## Reporting Issues
 
