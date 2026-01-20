@@ -86,7 +86,7 @@ func setupIntegrationTest(t *testing.T, repoName string) (*cli.CLI, *daemon.Daem
 	}
 
 	// Create CLI with test paths
-	c := cli.NewWithPaths(paths, "")
+	c := cli.NewWithPaths(paths)
 
 	cleanup := func() {
 		tmuxClient.KillSession(tmuxSession)
@@ -339,7 +339,7 @@ func TestRepoInitializationIntegration(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Create CLI
-	c := cli.NewWithPaths(paths, "")
+	c := cli.NewWithPaths(paths)
 
 	// Initialize repo using local bare repo as "GitHub URL"
 	repoName := "init-test-repo"
@@ -479,7 +479,7 @@ func TestRepoInitializationWithMergeQueueDisabled(t *testing.T) {
 	defer d.Stop()
 	time.Sleep(100 * time.Millisecond)
 
-	c := cli.NewWithPaths(paths, "")
+	c := cli.NewWithPaths(paths)
 
 	repoName := "nomq-repo"
 	err = c.Execute([]string{"init", remoteRepoPath, repoName, "--no-merge-queue"})
