@@ -1,0 +1,93 @@
+name: Large PR Warning
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  check-pr-size:
+    name: Check PR Size
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Check number of changed files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            // Get list of files changed in the PR
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner,
+              repo,
+              pull_number,
+              per_page: 100
+            });
+
+            const fileCount = files.length;
+            const threshold = 10;
+
+            console.log(`PR #${pull_number} has ${fileCount} changed files`);
+
+            // Check if we already have a warning comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number: pull_number
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('<!-- large-pr-warning -->')
+            );
+
+            if (fileCount > threshold) {
+              const warningBody = [
+                '<!-- large-pr-warning -->',
+                '## Large PR Warning',
+                '',
+                `This pull request changes **${fileCount} files**, which exceeds the recommended limit of ${threshold} files.`,
+                '',
+                'Large PRs can be:',
+                '- Harder to review thoroughly',
+                '- More likely to introduce bugs',
+                '- Slower to get merged',
+                '',
+                'Consider breaking this PR into smaller, focused changes if possible.',
+                '',
+                '---',
+                '*This is an automated message. The PR can still be merged if the changes are justified.*'
+              ].join('\n');
+
+              if (botComment) {
+                // Update existing comment
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: botComment.id,
+                  body: warningBody
+                });
+                console.log('Updated existing warning comment');
+              } else {
+                // Create new comment
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: pull_number,
+                  body: warningBody
+                });
+                console.log('Created warning comment');
+              }
+            } else if (botComment) {
+              // PR is now under threshold, remove the warning
+              await github.rest.issues.deleteComment({
+                owner,
+                repo,
+                comment_id: botComment.id
+              });
+              console.log('Removed warning comment as PR is now under threshold');
+            } else {
+              console.log(`PR size (${fileCount} files) is within acceptable limits`);
+            }
