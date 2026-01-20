@@ -463,6 +463,29 @@ func (c *CLI) registerCommands() {
 		Run:         c.restartClaude,
 	}
 
+	// PR cleanup commands
+	prsCmd := &Command{
+		Name:        "prs",
+		Description: "Manage closed PRs",
+		Subcommands: make(map[string]*Command),
+	}
+
+	prsCmd.Subcommands["cleanup"] = &Command{
+		Name:        "cleanup",
+		Description: "Process closed PRs for recovery or cleanup",
+		Usage:       "multiclaude prs cleanup [--repo <name>] [--dry-run]",
+		Run:         c.prsCleanup,
+	}
+
+	prsCmd.Subcommands["list"] = &Command{
+		Name:        "list",
+		Description: "List closed PRs and their processing status",
+		Usage:       "multiclaude prs list --repo <name>",
+		Run:         c.prsList,
+	}
+
+	c.rootCmd.Subcommands["prs"] = prsCmd
+
 	// Debug command
 	c.rootCmd.Subcommands["docs"] = &Command{
 		Name:        "docs",
@@ -4077,6 +4100,207 @@ func (c *CLI) restartClaude(args []string) error {
 	cmd.Dir = agent.WorktreePath
 
 	return cmd.Run()
+}
+
+// prsCleanup processes closed PRs for recovery or cleanup
+func (c *CLI) prsCleanup(args []string) error {
+	var repoName string
+	var dryRun bool
+
+	// Parse args
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--repo", "-r":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--repo requires a repository name")
+			}
+			repoName = args[i+1]
+			i++
+		case "--dry-run":
+			dryRun = true
+		}
+	}
+
+	// Try to infer repo from cwd if not specified
+	if repoName == "" {
+		if inferred, err := c.inferRepoFromCwd(); err == nil {
+			repoName = inferred
+		}
+	}
+
+	// Connect to daemon
+	client := socket.NewClient(c.paths.DaemonSock)
+
+	reqArgs := map[string]interface{}{
+		"dry_run": dryRun,
+	}
+	if repoName != "" {
+		reqArgs["repo"] = repoName
+	}
+
+	resp, err := client.Send(socket.Request{
+		Command: "process_closed_prs",
+		Args:    reqArgs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w\nTry: multiclaude start", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("failed to process closed PRs: %s", resp.Error)
+	}
+
+	// Parse response
+	data, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("unexpected response format")
+	}
+
+	processed, _ := data["processed"].(float64)
+	isDryRun, _ := data["dry_run"].(bool)
+	results, _ := data["results"].([]interface{})
+
+	if isDryRun {
+		fmt.Println("Dry run - no changes will be made\n")
+	}
+
+	if int(processed) == 0 {
+		fmt.Println("No closed PRs need processing")
+		return nil
+	}
+
+	fmt.Printf("Found %d closed PR(s) to process:\n\n", int(processed))
+
+	for _, r := range results {
+		result, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		prNum, _ := result["pr_number"].(float64)
+		title, _ := result["title"].(string)
+		branch, _ := result["branch"].(string)
+		shouldRecover, _ := result["should_recover"].(bool)
+		reason, _ := result["reason"].(string)
+		action, _ := result["action"].(string)
+		additions, _ := result["additions"].(float64)
+		deletions, _ := result["deletions"].(float64)
+
+		fmt.Printf("PR #%d: %s\n", int(prNum), title)
+		fmt.Printf("  Branch: %s\n", branch)
+		fmt.Printf("  Changes: +%d / -%d\n", int(additions), int(deletions))
+		fmt.Printf("  Decision: %s\n", reason)
+
+		if isDryRun {
+			if shouldRecover {
+				fmt.Printf("  Would: Create recovery issue\n")
+			} else {
+				fmt.Printf("  Would: Delete branch\n")
+			}
+		} else {
+			switch action {
+			case "recovered":
+				issueURL, _ := result["issue_url"].(string)
+				fmt.Printf("  Action: Created recovery issue: %s\n", issueURL)
+			case "cleaned":
+				fmt.Printf("  Action: Deleted branch %s\n", branch)
+			case "error":
+				errMsg, _ := result["error"].(string)
+				fmt.Printf("  Error: %s\n", errMsg)
+			}
+		}
+		fmt.Println()
+	}
+
+	return nil
+}
+
+// prsList lists closed PRs and their processing status
+func (c *CLI) prsList(args []string) error {
+	var repoName string
+
+	// Parse args
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--repo", "-r":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--repo requires a repository name")
+			}
+			repoName = args[i+1]
+			i++
+		}
+	}
+
+	// Try to infer repo from cwd if not specified
+	if repoName == "" {
+		if inferred, err := c.inferRepoFromCwd(); err == nil {
+			repoName = inferred
+		}
+	}
+
+	if repoName == "" {
+		return fmt.Errorf("repository name is required. Use --repo or run from within a repository worktree")
+	}
+
+	// Connect to daemon
+	client := socket.NewClient(c.paths.DaemonSock)
+
+	resp, err := client.Send(socket.Request{
+		Command: "list_closed_prs",
+		Args: map[string]interface{}{
+			"repo": repoName,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w\nTry: multiclaude start", err)
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("failed to list closed PRs: %s", resp.Error)
+	}
+
+	results, ok := resp.Data.([]interface{})
+	if !ok || len(results) == 0 {
+		fmt.Println("No closed PRs found")
+		return nil
+	}
+
+	fmt.Printf("Closed PRs for %s:\n\n", repoName)
+
+	for _, r := range results {
+		result, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		prNum, _ := result["number"].(float64)
+		title, _ := result["title"].(string)
+		branch, _ := result["branch"].(string)
+		url, _ := result["url"].(string)
+		additions, _ := result["additions"].(float64)
+		deletions, _ := result["deletions"].(float64)
+		processed, _ := result["processed"].(bool)
+
+		fmt.Printf("PR #%d: %s\n", int(prNum), title)
+		fmt.Printf("  Branch: %s\n", branch)
+		fmt.Printf("  Changes: +%d / -%d\n", int(additions), int(deletions))
+		fmt.Printf("  URL: %s\n", url)
+
+		if processed {
+			action, _ := result["action"].(string)
+			reason, _ := result["reason"].(string)
+			fmt.Printf("  Status: Processed (%s)\n", action)
+			fmt.Printf("  Reason: %s\n", reason)
+			if issueURL, ok := result["issue_url"].(string); ok && issueURL != "" {
+				fmt.Printf("  Recovery Issue: %s\n", issueURL)
+			}
+		} else {
+			fmt.Printf("  Status: Not processed\n")
+		}
+		fmt.Println()
+	}
+
+	return nil
 }
 
 func (c *CLI) showDocs(args []string) error {

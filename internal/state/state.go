@@ -83,13 +83,34 @@ type Agent struct {
 	ReadyForCleanup bool      `json:"ready_for_cleanup,omitempty"` // Only for workers
 }
 
+// ClosedPRAction represents the action taken on a closed PR
+type ClosedPRAction string
+
+const (
+	// ClosedPRActionRecovered indicates the PR work was flagged for recovery
+	ClosedPRActionRecovered ClosedPRAction = "recovered"
+	// ClosedPRActionCleaned indicates the PR branch was cleaned up
+	ClosedPRActionCleaned ClosedPRAction = "cleaned"
+	// ClosedPRActionSkipped indicates the PR was skipped (e.g., already processed)
+	ClosedPRActionSkipped ClosedPRAction = "skipped"
+)
+
+// ProcessedClosedPR tracks a closed PR that has been processed
+type ProcessedClosedPR struct {
+	ProcessedAt time.Time      `json:"processed_at"`
+	Action      ClosedPRAction `json:"action"`
+	Reason      string         `json:"reason,omitempty"`
+	IssueURL    string         `json:"issue_url,omitempty"` // Only for recovered PRs
+}
+
 // Repository represents a tracked repository's state
 type Repository struct {
-	GithubURL        string           `json:"github_url"`
-	TmuxSession      string           `json:"tmux_session"`
-	Agents           map[string]Agent `json:"agents"`
-	MergeQueueConfig MergeQueueConfig `json:"merge_queue_config,omitempty"`
-	ProviderConfig   ProviderConfig   `json:"provider_config,omitempty"`
+	GithubURL          string                       `json:"github_url"`
+	TmuxSession        string                       `json:"tmux_session"`
+	Agents             map[string]Agent             `json:"agents"`
+	MergeQueueConfig   MergeQueueConfig             `json:"merge_queue_config,omitempty"`
+	ProviderConfig     ProviderConfig               `json:"provider_config,omitempty"`
+	ProcessedClosedPRs map[int]ProcessedClosedPR    `json:"processed_closed_prs,omitempty"`
 }
 
 // State represents the entire daemon state
@@ -425,6 +446,70 @@ func (s *State) UpdateProviderConfig(repoName string, config ProviderConfig) err
 
 	repo.ProviderConfig = config
 	return s.saveUnlocked()
+}
+
+// IsClosedPRProcessed checks if a closed PR has already been processed
+func (s *State) IsClosedPRProcessed(repoName string, prNumber int) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return false
+	}
+
+	if repo.ProcessedClosedPRs == nil {
+		return false
+	}
+
+	_, processed := repo.ProcessedClosedPRs[prNumber]
+	return processed
+}
+
+// MarkClosedPRProcessed marks a closed PR as processed
+func (s *State) MarkClosedPRProcessed(repoName string, prNumber int, action ClosedPRAction, reason string, issueURL string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return fmt.Errorf("repository %q not found", repoName)
+	}
+
+	if repo.ProcessedClosedPRs == nil {
+		repo.ProcessedClosedPRs = make(map[int]ProcessedClosedPR)
+	}
+
+	repo.ProcessedClosedPRs[prNumber] = ProcessedClosedPR{
+		ProcessedAt: time.Now(),
+		Action:      action,
+		Reason:      reason,
+		IssueURL:    issueURL,
+	}
+
+	return s.saveUnlocked()
+}
+
+// GetProcessedClosedPRs returns all processed closed PRs for a repository
+func (s *State) GetProcessedClosedPRs(repoName string) (map[int]ProcessedClosedPR, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return nil, fmt.Errorf("repository %q not found", repoName)
+	}
+
+	if repo.ProcessedClosedPRs == nil {
+		return make(map[int]ProcessedClosedPR), nil
+	}
+
+	// Return a copy to avoid concurrent access issues
+	result := make(map[int]ProcessedClosedPR, len(repo.ProcessedClosedPRs))
+	for k, v := range repo.ProcessedClosedPRs {
+		result[k] = v
+	}
+	return result, nil
 }
 
 // saveUnlocked saves state without acquiring lock (caller must hold lock)

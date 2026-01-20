@@ -976,3 +976,159 @@ func TestCurrentRepoPersistence(t *testing.T) {
 		t.Errorf("Loaded GetCurrentRepo() = %q, want 'test-repo'", current)
 	}
 }
+
+func TestClosedPRProcessing(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "multiclaude-test-repo",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Initially, no PRs are processed
+	if s.IsClosedPRProcessed("test-repo", 123) {
+		t.Error("Expected PR 123 to not be processed initially")
+	}
+
+	// Mark a PR as processed
+	err := s.MarkClosedPRProcessed("test-repo", 123, ClosedPRActionRecovered, "Test reason", "https://issue.url")
+	if err != nil {
+		t.Fatalf("MarkClosedPRProcessed() failed: %v", err)
+	}
+
+	// Now it should be processed
+	if !s.IsClosedPRProcessed("test-repo", 123) {
+		t.Error("Expected PR 123 to be processed after marking")
+	}
+
+	// Mark another PR as cleaned
+	err = s.MarkClosedPRProcessed("test-repo", 456, ClosedPRActionCleaned, "Cleanup reason", "")
+	if err != nil {
+		t.Fatalf("MarkClosedPRProcessed() failed: %v", err)
+	}
+
+	// Get all processed PRs
+	processed, err := s.GetProcessedClosedPRs("test-repo")
+	if err != nil {
+		t.Fatalf("GetProcessedClosedPRs() failed: %v", err)
+	}
+
+	if len(processed) != 2 {
+		t.Errorf("Expected 2 processed PRs, got %d", len(processed))
+	}
+
+	// Verify the first PR
+	pr123, ok := processed[123]
+	if !ok {
+		t.Error("Expected PR 123 to be in processed map")
+	} else {
+		if pr123.Action != ClosedPRActionRecovered {
+			t.Errorf("Expected PR 123 action to be 'recovered', got %s", pr123.Action)
+		}
+		if pr123.Reason != "Test reason" {
+			t.Errorf("Expected PR 123 reason to be 'Test reason', got %s", pr123.Reason)
+		}
+		if pr123.IssueURL != "https://issue.url" {
+			t.Errorf("Expected PR 123 issue URL to be 'https://issue.url', got %s", pr123.IssueURL)
+		}
+	}
+
+	// Verify the second PR
+	pr456, ok := processed[456]
+	if !ok {
+		t.Error("Expected PR 456 to be in processed map")
+	} else {
+		if pr456.Action != ClosedPRActionCleaned {
+			t.Errorf("Expected PR 456 action to be 'cleaned', got %s", pr456.Action)
+		}
+	}
+}
+
+func TestClosedPRProcessingPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Create state and mark a PR as processed
+	s := New(statePath)
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "multiclaude-test-repo",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	err := s.MarkClosedPRProcessed("test-repo", 789, ClosedPRActionRecovered, "Persistence test", "https://issue.url/789")
+	if err != nil {
+		t.Fatalf("MarkClosedPRProcessed() failed: %v", err)
+	}
+
+	// Load state from disk
+	loaded, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Verify the processed PR persisted
+	if !loaded.IsClosedPRProcessed("test-repo", 789) {
+		t.Error("Expected PR 789 to be processed after reloading state")
+	}
+
+	processed, err := loaded.GetProcessedClosedPRs("test-repo")
+	if err != nil {
+		t.Fatalf("GetProcessedClosedPRs() failed: %v", err)
+	}
+
+	pr789, ok := processed[789]
+	if !ok {
+		t.Error("Expected PR 789 to be in processed map after reloading")
+	} else {
+		if pr789.IssueURL != "https://issue.url/789" {
+			t.Errorf("Expected PR 789 issue URL to persist, got %s", pr789.IssueURL)
+		}
+	}
+}
+
+func TestClosedPRActionConstants(t *testing.T) {
+	// Verify the constants are as expected
+	if ClosedPRActionRecovered != "recovered" {
+		t.Errorf("ClosedPRActionRecovered = %q, want 'recovered'", ClosedPRActionRecovered)
+	}
+	if ClosedPRActionCleaned != "cleaned" {
+		t.Errorf("ClosedPRActionCleaned = %q, want 'cleaned'", ClosedPRActionCleaned)
+	}
+	if ClosedPRActionSkipped != "skipped" {
+		t.Errorf("ClosedPRActionSkipped = %q, want 'skipped'", ClosedPRActionSkipped)
+	}
+}
+
+func TestGetProcessedClosedPRsNonExistentRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	_, err := s.GetProcessedClosedPRs("nonexistent")
+	if err == nil {
+		t.Error("Expected error for nonexistent repo")
+	}
+}
+
+func TestMarkClosedPRProcessedNonExistentRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	err := s.MarkClosedPRProcessed("nonexistent", 123, ClosedPRActionRecovered, "test", "")
+	if err == nil {
+		t.Error("Expected error for nonexistent repo")
+	}
+}

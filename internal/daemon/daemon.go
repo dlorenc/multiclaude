@@ -14,6 +14,7 @@ import (
 
 	"github.com/dlorenc/multiclaude/internal/logging"
 	"github.com/dlorenc/multiclaude/internal/messages"
+	"github.com/dlorenc/multiclaude/internal/pr"
 	"github.com/dlorenc/multiclaude/internal/prompts"
 	"github.com/dlorenc/multiclaude/internal/provider"
 	"github.com/dlorenc/multiclaude/internal/socket"
@@ -101,11 +102,12 @@ func (d *Daemon) Start() error {
 	d.restoreTrackedRepos()
 
 	// Start core loops after restore completes
-	d.wg.Add(4)
+	d.wg.Add(5)
 	go d.healthCheckLoop()
 	go d.messageRouterLoop()
 	go d.wakeLoop()
 	go d.serverLoop()
+	go d.closedPRLoop()
 
 	return nil
 }
@@ -449,6 +451,114 @@ func (d *Daemon) wakeAgents() {
 	}
 }
 
+// closedPRLoop periodically checks for closed PRs that need recovery or cleanup
+func (d *Daemon) closedPRLoop() {
+	defer d.wg.Done()
+	d.logger.Info("Starting closed PR cleanup loop")
+
+	// Run every 30 minutes
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	// Run once on startup after a delay to let things stabilize
+	time.Sleep(5 * time.Minute)
+	d.processClosedPRs()
+
+	for {
+		select {
+		case <-ticker.C:
+			d.processClosedPRs()
+		case <-d.ctx.Done():
+			d.logger.Info("Closed PR cleanup loop stopped")
+			return
+		}
+	}
+}
+
+// processClosedPRs checks all repos for closed PRs and processes them
+func (d *Daemon) processClosedPRs() {
+	d.logger.Info("Processing closed PRs")
+
+	repos := d.state.GetAllRepos()
+	for repoName, repo := range repos {
+		// Skip repos without merge queue enabled
+		if !repo.MergeQueueConfig.Enabled {
+			continue
+		}
+
+		repoPath := d.paths.RepoDir(repoName)
+		if err := d.processRepoClosedPRs(repoName, repoPath); err != nil {
+			d.logger.Error("Failed to process closed PRs for %s: %v", repoName, err)
+		}
+	}
+}
+
+// processRepoClosedPRs processes closed PRs for a single repository
+func (d *Daemon) processRepoClosedPRs(repoName, repoPath string) error {
+	analyzer := pr.NewAnalyzer(repoPath)
+
+	// List closed PRs
+	closedPRs, err := analyzer.ListClosedPRs()
+	if err != nil {
+		return fmt.Errorf("failed to list closed PRs: %w", err)
+	}
+
+	d.logger.Debug("Found %d closed PRs for %s", len(closedPRs), repoName)
+
+	for _, closedPR := range closedPRs {
+		// Skip if already processed
+		if d.state.IsClosedPRProcessed(repoName, closedPR.Number) {
+			continue
+		}
+
+		// Analyze the PR
+		if err := analyzer.AnalyzePR(&closedPR); err != nil {
+			d.logger.Warn("Failed to analyze PR #%d: %v", closedPR.Number, err)
+		}
+
+		// Decide what to do
+		decision := analyzer.DecideRecovery(&closedPR)
+
+		if decision.ShouldRecover {
+			// Create a recovery issue
+			issueURL, err := analyzer.CreateRecoveryIssue(&closedPR, decision.Reason)
+			if err != nil {
+				d.logger.Error("Failed to create recovery issue for PR #%d: %v", closedPR.Number, err)
+				continue
+			}
+
+			d.logger.Info("Created recovery issue for PR #%d: %s", closedPR.Number, issueURL)
+
+			// Mark as processed
+			if err := d.state.MarkClosedPRProcessed(repoName, closedPR.Number, state.ClosedPRActionRecovered, decision.Reason, issueURL); err != nil {
+				d.logger.Error("Failed to mark PR #%d as processed: %v", closedPR.Number, err)
+			}
+
+			// Notify supervisor about the recovery
+			msgMgr := d.getMessageManager()
+			msg := fmt.Sprintf("Recovered work from closed PR #%d (%s). Issue created: %s", closedPR.Number, closedPR.Title, issueURL)
+			if _, err := msgMgr.Send(repoName, "daemon", "supervisor", msg); err != nil {
+				d.logger.Warn("Failed to notify supervisor about recovery: %v", err)
+			}
+		} else {
+			// Clean up the branch
+			if err := analyzer.DeleteBranch(closedPR.HeadRefName); err != nil {
+				d.logger.Error("Failed to delete branch %s for PR #%d: %v", closedPR.HeadRefName, closedPR.Number, err)
+				continue
+			}
+
+			d.logger.Info("Cleaned up branch %s for closed PR #%d: %s", closedPR.HeadRefName, closedPR.Number, decision.Reason)
+
+			// Mark as processed
+			if err := d.state.MarkClosedPRProcessed(repoName, closedPR.Number, state.ClosedPRActionCleaned, decision.Reason, ""); err != nil {
+				d.logger.Error("Failed to mark PR #%d as processed: %v", closedPR.Number, err)
+			}
+		}
+	}
+
+	return nil
+}
+
 // handleRequest handles incoming socket requests
 func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	d.logger.Debug("Handling request: %s", req.Command)
@@ -512,6 +622,12 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	case "route_messages":
 		go d.routeMessages()
 		return socket.Response{Success: true, Data: "Message routing triggered"}
+
+	case "process_closed_prs":
+		return d.handleProcessClosedPRs(req)
+
+	case "list_closed_prs":
+		return d.handleListClosedPRs(req)
 
 	default:
 		return socket.Response{
@@ -1100,6 +1216,197 @@ func (d *Daemon) handleClearCurrentRepo(req socket.Request) socket.Response {
 
 	d.logger.Info("Cleared current repository")
 	return socket.Response{Success: true}
+}
+
+// handleProcessClosedPRs processes closed PRs for recovery or cleanup
+func (d *Daemon) handleProcessClosedPRs(req socket.Request) socket.Response {
+	repoName, hasRepo := req.Args["repo"].(string)
+	dryRun, _ := req.Args["dry_run"].(bool)
+
+	var results []map[string]interface{}
+
+	if hasRepo && repoName != "" {
+		// Process single repo
+		repo, exists := d.state.GetRepo(repoName)
+		if !exists {
+			return socket.Response{Success: false, Error: fmt.Sprintf("repository %q not found", repoName)}
+		}
+
+		repoPath := d.paths.RepoDir(repoName)
+		repoResults, err := d.processClosedPRsWithResults(repoName, repoPath, dryRun)
+		if err != nil {
+			return socket.Response{Success: false, Error: err.Error()}
+		}
+		results = repoResults
+
+		// Log if merge queue not enabled
+		if !repo.MergeQueueConfig.Enabled {
+			d.logger.Info("Note: Merge queue is disabled for %s, but processed closed PRs anyway", repoName)
+		}
+	} else {
+		// Process all repos
+		repos := d.state.GetAllRepos()
+		for rName := range repos {
+			repoPath := d.paths.RepoDir(rName)
+			repoResults, err := d.processClosedPRsWithResults(rName, repoPath, dryRun)
+			if err != nil {
+				d.logger.Error("Failed to process closed PRs for %s: %v", rName, err)
+				continue
+			}
+			results = append(results, repoResults...)
+		}
+	}
+
+	return socket.Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"processed": len(results),
+			"dry_run":   dryRun,
+			"results":   results,
+		},
+	}
+}
+
+// processClosedPRsWithResults processes closed PRs and returns results for CLI display
+func (d *Daemon) processClosedPRsWithResults(repoName, repoPath string, dryRun bool) ([]map[string]interface{}, error) {
+	analyzer := pr.NewAnalyzer(repoPath)
+
+	// List closed PRs
+	closedPRs, err := analyzer.ListClosedPRs()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list closed PRs: %w", err)
+	}
+
+	var results []map[string]interface{}
+
+	for _, closedPR := range closedPRs {
+		// Skip if already processed
+		if d.state.IsClosedPRProcessed(repoName, closedPR.Number) {
+			continue
+		}
+
+		// Analyze the PR
+		if err := analyzer.AnalyzePR(&closedPR); err != nil {
+			d.logger.Warn("Failed to analyze PR #%d: %v", closedPR.Number, err)
+		}
+
+		// Decide what to do
+		decision := analyzer.DecideRecovery(&closedPR)
+
+		result := map[string]interface{}{
+			"repo":            repoName,
+			"pr_number":       closedPR.Number,
+			"title":           closedPR.Title,
+			"branch":          closedPR.HeadRefName,
+			"should_recover":  decision.ShouldRecover,
+			"reason":          decision.Reason,
+			"additions":       closedPR.Additions,
+			"deletions":       closedPR.Deletions,
+		}
+
+		if dryRun {
+			result["action"] = "would_process"
+			results = append(results, result)
+			continue
+		}
+
+		if decision.ShouldRecover {
+			// Create a recovery issue
+			issueURL, err := analyzer.CreateRecoveryIssue(&closedPR, decision.Reason)
+			if err != nil {
+				d.logger.Error("Failed to create recovery issue for PR #%d: %v", closedPR.Number, err)
+				result["action"] = "error"
+				result["error"] = err.Error()
+				results = append(results, result)
+				continue
+			}
+
+			result["action"] = "recovered"
+			result["issue_url"] = issueURL
+
+			// Mark as processed
+			if err := d.state.MarkClosedPRProcessed(repoName, closedPR.Number, state.ClosedPRActionRecovered, decision.Reason, issueURL); err != nil {
+				d.logger.Error("Failed to mark PR #%d as processed: %v", closedPR.Number, err)
+			}
+		} else {
+			// Clean up the branch
+			if err := analyzer.DeleteBranch(closedPR.HeadRefName); err != nil {
+				d.logger.Error("Failed to delete branch %s for PR #%d: %v", closedPR.HeadRefName, closedPR.Number, err)
+				result["action"] = "error"
+				result["error"] = err.Error()
+				results = append(results, result)
+				continue
+			}
+
+			result["action"] = "cleaned"
+
+			// Mark as processed
+			if err := d.state.MarkClosedPRProcessed(repoName, closedPR.Number, state.ClosedPRActionCleaned, decision.Reason, ""); err != nil {
+				d.logger.Error("Failed to mark PR #%d as processed: %v", closedPR.Number, err)
+			}
+		}
+
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+// handleListClosedPRs lists closed PRs and their processing status
+func (d *Daemon) handleListClosedPRs(req socket.Request) socket.Response {
+	repoName, ok := req.Args["repo"].(string)
+	if !ok || repoName == "" {
+		return socket.Response{Success: false, Error: "missing 'repo': repository name is required"}
+	}
+
+	_, exists := d.state.GetRepo(repoName)
+	if !exists {
+		return socket.Response{Success: false, Error: fmt.Sprintf("repository %q not found", repoName)}
+	}
+
+	repoPath := d.paths.RepoDir(repoName)
+	analyzer := pr.NewAnalyzer(repoPath)
+
+	// List closed PRs from GitHub
+	closedPRs, err := analyzer.ListClosedPRs()
+	if err != nil {
+		return socket.Response{Success: false, Error: err.Error()}
+	}
+
+	// Get processed PRs from state
+	processedPRs, _ := d.state.GetProcessedClosedPRs(repoName)
+
+	var results []map[string]interface{}
+	for _, closedPR := range closedPRs {
+		result := map[string]interface{}{
+			"number":    closedPR.Number,
+			"title":     closedPR.Title,
+			"branch":    closedPR.HeadRefName,
+			"url":       closedPR.URL,
+			"closed_at": closedPR.ClosedAt,
+			"additions": closedPR.Additions,
+			"deletions": closedPR.Deletions,
+		}
+
+		if processed, ok := processedPRs[closedPR.Number]; ok {
+			result["processed"] = true
+			result["action"] = processed.Action
+			result["processed_at"] = processed.ProcessedAt
+			result["reason"] = processed.Reason
+			if processed.IssueURL != "" {
+				result["issue_url"] = processed.IssueURL
+			}
+		} else {
+			result["processed"] = false
+		}
+
+		results = append(results, result)
+	}
+
+	return socket.Response{
+		Success: true,
+		Data:    results,
+	}
 }
 
 // cleanupDeadAgents removes dead agents from state
