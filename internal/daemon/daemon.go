@@ -201,12 +201,14 @@ func (d *Daemon) healthCheckLoop() {
 	// Run once immediately on startup
 	d.checkAgentHealth()
 	d.rotateLogsIfNeeded()
+	d.cleanupMergedBranches()
 
 	for {
 		select {
 		case <-ticker.C:
 			d.checkAgentHealth()
 			d.rotateLogsIfNeeded()
+			d.cleanupMergedBranches()
 		case <-d.ctx.Done():
 			d.logger.Info("Health check loop stopped")
 			return
@@ -1180,6 +1182,39 @@ func (d *Daemon) cleanupOrphanedWorktrees() {
 		// Also prune git worktree references
 		if err := wt.Prune(); err != nil {
 			d.logger.Warn("Failed to prune worktrees for %s: %v", repoName, err)
+		}
+	}
+}
+
+// cleanupMergedBranches cleans up branches that have been merged upstream
+func (d *Daemon) cleanupMergedBranches() {
+	d.logger.Debug("Checking for merged branches to cleanup")
+
+	repoNames := d.state.ListRepos()
+	for _, repoName := range repoNames {
+		repoPath := d.paths.RepoDir(repoName)
+
+		// Check if repo path exists
+		if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+			continue
+		}
+
+		wt := worktree.NewManager(repoPath)
+
+		// Clean up merged branches with common multiclaude prefixes
+		for _, prefix := range []string{"multiclaude/", "work/"} {
+			deleted, err := wt.CleanupMergedBranches(prefix, true)
+			if err != nil {
+				d.logger.Debug("Failed to cleanup merged branches with prefix %s for %s: %v", prefix, repoName, err)
+				continue
+			}
+
+			if len(deleted) > 0 {
+				d.logger.Info("Cleaned up %d merged branch(es) for %s", len(deleted), repoName)
+				for _, branch := range deleted {
+					d.logger.Info("Deleted merged branch: %s", branch)
+				}
+			}
 		}
 	}
 }

@@ -444,7 +444,7 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["cleanup"] = &Command{
 		Name:        "cleanup",
 		Description: "Clean up orphaned resources",
-		Usage:       "multiclaude cleanup [--dry-run] [--verbose]",
+		Usage:       "multiclaude cleanup [--dry-run] [--verbose] [--merged]",
 		Run:         c.cleanup,
 	}
 
@@ -3366,11 +3366,17 @@ func (c *CLI) cleanup(args []string) error {
 	flags, _ := ParseFlags(args)
 	dryRun := flags["dry-run"] == "true"
 	verbose := flags["verbose"] == "true" || flags["v"] == "true"
+	cleanMerged := flags["merged"] == "true"
 
 	if dryRun {
 		fmt.Println("Running cleanup in dry-run mode (no changes will be made)...")
 	} else {
 		fmt.Println("Running cleanup...")
+	}
+
+	// If --merged flag is set, run merged branch cleanup
+	if cleanMerged {
+		return c.cleanupMergedBranches(dryRun, verbose)
 	}
 
 	client := socket.NewClient(c.paths.DaemonSock)
@@ -3396,7 +3402,128 @@ func (c *CLI) cleanup(args []string) error {
 		return fmt.Errorf("cleanup failed: %s", resp.Error)
 	}
 
-	fmt.Println("✓ Cleanup completed")
+	fmt.Println("Cleanup completed")
+	return nil
+}
+
+// cleanupMergedBranches cleans up branches that have been merged upstream
+func (c *CLI) cleanupMergedBranches(dryRun bool, verbose bool) error {
+	fmt.Println("\nChecking for branches merged upstream...")
+
+	// Load state to get repository list
+	st, err := state.Load(c.paths.StateFile)
+	if err != nil {
+		return fmt.Errorf("failed to load state: %w", err)
+	}
+
+	totalDeleted := 0
+	totalFound := 0
+
+	// Process each repository
+	repos := st.ListRepos()
+	if len(repos) == 0 {
+		fmt.Println("No repositories tracked. Nothing to clean up.")
+		return nil
+	}
+
+	for _, repoName := range repos {
+		repoPath := c.paths.RepoDir(repoName)
+
+		// Check if repo exists
+		if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+			if verbose {
+				fmt.Printf("\nRepository %s: path does not exist, skipping\n", repoName)
+			}
+			continue
+		}
+
+		if verbose {
+			fmt.Printf("\nRepository: %s\n", repoName)
+		}
+
+		wt := worktree.NewManager(repoPath)
+
+		// Check for merged branches with common prefixes
+		for _, prefix := range []string{"multiclaude/", "work/"} {
+			mergedBranches, err := wt.FindMergedUpstreamBranches(prefix)
+			if err != nil {
+				if verbose {
+					fmt.Printf("  Warning: failed to find merged branches with prefix %s: %v\n", prefix, err)
+				}
+				continue
+			}
+
+			if len(mergedBranches) == 0 {
+				if verbose {
+					fmt.Printf("  No merged branches with prefix %s\n", prefix)
+				}
+				continue
+			}
+
+			// Get worktrees to skip branches that are still checked out
+			worktrees, err := wt.List()
+			if err != nil {
+				if verbose {
+					fmt.Printf("  Warning: failed to list worktrees: %v\n", err)
+				}
+				continue
+			}
+
+			activeBranches := make(map[string]bool)
+			for _, wtInfo := range worktrees {
+				if wtInfo.Branch != "" {
+					activeBranches[wtInfo.Branch] = true
+				}
+			}
+
+			fmt.Printf("\nMerged branches with prefix %s for %s:\n", prefix, repoName)
+			for _, branch := range mergedBranches {
+				if activeBranches[branch] {
+					if verbose {
+						fmt.Printf("  Skipping %s (still checked out)\n", branch)
+					}
+					continue
+				}
+
+				totalFound++
+				if dryRun {
+					fmt.Printf("  Would delete: %s\n", branch)
+				} else {
+					// Delete local branch
+					if err := wt.DeleteBranch(branch); err != nil {
+						fmt.Printf("  Failed to delete %s: %v\n", branch, err)
+						continue
+					}
+					fmt.Printf("  Deleted: %s\n", branch)
+					totalDeleted++
+
+					// Try to delete remote branch from origin (the fork)
+					if err := wt.DeleteRemoteBranch("origin", branch); err != nil {
+						if verbose {
+							fmt.Printf("    (remote branch deletion failed: %v)\n", err)
+						}
+					} else if verbose {
+						fmt.Printf("    (also deleted from origin)\n")
+					}
+				}
+			}
+		}
+	}
+
+	if dryRun {
+		if totalFound > 0 {
+			fmt.Printf("\nFound %d merged branch(es) that would be deleted\n", totalFound)
+		} else {
+			fmt.Println("\nNo merged branches found to clean up")
+		}
+	} else {
+		if totalDeleted > 0 {
+			fmt.Printf("\nDeleted %d merged branch(es)\n", totalDeleted)
+		} else {
+			fmt.Println("\nNo merged branches found to clean up")
+		}
+	}
+
 	return nil
 }
 

@@ -367,6 +367,176 @@ To fix this, you can either:
 	return false, "", nil
 }
 
+// GetUpstreamRemote returns the name of the upstream remote, typically "upstream" or "origin"
+// It prefers "upstream" if it exists, otherwise falls back to "origin"
+func (m *Manager) GetUpstreamRemote() (string, error) {
+	// Check if "upstream" remote exists
+	cmd := exec.Command("git", "remote", "get-url", "upstream")
+	cmd.Dir = m.repoPath
+	if err := cmd.Run(); err == nil {
+		return "upstream", nil
+	}
+
+	// Fall back to "origin"
+	cmd = exec.Command("git", "remote", "get-url", "origin")
+	cmd.Dir = m.repoPath
+	if err := cmd.Run(); err == nil {
+		return "origin", nil
+	}
+
+	return "", fmt.Errorf("no upstream or origin remote found")
+}
+
+// GetDefaultBranch returns the default branch name for a remote (e.g., "main" or "master")
+func (m *Manager) GetDefaultBranch(remote string) (string, error) {
+	// Try to get the default branch from the remote's HEAD
+	cmd := exec.Command("git", "symbolic-ref", fmt.Sprintf("refs/remotes/%s/HEAD", remote))
+	cmd.Dir = m.repoPath
+	output, err := cmd.Output()
+	if err == nil {
+		// Output is like "refs/remotes/origin/main" - extract the branch name
+		refPath := strings.TrimSpace(string(output))
+		parts := strings.Split(refPath, "/")
+		if len(parts) > 0 {
+			return parts[len(parts)-1], nil
+		}
+	}
+
+	// Fallback: check for common branch names
+	for _, branch := range []string{"main", "master"} {
+		cmd := exec.Command("git", "rev-parse", "--verify", fmt.Sprintf("refs/remotes/%s/%s", remote, branch))
+		cmd.Dir = m.repoPath
+		if err := cmd.Run(); err == nil {
+			return branch, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not determine default branch for remote %s", remote)
+}
+
+// FetchRemote fetches updates from a remote
+func (m *Manager) FetchRemote(remote string) error {
+	cmd := exec.Command("git", "fetch", remote)
+	cmd.Dir = m.repoPath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to fetch from %s: %w\nOutput: %s", remote, err, output)
+	}
+	return nil
+}
+
+// FindMergedUpstreamBranches finds local branches that have been merged into the upstream default branch.
+// It fetches from the upstream remote first to ensure we have the latest state.
+// The branchPrefix filters which branches to check (e.g., "multiclaude/" or "work/").
+// Returns a list of branch names that can be safely deleted.
+func (m *Manager) FindMergedUpstreamBranches(branchPrefix string) ([]string, error) {
+	// Get the upstream remote name
+	remote, err := m.GetUpstreamRemote()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get upstream remote: %w", err)
+	}
+
+	// Fetch from upstream to get the latest state
+	if err := m.FetchRemote(remote); err != nil {
+		return nil, fmt.Errorf("failed to fetch from upstream: %w", err)
+	}
+
+	// Get the default branch name
+	defaultBranch, err := m.GetDefaultBranch(remote)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get default branch: %w", err)
+	}
+
+	// Get branches merged into upstream's default branch
+	upstreamRef := fmt.Sprintf("%s/%s", remote, defaultBranch)
+	cmd := exec.Command("git", "branch", "--merged", upstreamRef, "--format=%(refname:short)")
+	cmd.Dir = m.repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list merged branches: %w", err)
+	}
+
+	// Filter branches by prefix
+	var mergedBranches []string
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		branch := strings.TrimSpace(line)
+		if branch == "" {
+			continue
+		}
+		// Skip the default branches themselves
+		if branch == "main" || branch == "master" {
+			continue
+		}
+		// Only include branches matching the prefix
+		if branchPrefix != "" && !strings.HasPrefix(branch, branchPrefix) {
+			continue
+		}
+		mergedBranches = append(mergedBranches, branch)
+	}
+
+	return mergedBranches, nil
+}
+
+// DeleteRemoteBranch deletes a branch from a remote
+func (m *Manager) DeleteRemoteBranch(remote, branchName string) error {
+	cmd := exec.Command("git", "push", remote, "--delete", branchName)
+	cmd.Dir = m.repoPath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to delete remote branch: %w\nOutput: %s", err, output)
+	}
+	return nil
+}
+
+// CleanupMergedBranches finds and deletes local branches that have been merged upstream.
+// If deleteRemote is true, it also deletes the corresponding remote branches from origin.
+// Returns the list of deleted branch names.
+func (m *Manager) CleanupMergedBranches(branchPrefix string, deleteRemote bool) ([]string, error) {
+	// Find merged branches
+	mergedBranches, err := m.FindMergedUpstreamBranches(branchPrefix)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(mergedBranches) == 0 {
+		return nil, nil
+	}
+
+	// Get worktrees to avoid deleting branches that are still checked out
+	worktrees, err := m.List()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list worktrees: %w", err)
+	}
+
+	activeBranches := make(map[string]bool)
+	for _, wt := range worktrees {
+		if wt.Branch != "" {
+			activeBranches[wt.Branch] = true
+		}
+	}
+
+	var deleted []string
+	for _, branch := range mergedBranches {
+		// Skip branches that are currently checked out in worktrees
+		if activeBranches[branch] {
+			continue
+		}
+
+		// Delete local branch
+		if err := m.DeleteBranch(branch); err != nil {
+			// Log but continue with other branches
+			continue
+		}
+		deleted = append(deleted, branch)
+
+		// Delete remote branch if requested
+		if deleteRemote {
+			// Try to delete from origin (the fork)
+			_ = m.DeleteRemoteBranch("origin", branch)
+		}
+	}
+
+	return deleted, nil
+}
+
 // CleanupOrphaned removes worktree directories that exist on disk but not in git
 func CleanupOrphaned(wtRootDir string, manager *Manager) ([]string, error) {
 	// Get all worktrees from git

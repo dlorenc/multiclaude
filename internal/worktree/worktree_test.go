@@ -1053,3 +1053,299 @@ func TestCheckWorkspaceBranchConflict(t *testing.T) {
 		}
 	})
 }
+
+func TestGetUpstreamRemote(t *testing.T) {
+	t.Run("no remotes", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+		_, err := manager.GetUpstreamRemote()
+		if err == nil {
+			t.Error("Expected error when no remotes exist")
+		}
+	})
+
+	t.Run("origin only", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		// Add origin remote (pointing to local path for simplicity)
+		cmd := exec.Command("git", "remote", "add", "origin", repoPath)
+		cmd.Dir = repoPath
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("Failed to add origin remote: %v", err)
+		}
+
+		manager := NewManager(repoPath)
+		remote, err := manager.GetUpstreamRemote()
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if remote != "origin" {
+			t.Errorf("Expected 'origin', got %s", remote)
+		}
+	})
+
+	t.Run("upstream preferred over origin", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		// Add both remotes
+		cmd := exec.Command("git", "remote", "add", "origin", repoPath)
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		cmd = exec.Command("git", "remote", "add", "upstream", repoPath)
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		manager := NewManager(repoPath)
+		remote, err := manager.GetUpstreamRemote()
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if remote != "upstream" {
+			t.Errorf("Expected 'upstream', got %s", remote)
+		}
+	})
+}
+
+func TestGetDefaultBranch(t *testing.T) {
+	t.Run("detects main branch", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		// Add origin remote and fetch
+		cmd := exec.Command("git", "remote", "add", "origin", repoPath)
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		cmd = exec.Command("git", "fetch", "origin")
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		manager := NewManager(repoPath)
+		branch, err := manager.GetDefaultBranch("origin")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if branch != "main" {
+			t.Errorf("Expected 'main', got %s", branch)
+		}
+	})
+}
+
+func TestFindMergedUpstreamBranches(t *testing.T) {
+	t.Run("finds merged branches", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+
+		// Create a branch that is already merged (same as main)
+		createBranch(t, repoPath, "work/test-feature")
+
+		// Add origin remote
+		cmd := exec.Command("git", "remote", "add", "origin", repoPath)
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		cmd = exec.Command("git", "fetch", "origin")
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		// Find merged branches
+		merged, err := manager.FindMergedUpstreamBranches("work/")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		// The branch should be found since it's at the same commit as main
+		found := false
+		for _, b := range merged {
+			if b == "work/test-feature" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected to find work/test-feature in merged branches, got: %v", merged)
+		}
+	})
+
+	t.Run("excludes unmerged branches", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+
+		// Create a branch and add a commit to it
+		cmd := exec.Command("git", "checkout", "-b", "work/unmerged-feature")
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		// Add a file and commit
+		testFile := filepath.Join(repoPath, "newfile.txt")
+		os.WriteFile(testFile, []byte("new content"), 0644)
+
+		cmd = exec.Command("git", "add", "newfile.txt")
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		cmd = exec.Command("git", "commit", "-m", "Add new file")
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		// Go back to main
+		cmd = exec.Command("git", "checkout", "main")
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		// Add origin remote
+		cmd = exec.Command("git", "remote", "add", "origin", repoPath)
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		cmd = exec.Command("git", "fetch", "origin")
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		// Find merged branches
+		merged, err := manager.FindMergedUpstreamBranches("work/")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		// The unmerged branch should NOT be found
+		for _, b := range merged {
+			if b == "work/unmerged-feature" {
+				t.Error("Unmerged branch should not be in the merged list")
+			}
+		}
+	})
+
+	t.Run("respects prefix filter", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+
+		// Create branches with different prefixes
+		createBranch(t, repoPath, "work/test")
+		createBranch(t, repoPath, "multiclaude/test")
+		createBranch(t, repoPath, "feature/test")
+
+		// Add origin remote
+		cmd := exec.Command("git", "remote", "add", "origin", repoPath)
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		cmd = exec.Command("git", "fetch", "origin")
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		// Find merged branches with work/ prefix
+		merged, err := manager.FindMergedUpstreamBranches("work/")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		// Should only find work/test
+		for _, b := range merged {
+			if !strings.HasPrefix(b, "work/") {
+				t.Errorf("Branch %s should not be included (wrong prefix)", b)
+			}
+		}
+	})
+}
+
+func TestCleanupMergedBranches(t *testing.T) {
+	t.Run("deletes merged branches", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+
+		// Create a merged branch
+		createBranch(t, repoPath, "work/merged-test")
+
+		// Verify branch exists
+		exists, _ := manager.BranchExists("work/merged-test")
+		if !exists {
+			t.Fatal("Branch should exist before cleanup")
+		}
+
+		// Add origin remote
+		cmd := exec.Command("git", "remote", "add", "origin", repoPath)
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		cmd = exec.Command("git", "fetch", "origin")
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		// Clean up merged branches
+		deleted, err := manager.CleanupMergedBranches("work/", false)
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		if len(deleted) == 0 {
+			t.Error("Expected at least one branch to be deleted")
+		}
+
+		// Verify branch is deleted
+		exists, _ = manager.BranchExists("work/merged-test")
+		if exists {
+			t.Error("Branch should be deleted after cleanup")
+		}
+	})
+
+	t.Run("skips branches in active worktrees", func(t *testing.T) {
+		repoPath, cleanup := createTestRepo(t)
+		defer cleanup()
+
+		manager := NewManager(repoPath)
+
+		// Create a branch and a worktree for it
+		createBranch(t, repoPath, "work/active-branch")
+
+		wtPath := filepath.Join(repoPath, "worktrees", "active")
+		os.MkdirAll(filepath.Dir(wtPath), 0755)
+
+		err := manager.Create(wtPath, "work/active-branch")
+		if err != nil {
+			t.Fatalf("Failed to create worktree: %v", err)
+		}
+		defer manager.Remove(wtPath, true)
+
+		// Add origin remote
+		cmd := exec.Command("git", "remote", "add", "origin", repoPath)
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		cmd = exec.Command("git", "fetch", "origin")
+		cmd.Dir = repoPath
+		cmd.Run()
+
+		// Clean up merged branches
+		deleted, err := manager.CleanupMergedBranches("work/", false)
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		// The active branch should NOT be deleted
+		for _, b := range deleted {
+			if b == "work/active-branch" {
+				t.Error("Active branch should not be deleted")
+			}
+		}
+
+		// Verify branch still exists
+		exists, _ := manager.BranchExists("work/active-branch")
+		if !exists {
+			t.Error("Active branch should still exist")
+		}
+	})
+}
