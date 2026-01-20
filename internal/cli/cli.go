@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -392,6 +393,14 @@ func (c *CLI) registerCommands() {
 	}
 
 	c.rootCmd.Subcommands["workspace"] = workspaceCmd
+
+	// History command
+	c.rootCmd.Subcommands["history"] = &Command{
+		Name:        "history",
+		Description: "Show task history for a repository",
+		Usage:       "multiclaude history [--repo <repo>] [-n <count>]",
+		Run:         c.showHistory,
+	}
 
 	// Agent commands (run from within Claude)
 	agentCmd := &Command{
@@ -1810,6 +1819,163 @@ func (c *CLI) listWorkers(args []string) error {
 	table.Print()
 
 	return nil
+}
+
+func (c *CLI) showHistory(args []string) error {
+	flags, _ := ParseFlags(args)
+
+	// Determine repository
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
+	}
+
+	// Get limit from flags (default 10)
+	limit := 10
+	if n, ok := flags["n"]; ok {
+		if v, err := strconv.Atoi(n); err == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	// Get task history from daemon
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "task_history",
+		Args: map[string]interface{}{
+			"repo":  repoName,
+			"limit": limit,
+		},
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("getting task history", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to get task history", fmt.Errorf("%s", resp.Error))
+	}
+
+	history, ok := resp.Data.([]interface{})
+	if !ok || len(history) == 0 {
+		fmt.Printf("No task history for repository '%s'\n", repoName)
+		format.Dimmed("\nCreate workers with: multiclaude work <task>")
+		return nil
+	}
+
+	// Query GitHub for PR status for each task with a branch
+	repoPath := c.paths.RepoDir(repoName)
+
+	format.Header("Task History for '%s' (last %d):", repoName, len(history))
+	fmt.Println()
+
+	table := format.NewColoredTable("NAME", "STATUS", "PR", "COMPLETED", "TASK")
+	for _, item := range history {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		name, _ := entry["name"].(string)
+		task, _ := entry["task"].(string)
+		branch, _ := entry["branch"].(string)
+		prURL, _ := entry["pr_url"].(string)
+		completedAt, _ := entry["completed_at"].(string)
+
+		// Try to get PR status from GitHub if we have a branch
+		prStatus, prLink := c.getPRStatusForBranch(repoPath, branch, prURL)
+
+		// Format status with color
+		var statusCell format.ColoredCell
+		switch prStatus {
+		case "merged":
+			statusCell = format.ColorCell("merged", format.Green)
+		case "open":
+			statusCell = format.ColorCell("open", format.Yellow)
+		case "closed":
+			statusCell = format.ColorCell("closed", format.Red)
+		default:
+			statusCell = format.ColorCell("no-pr", format.Dim)
+		}
+
+		// Format PR link
+		prCell := format.ColorCell("-", format.Dim)
+		if prLink != "" {
+			// Extract just the PR number for display
+			prCell = format.ColorCell(prLink, format.Cyan)
+		}
+
+		// Format completed time
+		completedCell := format.ColorCell("-", format.Dim)
+		if completedAt != "" {
+			if t, err := time.Parse(time.RFC3339, completedAt); err == nil {
+				completedCell = format.Cell(format.TimeAgo(t))
+			}
+		}
+
+		// Truncate task
+		truncTask := format.Truncate(task, 35)
+
+		table.AddRow(
+			format.Cell(name),
+			statusCell,
+			prCell,
+			completedCell,
+			format.Cell(truncTask),
+		)
+	}
+	table.Print()
+
+	return nil
+}
+
+// getPRStatusForBranch queries GitHub for the PR status of a branch
+func (c *CLI) getPRStatusForBranch(repoPath, branch, existingPRURL string) (status, prLink string) {
+	// If we already have a PR URL, just return it formatted
+	if existingPRURL != "" {
+		// Extract PR number from URL for shorter display
+		parts := strings.Split(existingPRURL, "/")
+		if len(parts) > 0 {
+			prNum := parts[len(parts)-1]
+			return "unknown", "#" + prNum
+		}
+		return "unknown", existingPRURL
+	}
+
+	// If no branch, nothing to query
+	if branch == "" {
+		return "no-pr", ""
+	}
+
+	// Query GitHub for PR associated with this branch using gh CLI
+	cmd := exec.Command("gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,state,url", "--limit", "1")
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return "no-pr", ""
+	}
+
+	// Parse JSON output
+	var prs []struct {
+		Number int    `json:"number"`
+		State  string `json:"state"`
+		URL    string `json:"url"`
+	}
+	if err := json.Unmarshal(output, &prs); err != nil || len(prs) == 0 {
+		return "no-pr", ""
+	}
+
+	pr := prs[0]
+	prLink = fmt.Sprintf("#%d", pr.Number)
+
+	switch strings.ToLower(pr.State) {
+	case "merged":
+		return "merged", prLink
+	case "open":
+		return "open", prLink
+	case "closed":
+		return "closed", prLink
+	default:
+		return "unknown", prLink
+	}
 }
 
 func (c *CLI) removeWorker(args []string) error {

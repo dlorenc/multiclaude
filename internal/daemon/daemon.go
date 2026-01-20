@@ -513,6 +513,9 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 		go d.routeMessages()
 		return socket.Response{Success: true, Data: "Message routing triggered"}
 
+	case "task_history":
+		return d.handleTaskHistory(req)
+
 	default:
 		return socket.Response{
 			Success: false,
@@ -1120,6 +1123,11 @@ func (d *Daemon) cleanupDeadAgents(deadAgents map[string][]string) {
 				continue
 			}
 
+			// Record task history for workers before cleanup
+			if agent.Type == state.AgentTypeWorker {
+				d.recordTaskHistory(repoName, agentName, agent)
+			}
+
 			// Kill tmux window
 			if err := d.tmux.KillWindow(repo.TmuxSession, agent.TmuxWindow); err != nil {
 				d.logger.Warn("Failed to kill tmux window %s: %v", agent.TmuxWindow, err)
@@ -1151,6 +1159,71 @@ func (d *Daemon) cleanupDeadAgents(deadAgents map[string][]string) {
 			}
 		}
 	}
+}
+
+// recordTaskHistory saves a worker's task to the history before cleanup
+func (d *Daemon) recordTaskHistory(repoName, agentName string, agent state.Agent) {
+	// Get the branch name from the worktree if it exists
+	branch := ""
+	if agent.WorktreePath != "" {
+		if b, err := worktree.GetCurrentBranch(agent.WorktreePath); err == nil {
+			branch = b
+		} else {
+			// Fallback: construct expected branch name
+			branch = "work/" + agentName
+		}
+	}
+
+	entry := state.TaskHistoryEntry{
+		Name:        agentName,
+		Task:        agent.Task,
+		Branch:      branch,
+		Status:      state.TaskStatusUnknown, // Will be updated when displaying
+		CreatedAt:   agent.CreatedAt,
+		CompletedAt: time.Now(),
+	}
+
+	if err := d.state.AddTaskHistory(repoName, entry); err != nil {
+		d.logger.Warn("Failed to record task history for %s: %v", agentName, err)
+	} else {
+		d.logger.Info("Recorded task history for %s (branch: %s)", agentName, branch)
+	}
+}
+
+// handleTaskHistory returns the task history for a repository
+func (d *Daemon) handleTaskHistory(req socket.Request) socket.Response {
+	repoName, ok := req.Args["repo"].(string)
+	if !ok || repoName == "" {
+		return socket.Response{Success: false, Error: "missing 'repo': repository name is required"}
+	}
+
+	// Get optional limit
+	limit := 10 // default
+	if l, ok := req.Args["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	history, err := d.state.GetTaskHistory(repoName, limit)
+	if err != nil {
+		return socket.Response{Success: false, Error: err.Error()}
+	}
+
+	// Convert to interface slice for JSON serialization
+	result := make([]map[string]interface{}, len(history))
+	for i, entry := range history {
+		result[i] = map[string]interface{}{
+			"name":         entry.Name,
+			"task":         entry.Task,
+			"branch":       entry.Branch,
+			"pr_url":       entry.PRURL,
+			"pr_number":    entry.PRNumber,
+			"status":       string(entry.Status),
+			"created_at":   entry.CreatedAt,
+			"completed_at": entry.CompletedAt,
+		}
+	}
+
+	return socket.Response{Success: true, Data: result}
 }
 
 // cleanupOrphanedWorktrees removes worktree directories without git tracking

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -974,5 +975,232 @@ func TestCurrentRepoPersistence(t *testing.T) {
 	// Verify current repo persisted
 	if current := loaded.GetCurrentRepo(); current != "test-repo" {
 		t.Errorf("Loaded GetCurrentRepo() = %q, want 'test-repo'", current)
+	}
+}
+
+func TestTaskHistory(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Create a repo
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Add task history entries
+	entry1 := TaskHistoryEntry{
+		Name:        "worker-1",
+		Task:        "Implement feature A",
+		Branch:      "work/worker-1",
+		Status:      TaskStatusUnknown,
+		CreatedAt:   time.Now().Add(-2 * time.Hour),
+		CompletedAt: time.Now().Add(-1 * time.Hour),
+	}
+	entry2 := TaskHistoryEntry{
+		Name:        "worker-2",
+		Task:        "Fix bug B",
+		Branch:      "work/worker-2",
+		PRURL:       "https://github.com/test/repo/pull/123",
+		PRNumber:    123,
+		Status:      TaskStatusMerged,
+		CreatedAt:   time.Now().Add(-1 * time.Hour),
+		CompletedAt: time.Now(),
+	}
+
+	if err := s.AddTaskHistory("test-repo", entry1); err != nil {
+		t.Fatalf("AddTaskHistory() failed: %v", err)
+	}
+	if err := s.AddTaskHistory("test-repo", entry2); err != nil {
+		t.Fatalf("AddTaskHistory() failed: %v", err)
+	}
+
+	// Get task history (should be in reverse order - most recent first)
+	history, err := s.GetTaskHistory("test-repo", 10)
+	if err != nil {
+		t.Fatalf("GetTaskHistory() failed: %v", err)
+	}
+
+	if len(history) != 2 {
+		t.Errorf("GetTaskHistory() returned %d entries, want 2", len(history))
+	}
+
+	// Verify order (most recent first)
+	if history[0].Name != "worker-2" {
+		t.Errorf("First history entry name = %q, want 'worker-2'", history[0].Name)
+	}
+	if history[1].Name != "worker-1" {
+		t.Errorf("Second history entry name = %q, want 'worker-1'", history[1].Name)
+	}
+
+	// Verify fields
+	if history[0].Status != TaskStatusMerged {
+		t.Errorf("First entry status = %q, want 'merged'", history[0].Status)
+	}
+	if history[0].PRNumber != 123 {
+		t.Errorf("First entry PRNumber = %d, want 123", history[0].PRNumber)
+	}
+}
+
+func TestTaskHistoryLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Create a repo
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Add 5 task history entries
+	for i := 0; i < 5; i++ {
+		entry := TaskHistoryEntry{
+			Name:        fmt.Sprintf("worker-%d", i),
+			Task:        fmt.Sprintf("Task %d", i),
+			Branch:      fmt.Sprintf("work/worker-%d", i),
+			Status:      TaskStatusUnknown,
+			CreatedAt:   time.Now().Add(time.Duration(-5+i) * time.Hour),
+			CompletedAt: time.Now().Add(time.Duration(-4+i) * time.Hour),
+		}
+		if err := s.AddTaskHistory("test-repo", entry); err != nil {
+			t.Fatalf("AddTaskHistory() failed: %v", err)
+		}
+	}
+
+	// Get limited history
+	history, err := s.GetTaskHistory("test-repo", 3)
+	if err != nil {
+		t.Fatalf("GetTaskHistory() failed: %v", err)
+	}
+
+	if len(history) != 3 {
+		t.Errorf("GetTaskHistory() with limit=3 returned %d entries, want 3", len(history))
+	}
+
+	// Verify we got the most recent 3
+	if history[0].Name != "worker-4" {
+		t.Errorf("First entry name = %q, want 'worker-4'", history[0].Name)
+	}
+}
+
+func TestUpdateTaskHistoryStatus(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Create a repo
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Add a task history entry
+	entry := TaskHistoryEntry{
+		Name:        "worker-1",
+		Task:        "Implement feature A",
+		Branch:      "work/worker-1",
+		Status:      TaskStatusUnknown,
+		CreatedAt:   time.Now().Add(-1 * time.Hour),
+		CompletedAt: time.Now(),
+	}
+	if err := s.AddTaskHistory("test-repo", entry); err != nil {
+		t.Fatalf("AddTaskHistory() failed: %v", err)
+	}
+
+	// Update the status
+	if err := s.UpdateTaskHistoryStatus("test-repo", "worker-1", TaskStatusMerged, "https://github.com/test/repo/pull/456", 456); err != nil {
+		t.Fatalf("UpdateTaskHistoryStatus() failed: %v", err)
+	}
+
+	// Get and verify
+	history, err := s.GetTaskHistory("test-repo", 10)
+	if err != nil {
+		t.Fatalf("GetTaskHistory() failed: %v", err)
+	}
+
+	if len(history) != 1 {
+		t.Fatalf("GetTaskHistory() returned %d entries, want 1", len(history))
+	}
+
+	if history[0].Status != TaskStatusMerged {
+		t.Errorf("Updated status = %q, want 'merged'", history[0].Status)
+	}
+	if history[0].PRURL != "https://github.com/test/repo/pull/456" {
+		t.Errorf("Updated PRURL = %q, want 'https://github.com/test/repo/pull/456'", history[0].PRURL)
+	}
+	if history[0].PRNumber != 456 {
+		t.Errorf("Updated PRNumber = %d, want 456", history[0].PRNumber)
+	}
+}
+
+func TestTaskHistoryPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Create a repo
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Add a task history entry
+	entry := TaskHistoryEntry{
+		Name:        "worker-1",
+		Task:        "Implement feature A",
+		Branch:      "work/worker-1",
+		PRURL:       "https://github.com/test/repo/pull/789",
+		PRNumber:    789,
+		Status:      TaskStatusMerged,
+		CreatedAt:   time.Now().Add(-1 * time.Hour),
+		CompletedAt: time.Now(),
+	}
+	if err := s.AddTaskHistory("test-repo", entry); err != nil {
+		t.Fatalf("AddTaskHistory() failed: %v", err)
+	}
+
+	// Load state from disk
+	loaded, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Verify task history persisted
+	history, err := loaded.GetTaskHistory("test-repo", 10)
+	if err != nil {
+		t.Fatalf("GetTaskHistory() failed: %v", err)
+	}
+
+	if len(history) != 1 {
+		t.Fatalf("Loaded GetTaskHistory() returned %d entries, want 1", len(history))
+	}
+
+	if history[0].Name != "worker-1" {
+		t.Errorf("Loaded entry name = %q, want 'worker-1'", history[0].Name)
+	}
+	if history[0].Status != TaskStatusMerged {
+		t.Errorf("Loaded entry status = %q, want 'merged'", history[0].Status)
 	}
 }

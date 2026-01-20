@@ -70,6 +70,34 @@ func DefaultMergeQueueConfig() MergeQueueConfig {
 	}
 }
 
+// TaskStatus represents the status of a completed task
+type TaskStatus string
+
+const (
+	// TaskStatusOpen means a PR was created but not yet merged or closed
+	TaskStatusOpen TaskStatus = "open"
+	// TaskStatusMerged means the PR was merged
+	TaskStatusMerged TaskStatus = "merged"
+	// TaskStatusClosed means the PR was closed without merging
+	TaskStatusClosed TaskStatus = "closed"
+	// TaskStatusNoPR means no PR was created
+	TaskStatusNoPR TaskStatus = "no-pr"
+	// TaskStatusUnknown means the status couldn't be determined
+	TaskStatusUnknown TaskStatus = "unknown"
+)
+
+// TaskHistoryEntry represents a completed task in the history
+type TaskHistoryEntry struct {
+	Name        string     `json:"name"`                   // Worker name
+	Task        string     `json:"task"`                   // Task description
+	Branch      string     `json:"branch"`                 // Git branch
+	PRURL       string     `json:"pr_url,omitempty"`       // Pull request URL if created
+	PRNumber    int        `json:"pr_number,omitempty"`    // PR number for quick lookup
+	Status      TaskStatus `json:"status"`                 // Current status
+	CreatedAt   time.Time  `json:"created_at"`             // When the task was started
+	CompletedAt time.Time  `json:"completed_at,omitempty"` // When the task was completed
+}
+
 // Agent represents an agent's state
 type Agent struct {
 	Type            AgentType `json:"type"`
@@ -85,11 +113,12 @@ type Agent struct {
 
 // Repository represents a tracked repository's state
 type Repository struct {
-	GithubURL        string           `json:"github_url"`
-	TmuxSession      string           `json:"tmux_session"`
-	Agents           map[string]Agent `json:"agents"`
-	MergeQueueConfig MergeQueueConfig `json:"merge_queue_config,omitempty"`
-	ProviderConfig   ProviderConfig   `json:"provider_config,omitempty"`
+	GithubURL        string             `json:"github_url"`
+	TmuxSession      string             `json:"tmux_session"`
+	Agents           map[string]Agent   `json:"agents"`
+	TaskHistory      []TaskHistoryEntry `json:"task_history,omitempty"`
+	MergeQueueConfig MergeQueueConfig   `json:"merge_queue_config,omitempty"`
+	ProviderConfig   ProviderConfig     `json:"provider_config,omitempty"`
 }
 
 // State represents the entire daemon state
@@ -425,6 +454,76 @@ func (s *State) UpdateProviderConfig(repoName string, config ProviderConfig) err
 
 	repo.ProviderConfig = config
 	return s.saveUnlocked()
+}
+
+// AddTaskHistory adds a completed task to the repository's history
+func (s *State) AddTaskHistory(repoName string, entry TaskHistoryEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return fmt.Errorf("repository %q not found", repoName)
+	}
+
+	repo.TaskHistory = append(repo.TaskHistory, entry)
+	return s.saveUnlocked()
+}
+
+// GetTaskHistory returns the task history for a repository, optionally limited to N entries
+func (s *State) GetTaskHistory(repoName string, limit int) ([]TaskHistoryEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return nil, fmt.Errorf("repository %q not found", repoName)
+	}
+
+	history := repo.TaskHistory
+	if history == nil {
+		return []TaskHistoryEntry{}, nil
+	}
+
+	// Return most recent first
+	result := make([]TaskHistoryEntry, len(history))
+	for i, entry := range history {
+		result[len(history)-1-i] = entry
+	}
+
+	// Apply limit if specified
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+
+	return result, nil
+}
+
+// UpdateTaskHistoryStatus updates the status and PR info for a task by name
+func (s *State) UpdateTaskHistoryStatus(repoName, taskName string, status TaskStatus, prURL string, prNumber int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return fmt.Errorf("repository %q not found", repoName)
+	}
+
+	// Find the most recent entry with this name and update it
+	for i := len(repo.TaskHistory) - 1; i >= 0; i-- {
+		if repo.TaskHistory[i].Name == taskName {
+			repo.TaskHistory[i].Status = status
+			if prURL != "" {
+				repo.TaskHistory[i].PRURL = prURL
+			}
+			if prNumber > 0 {
+				repo.TaskHistory[i].PRNumber = prNumber
+			}
+			return s.saveUnlocked()
+		}
+	}
+
+	return fmt.Errorf("task %q not found in history", taskName)
 }
 
 // saveUnlocked saves state without acquiring lock (caller must hold lock)
