@@ -165,6 +165,10 @@ type Config struct {
 	// OutputFile is the path to capture Claude's output.
 	// If non-empty, StartPipePane is called with this file.
 	OutputFile string
+
+	// ClaudeConfigDir is the path to set as CLAUDE_CONFIG_DIR environment variable.
+	// This enables per-agent slash commands. If empty, CLAUDE_CONFIG_DIR is not set.
+	ClaudeConfigDir string
 }
 
 // StartResult contains information about a started Claude instance.
@@ -253,7 +257,15 @@ func (r *Runner) Start(session, window string, cfg Config) (*StartResult, error)
 
 // buildCommand constructs the claude CLI command string.
 func (r *Runner) buildCommand(sessionID string, cfg Config) string {
-	cmd := r.BinaryPath
+	var cmd string
+
+	// Prepend CLAUDE_CONFIG_DIR environment variable if set
+	// This enables per-agent slash commands
+	if cfg.ClaudeConfigDir != "" {
+		cmd = fmt.Sprintf("CLAUDE_CONFIG_DIR=%s ", cfg.ClaudeConfigDir)
+	}
+
+	cmd += r.BinaryPath
 
 	// Add session ID or resume
 	if cfg.Resume {

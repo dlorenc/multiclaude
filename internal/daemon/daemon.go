@@ -16,6 +16,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/logging"
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/prompts"
+	"github.com/dlorenc/multiclaude/internal/prompts/commands"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/internal/worktree"
@@ -1635,11 +1636,19 @@ func (d *Daemon) restartAgent(repoName, agentName string, agent state.Agent, rep
 		}
 	}
 
+	// Set up per-agent Claude config directory with slash commands
+	agentConfigDir := d.paths.AgentClaudeConfigDir(repoName, agentName)
+	if err := commands.SetupAgentCommands(agentConfigDir); err != nil {
+		// Log warning but don't fail - slash commands are a nice-to-have
+		d.logger.Warn("Failed to setup agent commands: %v", err)
+	}
+
 	// Restart Claude using the runner
 	result, err := d.claudeRunner.Start(repo.TmuxSession, agentName, claude.Config{
 		SessionID:        agent.SessionID,
 		Resume:           hasHistory,
 		SystemPromptFile: promptFile,
+		ClaudeConfigDir:  agentConfigDir,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to restart Claude: %w", err)

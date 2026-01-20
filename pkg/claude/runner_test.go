@@ -428,6 +428,27 @@ func TestBuildCommand(t *testing.T) {
 				"--append-system-prompt-file /path/to/prompt.md",
 			},
 		},
+		{
+			name: "with claude config dir",
+			config: Config{
+				SessionID:       "test-session",
+				ClaudeConfigDir: "/home/user/.multiclaude/claude-config/repo/agent",
+			},
+			contains: []string{
+				"CLAUDE_CONFIG_DIR=/home/user/.multiclaude/claude-config/repo/agent",
+				"/path/to/claude",
+				"--session-id test-session",
+			},
+		},
+		{
+			name: "without claude config dir",
+			config: Config{
+				SessionID: "test-session",
+			},
+			excludes: []string{
+				"CLAUDE_CONFIG_DIR",
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -468,5 +489,63 @@ func TestResolveBinaryPath(t *testing.T) {
 	path := ResolveBinaryPath()
 	if path == "" {
 		t.Error("ResolveBinaryPath() returned empty string")
+	}
+}
+
+func TestBuildCommandClaudeConfigDirPrepended(t *testing.T) {
+	runner := NewRunner(
+		WithBinaryPath("claude"),
+		WithPermissions(true),
+	)
+
+	cmd := runner.buildCommand("test-session", Config{
+		ClaudeConfigDir: "/tmp/config",
+	})
+
+	// Verify CLAUDE_CONFIG_DIR is prepended before the binary
+	if !strings.HasPrefix(cmd, "CLAUDE_CONFIG_DIR=/tmp/config claude") {
+		t.Errorf("expected CLAUDE_CONFIG_DIR to be prepended before binary, got %q", cmd)
+	}
+}
+
+func TestStartWithClaudeConfigDir(t *testing.T) {
+	terminal := &mockTerminal{
+		getPanePIDReturn: 12345,
+	}
+
+	runner := NewRunner(
+		WithTerminal(terminal),
+		WithBinaryPath("/path/to/claude"),
+		WithStartupDelay(0),
+	)
+
+	result, err := runner.Start("my-session", "my-window", Config{
+		ClaudeConfigDir: "/home/user/.multiclaude/claude-config/repo/agent",
+	})
+
+	if err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	if result.SessionID == "" {
+		t.Error("expected SessionID to be generated")
+	}
+
+	// Verify SendKeys was called (MOTD + command = 2 calls)
+	if len(terminal.sendKeysCalls) < 2 {
+		t.Fatalf("expected at least 2 SendKeys calls, got %d", len(terminal.sendKeysCalls))
+	}
+
+	// Second call is the actual command
+	call := terminal.sendKeysCalls[1]
+
+	// Verify CLAUDE_CONFIG_DIR is included in command
+	if !strings.Contains(call.text, "CLAUDE_CONFIG_DIR=/home/user/.multiclaude/claude-config/repo/agent") {
+		t.Errorf("expected command to contain CLAUDE_CONFIG_DIR, got %q", call.text)
+	}
+
+	// Verify the env var is prepended (before the binary path)
+	if !strings.HasPrefix(call.text, "CLAUDE_CONFIG_DIR=/home/user/.multiclaude/claude-config/repo/agent /path/to/claude") {
+		t.Errorf("expected CLAUDE_CONFIG_DIR to be prepended before binary, got %q", call.text)
 	}
 }
