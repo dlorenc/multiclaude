@@ -93,7 +93,7 @@ func (c *CLI) getProviderForRepo(repoName string) (*provider.Info, error) {
 	client := socket.NewClient(c.paths.DaemonSock)
 	resp, err := client.Send(socket.Request{
 		Command: "get_repo_config",
-		Args:    map[string]interface{}{"repo": repoName},
+		Args:    map[string]interface{}{"name": repoName},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get repo config: %w", err)
