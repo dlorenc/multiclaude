@@ -129,7 +129,18 @@ func (c *CLI) Execute(args []string) error {
 		return c.showHelp()
 	}
 
+	// Check for --version or -v flag at top level
+	if args[0] == "--version" || args[0] == "-v" {
+		return c.showVersion()
+	}
+
 	return c.executeCommand(c.rootCmd, args)
+}
+
+// showVersion displays the version information
+func (c *CLI) showVersion() error {
+	fmt.Printf("multiclaude %s\n", Version)
+	return nil
 }
 
 // executeCommand recursively executes commands and subcommands
@@ -532,6 +543,16 @@ func (c *CLI) registerCommands() {
 		Description: "Check for and install updates",
 		Usage:       "multiclaude update [--check] [--yes] [--no-restart] [--force]",
 		Run:         c.updateCommand,
+	}
+
+	// Version command
+	c.rootCmd.Subcommands["version"] = &Command{
+		Name:        "version",
+		Description: "Show version information",
+		Usage:       "multiclaude version",
+		Run: func(args []string) error {
+			return c.showVersion()
+		},
 	}
 }
 
