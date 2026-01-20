@@ -232,13 +232,19 @@ func (d *Daemon) checkAgentHealth() {
 		}
 
 		if !hasSession {
-			d.logger.Warn("Tmux session %s not found for repo %s", repo.TmuxSession, repoName)
-			// Mark all agents in this repo for cleanup
-			for agentName := range repo.Agents {
-				if deadAgents[repoName] == nil {
-					deadAgents[repoName] = []string{}
+			d.logger.Warn("Tmux session %s not found for repo %s, attempting restoration", repo.TmuxSession, repoName)
+			// Try to restore the session and agents instead of cleaning up
+			if err := d.restoreRepoAgents(repoName, repo); err != nil {
+				d.logger.Error("Failed to restore repo %s: %v, marking all agents for cleanup", repoName, err)
+				// Only mark for cleanup if restoration failed
+				for agentName := range repo.Agents {
+					if deadAgents[repoName] == nil {
+						deadAgents[repoName] = []string{}
+					}
+					deadAgents[repoName] = append(deadAgents[repoName], agentName)
 				}
-				deadAgents[repoName] = append(deadAgents[repoName], agentName)
+			} else {
+				d.logger.Info("Successfully restored tmux session and agents for repo %s", repoName)
 			}
 			continue
 		}

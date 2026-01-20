@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -2053,5 +2054,143 @@ func TestHandleListReposRichFormat(t *testing.T) {
 	// session_healthy should match whether we created a real session
 	if sessionExists && !repoData["session_healthy"].(bool) {
 		t.Error("session_healthy should be true when session exists")
+	}
+}
+
+func TestHealthCheckAttemptsRestorationBeforeCleanup(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a unique session name for this test
+	sessionName := "mc-test-selfheal"
+
+	// Ensure the session doesn't exist at the start
+	tmuxClient.KillSession(sessionName)
+
+	// Create the repo directory on disk (required for restoration to succeed)
+	repoPath := d.paths.RepoDir("test-repo")
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("Failed to create repo dir: %v", err)
+	}
+
+	// Initialize a git repo (required for worktree operations)
+	cmd := exec.Command("git", "init", repoPath)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to init git repo: %v", err)
+	}
+
+	// Add repo to state with a non-existent tmux session
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents:      make(map[string]state.Agent),
+		MergeQueueConfig: state.MergeQueueConfig{
+			Enabled:   false, // Disable merge queue to simplify test
+			TrackMode: state.TrackModeAll,
+		},
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Add a fake agent (this should be cleared during restoration)
+	agent := state.Agent{
+		Type:       state.AgentTypeWorker,
+		TmuxWindow: "old-worker",
+		CreatedAt:  time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "old-worker", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	// Verify agent exists before health check
+	_, exists := d.state.GetAgent("test-repo", "old-worker")
+	if !exists {
+		t.Fatal("Agent should exist before health check")
+	}
+
+	// Run health check - this should attempt restoration since repo path exists
+	d.TriggerHealthCheck()
+
+	// Give tmux a moment to create the session
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify a tmux session was created (restoration was attempted)
+	hasSession, err := tmuxClient.HasSession(sessionName)
+	if err != nil {
+		t.Fatalf("Failed to check session: %v", err)
+	}
+
+	// Clean up the session we created
+	defer tmuxClient.KillSession(sessionName)
+
+	if hasSession {
+		t.Log("Self-healing succeeded: tmux session was restored")
+
+		// The old agent should have been removed (stale agents are cleared during restoration)
+		_, oldAgentExists := d.state.GetAgent("test-repo", "old-worker")
+		if oldAgentExists {
+			t.Error("Old agent should have been removed during restoration")
+		}
+
+		// New supervisor agent should have been created
+		_, supervisorExists := d.state.GetAgent("test-repo", "supervisor")
+		if !supervisorExists {
+			t.Log("Note: Supervisor agent creation may fail without claude binary, but session was restored")
+		}
+	} else {
+		// If restoration failed (e.g., due to missing claude binary in test env),
+		// agents should still be cleaned up as a fallback
+		_, exists := d.state.GetAgent("test-repo", "old-worker")
+		if exists {
+			t.Error("If restoration failed, agents should have been cleaned up as fallback")
+		}
+	}
+}
+
+func TestHealthCheckCleansUpWhenRestorationFails(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add repo with non-existent tmux session AND non-existent repo path
+	// This simulates a case where restoration should fail
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "nonexistent-session-cleanup-test",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Add agent
+	agent := state.Agent{
+		Type:       state.AgentTypeWorker,
+		TmuxWindow: "test-window",
+		CreatedAt:  time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "test-agent", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	// Verify agent exists
+	_, exists := d.state.GetAgent("test-repo", "test-agent")
+	if !exists {
+		t.Fatal("Agent should exist before health check")
+	}
+
+	// Run health check - restoration should fail (repo path doesn't exist)
+	// and agents should be cleaned up as fallback
+	d.TriggerHealthCheck()
+
+	// Verify agent was cleaned up since restoration failed
+	_, exists = d.state.GetAgent("test-repo", "test-agent")
+	if exists {
+		t.Error("Agent should be removed when restoration fails")
 	}
 }
