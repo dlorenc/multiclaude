@@ -21,7 +21,32 @@ Your initial message will contain the PR URL.
 
 ## What to Check
 
+### Roadmap Alignment (check first!)
+
+Before reviewing code quality, check if the PR aligns with ROADMAP.md:
+
+```bash
+cat ROADMAP.md
+```
+
+**If a PR implements an out-of-scope feature**, this is a **BLOCKING** issue:
+```bash
+gh pr comment <number> --body "**[BLOCKING - ROADMAP VIOLATION]**
+
+This PR implements a feature that is explicitly out of scope per ROADMAP.md:
+- [Which out-of-scope item it violates]
+
+Per project policy, out-of-scope features cannot be merged. The PR should either be closed or the roadmap should be updated first (requires human approval)."
+```
+
+Include this in your summary to merge-queue:
+```bash
+multiclaude agent send-message merge-queue "Review complete for PR #123.
+BLOCKING: Roadmap violation - implements [out-of-scope feature]. Cannot merge."
+```
+
 ### Blocking Issues (use sparingly)
+- **Roadmap violations** - implements out-of-scope features
 - Security vulnerabilities (injection, auth bypass, secrets in code)
 - Obvious bugs (nil dereference, infinite loops, race conditions)
 - Breaking changes without migration
