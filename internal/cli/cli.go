@@ -17,6 +17,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/names"
 	"github.com/dlorenc/multiclaude/internal/prompts"
+	"github.com/dlorenc/multiclaude/internal/prompts/commands"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/internal/worktree"
@@ -862,7 +863,7 @@ func (c *CLI) initRepo(args []string) error {
 		}
 
 		fmt.Println("Starting Claude Code in supervisor window...")
-		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, "supervisor", repoPath, supervisorSessionID, supervisorPromptFile, "")
+		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, "supervisor", repoPath, supervisorSessionID, supervisorPromptFile, repoName, "")
 		if err != nil {
 			return fmt.Errorf("failed to start supervisor Claude: %w", err)
 		}
@@ -876,7 +877,7 @@ func (c *CLI) initRepo(args []string) error {
 		// Start Claude in merge-queue window only if enabled
 		if mqEnabled {
 			fmt.Println("Starting Claude Code in merge-queue window...")
-			pid, err = c.startClaudeInTmux(claudeBinary, tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, "")
+			pid, err = c.startClaudeInTmux(claudeBinary, tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, repoName, "")
 			if err != nil {
 				return fmt.Errorf("failed to start merge-queue Claude: %w", err)
 			}
@@ -1007,7 +1008,7 @@ func (c *CLI) initRepo(args []string) error {
 		}
 
 		fmt.Println("Starting Claude Code in default workspace window...")
-		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, "default", workspacePath, workspaceSessionID, workspacePromptFile, "")
+		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, "default", workspacePath, workspaceSessionID, workspacePromptFile, repoName, "")
 		if err != nil {
 			return fmt.Errorf("failed to start default workspace Claude: %w", err)
 		}
@@ -1638,7 +1639,7 @@ func (c *CLI) createWorker(args []string) error {
 
 		fmt.Println("Starting Claude Code in worker window...")
 		initialMessage := fmt.Sprintf("Task: %s", task)
-		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workerName, wtPath, workerSessionID, workerPromptFile, initialMessage)
+		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workerName, wtPath, workerSessionID, workerPromptFile, repoName, initialMessage)
 		if err != nil {
 			return fmt.Errorf("failed to start worker Claude: %w", err)
 		}
@@ -2241,7 +2242,7 @@ func (c *CLI) addWorkspace(args []string) error {
 		}
 
 		fmt.Println("Starting Claude Code in workspace window...")
-		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workspaceName, wtPath, workspaceSessionID, workspacePromptFile, "")
+		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workspaceName, wtPath, workspaceSessionID, workspacePromptFile, repoName, "")
 		if err != nil {
 			return fmt.Errorf("failed to start workspace Claude: %w", err)
 		}
@@ -3115,7 +3116,7 @@ func (c *CLI) reviewPR(args []string) error {
 
 		fmt.Println("Starting Claude Code in reviewer window...")
 		initialMessage := fmt.Sprintf("Review PR #%s: https://github.com/%s/%s/pull/%s", prNumber, parts[1], parts[2], prNumber)
-		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, reviewerName, wtPath, reviewerSessionID, reviewerPromptFile, initialMessage)
+		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, reviewerName, wtPath, reviewerSessionID, reviewerPromptFile, repoName, initialMessage)
 		if err != nil {
 			return fmt.Errorf("failed to start reviewer Claude: %w", err)
 		}
@@ -4519,9 +4520,17 @@ func (c *CLI) setupOutputCapture(tmuxSession, tmuxWindow, repoName, agentName, a
 
 // startClaudeInTmux starts Claude Code in a tmux window with the given configuration
 // Returns the PID of the Claude process
-func (c *CLI) startClaudeInTmux(binaryPath, tmuxSession, tmuxWindow, workDir, sessionID, promptFile string, initialMessage string) (int, error) {
+func (c *CLI) startClaudeInTmux(binaryPath, tmuxSession, tmuxWindow, workDir, sessionID, promptFile, repoName string, initialMessage string) (int, error) {
+	// Set up per-agent Claude config directory with slash commands
+	agentConfigDir := c.paths.AgentClaudeConfigDir(repoName, tmuxWindow)
+	if err := commands.SetupAgentCommands(agentConfigDir); err != nil {
+		// Log warning but don't fail - slash commands are a nice-to-have
+		fmt.Printf("Warning: failed to setup agent commands: %v\n", err)
+	}
+
 	// Build Claude command using the full path to prevent version drift
-	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions", binaryPath, sessionID)
+	// Set CLAUDE_CONFIG_DIR to inject per-agent slash commands
+	claudeCmd := fmt.Sprintf("CLAUDE_CONFIG_DIR=%s %s --session-id %s --dangerously-skip-permissions", agentConfigDir, binaryPath, sessionID)
 
 	// Add prompt file if provided
 	if promptFile != "" {

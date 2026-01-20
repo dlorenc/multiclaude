@@ -102,15 +102,16 @@ func TestOrphanedTmuxSessionCleanup(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	paths := &config.Paths{
-		Root:         tmpDir,
-		DaemonPID:    filepath.Join(tmpDir, "daemon.pid"),
-		DaemonSock:   filepath.Join(tmpDir, "daemon.sock"),
-		DaemonLog:    filepath.Join(tmpDir, "daemon.log"),
-		StateFile:    filepath.Join(tmpDir, "state.json"),
-		ReposDir:     filepath.Join(tmpDir, "repos"),
-		WorktreesDir: filepath.Join(tmpDir, "wts"),
-		MessagesDir:  filepath.Join(tmpDir, "messages"),
-		OutputDir:    filepath.Join(tmpDir, "output"),
+		Root:            tmpDir,
+		DaemonPID:       filepath.Join(tmpDir, "daemon.pid"),
+		DaemonSock:      filepath.Join(tmpDir, "daemon.sock"),
+		DaemonLog:       filepath.Join(tmpDir, "daemon.log"),
+		StateFile:       filepath.Join(tmpDir, "state.json"),
+		ReposDir:        filepath.Join(tmpDir, "repos"),
+		WorktreesDir:    filepath.Join(tmpDir, "wts"),
+		MessagesDir:     filepath.Join(tmpDir, "messages"),
+		OutputDir:       filepath.Join(tmpDir, "output"),
+		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -249,15 +250,16 @@ func TestOrphanedWorktreeCleanup(t *testing.T) {
 func TestStaleSocketCleanup(t *testing.T) {
 	tmpDir := t.TempDir()
 	paths := &config.Paths{
-		Root:         tmpDir,
-		DaemonPID:    filepath.Join(tmpDir, "daemon.pid"),
-		DaemonSock:   filepath.Join(tmpDir, "daemon.sock"),
-		DaemonLog:    filepath.Join(tmpDir, "daemon.log"),
-		StateFile:    filepath.Join(tmpDir, "state.json"),
-		ReposDir:     filepath.Join(tmpDir, "repos"),
-		WorktreesDir: filepath.Join(tmpDir, "wts"),
-		MessagesDir:  filepath.Join(tmpDir, "messages"),
-		OutputDir:    filepath.Join(tmpDir, "output"),
+		Root:            tmpDir,
+		DaemonPID:       filepath.Join(tmpDir, "daemon.pid"),
+		DaemonSock:      filepath.Join(tmpDir, "daemon.sock"),
+		DaemonLog:       filepath.Join(tmpDir, "daemon.log"),
+		StateFile:       filepath.Join(tmpDir, "state.json"),
+		ReposDir:        filepath.Join(tmpDir, "repos"),
+		WorktreesDir:    filepath.Join(tmpDir, "wts"),
+		MessagesDir:     filepath.Join(tmpDir, "messages"),
+		OutputDir:       filepath.Join(tmpDir, "output"),
+		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -365,15 +367,16 @@ func TestDaemonCrashRecovery(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	paths := &config.Paths{
-		Root:         tmpDir,
-		DaemonPID:    filepath.Join(tmpDir, "daemon.pid"),
-		DaemonSock:   filepath.Join(tmpDir, "daemon.sock"),
-		DaemonLog:    filepath.Join(tmpDir, "daemon.log"),
-		StateFile:    filepath.Join(tmpDir, "state.json"),
-		ReposDir:     filepath.Join(tmpDir, "repos"),
-		WorktreesDir: filepath.Join(tmpDir, "wts"),
-		MessagesDir:  filepath.Join(tmpDir, "messages"),
-		OutputDir:    filepath.Join(tmpDir, "output"),
+		Root:            tmpDir,
+		DaemonPID:       filepath.Join(tmpDir, "daemon.pid"),
+		DaemonSock:      filepath.Join(tmpDir, "daemon.sock"),
+		DaemonLog:       filepath.Join(tmpDir, "daemon.log"),
+		StateFile:       filepath.Join(tmpDir, "state.json"),
+		ReposDir:        filepath.Join(tmpDir, "repos"),
+		WorktreesDir:    filepath.Join(tmpDir, "wts"),
+		MessagesDir:     filepath.Join(tmpDir, "messages"),
+		OutputDir:       filepath.Join(tmpDir, "output"),
+		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {

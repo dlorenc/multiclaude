@@ -9,15 +9,16 @@ import (
 
 // Paths holds all the directory and file paths used by multiclaude
 type Paths struct {
-	Root         string // $HOME/.multiclaude/
-	DaemonPID    string // daemon.pid
-	DaemonSock   string // daemon.sock
-	DaemonLog    string // daemon.log
-	StateFile    string // state.json
-	ReposDir     string // repos/
-	WorktreesDir string // wts/
-	MessagesDir  string // messages/
-	OutputDir    string // output/
+	Root            string // $HOME/.multiclaude/
+	DaemonPID       string // daemon.pid
+	DaemonSock      string // daemon.sock
+	DaemonLog       string // daemon.log
+	StateFile       string // state.json
+	ReposDir        string // repos/
+	WorktreesDir    string // wts/
+	MessagesDir     string // messages/
+	OutputDir       string // output/
+	ClaudeConfigDir string // claude-config/
 }
 
 // DefaultPaths returns the default paths for multiclaude
@@ -30,15 +31,16 @@ func DefaultPaths() (*Paths, error) {
 	root := filepath.Join(home, ".multiclaude")
 
 	return &Paths{
-		Root:         root,
-		DaemonPID:    filepath.Join(root, "daemon.pid"),
-		DaemonSock:   filepath.Join(root, "daemon.sock"),
-		DaemonLog:    filepath.Join(root, "daemon.log"),
-		StateFile:    filepath.Join(root, "state.json"),
-		ReposDir:     filepath.Join(root, "repos"),
-		WorktreesDir: filepath.Join(root, "wts"),
-		MessagesDir:  filepath.Join(root, "messages"),
-		OutputDir:    filepath.Join(root, "output"),
+		Root:            root,
+		DaemonPID:       filepath.Join(root, "daemon.pid"),
+		DaemonSock:      filepath.Join(root, "daemon.sock"),
+		DaemonLog:       filepath.Join(root, "daemon.log"),
+		StateFile:       filepath.Join(root, "state.json"),
+		ReposDir:        filepath.Join(root, "repos"),
+		WorktreesDir:    filepath.Join(root, "wts"),
+		MessagesDir:     filepath.Join(root, "messages"),
+		OutputDir:       filepath.Join(root, "output"),
+		ClaudeConfigDir: filepath.Join(root, "claude-config"),
 	}, nil
 }
 
@@ -50,6 +52,7 @@ func (p *Paths) EnsureDirectories() error {
 		p.WorktreesDir,
 		p.MessagesDir,
 		p.OutputDir,
+		p.ClaudeConfigDir,
 	}
 
 	for _, dir := range dirs {
@@ -102,4 +105,15 @@ func (p *Paths) AgentLogFile(repoName, agentName string, isWorker bool) string {
 		return filepath.Join(p.WorkersOutputDir(repoName), agentName+".log")
 	}
 	return filepath.Join(p.RepoOutputDir(repoName), agentName+".log")
+}
+
+// AgentClaudeConfigDir returns the path for a specific agent's Claude config directory
+// This is used to set CLAUDE_CONFIG_DIR for per-agent slash commands
+func (p *Paths) AgentClaudeConfigDir(repoName, agentName string) string {
+	return filepath.Join(p.ClaudeConfigDir, repoName, agentName)
+}
+
+// AgentCommandsDir returns the path for a specific agent's slash commands directory
+func (p *Paths) AgentCommandsDir(repoName, agentName string) string {
+	return filepath.Join(p.AgentClaudeConfigDir(repoName, agentName), "commands")
 }

@@ -45,17 +45,21 @@ func TestDefaultPaths(t *testing.T) {
 	if !strings.HasPrefix(paths.MessagesDir, paths.Root) {
 		t.Errorf("MessagesDir not under Root: %s", paths.MessagesDir)
 	}
+	if !strings.HasPrefix(paths.ClaudeConfigDir, paths.Root) {
+		t.Errorf("ClaudeConfigDir not under Root: %s", paths.ClaudeConfigDir)
+	}
 }
 
 func TestEnsureDirectories(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	paths := &Paths{
-		Root:         filepath.Join(tmpDir, "test-multiclaude"),
-		ReposDir:     filepath.Join(tmpDir, "test-multiclaude", "repos"),
-		WorktreesDir: filepath.Join(tmpDir, "test-multiclaude", "wts"),
-		MessagesDir:  filepath.Join(tmpDir, "test-multiclaude", "messages"),
-		OutputDir:    filepath.Join(tmpDir, "test-multiclaude", "output"),
+		Root:            filepath.Join(tmpDir, "test-multiclaude"),
+		ReposDir:        filepath.Join(tmpDir, "test-multiclaude", "repos"),
+		WorktreesDir:    filepath.Join(tmpDir, "test-multiclaude", "wts"),
+		MessagesDir:     filepath.Join(tmpDir, "test-multiclaude", "messages"),
+		OutputDir:       filepath.Join(tmpDir, "test-multiclaude", "output"),
+		ClaudeConfigDir: filepath.Join(tmpDir, "test-multiclaude", "claude-config"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -63,7 +67,7 @@ func TestEnsureDirectories(t *testing.T) {
 	}
 
 	// Verify directories were created
-	dirs := []string{paths.Root, paths.ReposDir, paths.WorktreesDir, paths.MessagesDir, paths.OutputDir}
+	dirs := []string{paths.Root, paths.ReposDir, paths.WorktreesDir, paths.MessagesDir, paths.OutputDir, paths.ClaudeConfigDir}
 	for _, dir := range dirs {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			t.Errorf("Directory not created: %s", dir)

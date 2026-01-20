@@ -305,15 +305,16 @@ func setupTestEnvironment(t *testing.T) (*CLI, *daemon.Daemon, func()) {
 
 	// Create paths
 	paths := &config.Paths{
-		Root:         tmpDir,
-		DaemonPID:    filepath.Join(tmpDir, "daemon.pid"),
-		DaemonSock:   filepath.Join(tmpDir, "daemon.sock"),
-		DaemonLog:    filepath.Join(tmpDir, "daemon.log"),
-		StateFile:    filepath.Join(tmpDir, "state.json"),
-		ReposDir:     filepath.Join(tmpDir, "repos"),
-		WorktreesDir: filepath.Join(tmpDir, "wts"),
-		MessagesDir:  filepath.Join(tmpDir, "messages"),
-		OutputDir:    filepath.Join(tmpDir, "output"),
+		Root:            tmpDir,
+		DaemonPID:       filepath.Join(tmpDir, "daemon.pid"),
+		DaemonSock:      filepath.Join(tmpDir, "daemon.sock"),
+		DaemonLog:       filepath.Join(tmpDir, "daemon.log"),
+		StateFile:       filepath.Join(tmpDir, "state.json"),
+		ReposDir:        filepath.Join(tmpDir, "repos"),
+		WorktreesDir:    filepath.Join(tmpDir, "wts"),
+		MessagesDir:     filepath.Join(tmpDir, "messages"),
+		OutputDir:       filepath.Join(tmpDir, "output"),
+		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -650,15 +651,16 @@ func TestCLISendMessageFallbackWhenDaemonUnavailable(t *testing.T) {
 
 	// Create paths pointing to non-existent socket
 	paths := &config.Paths{
-		Root:         tmpDir,
-		DaemonPID:    filepath.Join(tmpDir, "daemon.pid"),
-		DaemonSock:   filepath.Join(tmpDir, "nonexistent.sock"), // Socket doesn't exist
-		DaemonLog:    filepath.Join(tmpDir, "daemon.log"),
-		StateFile:    filepath.Join(tmpDir, "state.json"),
-		ReposDir:     filepath.Join(tmpDir, "repos"),
-		WorktreesDir: filepath.Join(tmpDir, "wts"),
-		MessagesDir:  filepath.Join(tmpDir, "messages"),
-		OutputDir:    filepath.Join(tmpDir, "output"),
+		Root:            tmpDir,
+		DaemonPID:       filepath.Join(tmpDir, "daemon.pid"),
+		DaemonSock:      filepath.Join(tmpDir, "nonexistent.sock"), // Socket doesn't exist
+		DaemonLog:       filepath.Join(tmpDir, "daemon.log"),
+		StateFile:       filepath.Join(tmpDir, "state.json"),
+		ReposDir:        filepath.Join(tmpDir, "repos"),
+		WorktreesDir:    filepath.Join(tmpDir, "wts"),
+		MessagesDir:     filepath.Join(tmpDir, "messages"),
+		OutputDir:       filepath.Join(tmpDir, "output"),
+		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -1031,15 +1033,16 @@ func TestCLIUnknownCommand(t *testing.T) {
 func TestNewWithPaths(t *testing.T) {
 	tmpDir := t.TempDir()
 	paths := &config.Paths{
-		Root:         tmpDir,
-		DaemonPID:    filepath.Join(tmpDir, "daemon.pid"),
-		DaemonSock:   filepath.Join(tmpDir, "daemon.sock"),
-		DaemonLog:    filepath.Join(tmpDir, "daemon.log"),
-		StateFile:    filepath.Join(tmpDir, "state.json"),
-		ReposDir:     filepath.Join(tmpDir, "repos"),
-		WorktreesDir: filepath.Join(tmpDir, "wts"),
-		MessagesDir:  filepath.Join(tmpDir, "messages"),
-		OutputDir:    filepath.Join(tmpDir, "output"),
+		Root:            tmpDir,
+		DaemonPID:       filepath.Join(tmpDir, "daemon.pid"),
+		DaemonSock:      filepath.Join(tmpDir, "daemon.sock"),
+		DaemonLog:       filepath.Join(tmpDir, "daemon.log"),
+		StateFile:       filepath.Join(tmpDir, "state.json"),
+		ReposDir:        filepath.Join(tmpDir, "repos"),
+		WorktreesDir:    filepath.Join(tmpDir, "wts"),
+		MessagesDir:     filepath.Join(tmpDir, "messages"),
+		OutputDir:       filepath.Join(tmpDir, "output"),
+		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
 	}
 
 	// Test CLI creation
