@@ -9,8 +9,8 @@ import (
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
-	"github.com/dlorenc/multiclaude/pkg/tmux"
 	"github.com/dlorenc/multiclaude/pkg/config"
+	"github.com/dlorenc/multiclaude/pkg/tmux"
 )
 
 func setupTestDaemon(t *testing.T) (*Daemon, func()) {
@@ -997,9 +997,10 @@ func TestMessageRoutingWithRealTmux(t *testing.T) {
 	defer cleanup()
 
 	// Create a real tmux session
+	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-routing"
 	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
-		t.Fatalf("Failed to create tmux session: %v", err)
+		t.Skipf("tmux cannot create sessions in this environment: %v", err)
 	}
 	defer tmuxClient.KillSession(sessionName)
 
@@ -1683,9 +1684,9 @@ func TestGenerateTrackingModePrompt(t *testing.T) {
 	defer cleanup()
 
 	tests := []struct {
-		name          string
-		trackMode     state.TrackMode
-		wantContains  []string
+		name           string
+		trackMode      state.TrackMode
+		wantContains   []string
 		wantNotContain []string
 	}{
 		{

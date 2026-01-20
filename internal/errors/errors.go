@@ -191,14 +191,36 @@ func GitOperationFailed(operation string, cause error) *CLIError {
 	}
 }
 
-// TmuxOperationFailed creates an error for tmux operation failures
+// TmuxOperationFailed creates an error for tmux operation failures with specific suggestions
 func TmuxOperationFailed(operation string, cause error) *CLIError {
+	suggestion := tmuxSuggestionForOperation(operation, cause)
 	return &CLIError{
 		Category:   CategoryRuntime,
 		Message:    fmt.Sprintf("tmux %s failed", operation),
 		Cause:      cause,
-		Suggestion: "ensure tmux is installed and no conflicting sessions exist",
+		Suggestion: suggestion,
 	}
+}
+
+// tmuxSuggestionForOperation provides specific suggestions based on the operation and error
+func tmuxSuggestionForOperation(operation string, cause error) string {
+	errMsg := ""
+	if cause != nil {
+		errMsg = cause.Error()
+	}
+
+	// tmux binary not found
+	if strings.Contains(errMsg, "executable file not found") || strings.Contains(errMsg, "not found in") {
+		return "could not find 'tmux' binary in PATH"
+	}
+
+	// Session already exists
+	if strings.Contains(errMsg, "duplicate session") || strings.Contains(errMsg, "already exists") {
+		return "a tmux session with this name already exists; kill it with: tmux kill-session -t <session-name>"
+	}
+
+	// Default: no specific suggestion
+	return ""
 }
 
 // WorktreeCreationFailed creates an error for worktree creation failures
@@ -218,6 +240,38 @@ func ClaudeNotFound(cause error) *CLIError {
 		Message:    "claude binary not found in PATH",
 		Cause:      cause,
 		Suggestion: "install Claude Code CLI: https://docs.anthropic.com/claude-code",
+	}
+}
+
+// ProviderNotFound creates an error for when a provider binary is not found
+func ProviderNotFound(provider string, cause error) *CLIError {
+	suggestion := "install Claude Code CLI: https://docs.anthropic.com/claude-code"
+	if provider == "happy" {
+		suggestion = "install Happy CLI: https://happy.engineering/docs"
+	}
+	return &CLIError{
+		Category:   CategoryConfig,
+		Message:    fmt.Sprintf("%s binary not found in PATH", provider),
+		Cause:      cause,
+		Suggestion: suggestion,
+	}
+}
+
+// ProviderAuthNotConfigured creates an error for unconfigured provider auth
+func ProviderAuthNotConfigured(provider string) *CLIError {
+	return &CLIError{
+		Category:   CategoryConfig,
+		Message:    fmt.Sprintf("%s authentication not configured", provider),
+		Suggestion: fmt.Sprintf("run '%s auth login' to authenticate", provider),
+	}
+}
+
+// InvalidProvider creates an error for invalid provider values
+func InvalidProvider(value string) *CLIError {
+	return &CLIError{
+		Category:   CategoryUsage,
+		Message:    fmt.Sprintf("invalid provider: %s", value),
+		Suggestion: "use 'claude' or 'happy'",
 	}
 }
 

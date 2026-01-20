@@ -2,12 +2,12 @@ package daemon
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -15,22 +15,24 @@ import (
 	"github.com/dlorenc/multiclaude/internal/logging"
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/prompts"
+	"github.com/dlorenc/multiclaude/internal/provider"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
-	"github.com/dlorenc/multiclaude/pkg/tmux"
 	"github.com/dlorenc/multiclaude/internal/worktree"
+	"github.com/dlorenc/multiclaude/pkg/claude"
 	"github.com/dlorenc/multiclaude/pkg/config"
+	"github.com/dlorenc/multiclaude/pkg/tmux"
 )
 
 // Daemon represents the main daemon process
 type Daemon struct {
-	paths            *config.Paths
-	state            *state.State
-	tmux             *tmux.Client
-	logger           *logging.Logger
-	server           *socket.Server
-	pidFile          *PIDFile
-	claudeBinaryPath string // Full path to claude binary
+	paths        *config.Paths
+	state        *state.State
+	tmux         *tmux.Client
+	logger       *logging.Logger
+	server       *socket.Server
+	pidFile      *PIDFile
+	claudeRunner *claude.Runner
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -56,24 +58,18 @@ func New(paths *config.Paths) (*Daemon, error) {
 		return nil, fmt.Errorf("failed to load state: %w", err)
 	}
 
-	// Resolve claude binary path
-	claudePath, err := exec.LookPath("claude")
-	if err != nil {
-		logger.Warn("Claude binary not found in PATH: %v", err)
-		claudePath = "claude" // Fall back to just "claude"
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 
+	tmuxClient := tmux.NewClient()
 	d := &Daemon{
-		paths:            paths,
-		state:            st,
-		tmux:             tmux.NewClient(),
-		logger:           logger,
-		pidFile:          NewPIDFile(paths.DaemonPID),
-		claudeBinaryPath: claudePath,
-		ctx:              ctx,
-		cancel:           cancel,
+		paths:        paths,
+		state:        st,
+		tmux:         tmuxClient,
+		logger:       logger,
+		pidFile:      NewPIDFile(paths.DaemonPID),
+		claudeRunner: claude.NewRunner(claude.WithTerminal(tmuxClient)),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 
 	// Create socket server
@@ -278,8 +274,17 @@ func (d *Daemon) checkAgentHealth() {
 			if agent.PID > 0 {
 				if !isProcessAlive(agent.PID) {
 					d.logger.Warn("Agent %s process (PID %d) not running", agentName, agent.PID)
-					// Don't clean up just because process died - window might still be active
-					// User might have restarted Claude manually
+
+					// For managed agents (supervisor, merge-queue), attempt auto-restart
+					if agent.Type == state.AgentTypeSupervisor || agent.Type == state.AgentTypeMergeQueue {
+						d.logger.Info("Attempting to auto-restart managed agent %s", agentName)
+						if err := d.restartManagedAgent(repoName, agentName, agent, repo); err != nil {
+							d.logger.Error("Failed to restart agent %s: %v", agentName, err)
+						} else {
+							d.logger.Info("Successfully restarted agent %s", agentName)
+						}
+					}
+					// For other agents (workers, workspaces), don't clean up - user might restart manually
 				}
 			}
 		}
@@ -493,6 +498,15 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	case "update_repo_config":
 		return d.handleUpdateRepoConfig(req)
 
+	case "set_current_repo":
+		return d.handleSetCurrentRepo(req)
+
+	case "get_current_repo":
+		return d.handleGetCurrentRepo(req)
+
+	case "clear_current_repo":
+		return d.handleClearCurrentRepo(req)
+
 	case "route_messages":
 		go d.routeMessages()
 		return socket.Response{Success: true, Data: "Message routing triggered"}
@@ -500,7 +514,7 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	default:
 		return socket.Response{
 			Success: false,
-			Error:   fmt.Sprintf("unknown command: %s", req.Command),
+			Error:   fmt.Sprintf("unknown command: %q. Run 'multiclaude --help' for available commands", req.Command),
 		}
 	}
 }
@@ -957,7 +971,7 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 	}
 }
 
-// handleGetRepoConfig returns the merge queue configuration for a repository
+// handleGetRepoConfig returns the configuration for a repository
 func (d *Daemon) handleGetRepoConfig(req socket.Request) socket.Response {
 	name, ok := req.Args["name"].(string)
 	if !ok {
@@ -975,51 +989,114 @@ func (d *Daemon) handleGetRepoConfig(req socket.Request) socket.Response {
 		mqConfig = state.DefaultMergeQueueConfig()
 	}
 
+	// Get provider config (use default if not set for backward compatibility)
+	providerConfig := repo.ProviderConfig
+	if providerConfig.Provider == "" {
+		providerConfig = state.DefaultProviderConfig()
+	}
+
 	return socket.Response{
 		Success: true,
 		Data: map[string]interface{}{
 			"mq_enabled":    mqConfig.Enabled,
 			"mq_track_mode": string(mqConfig.TrackMode),
+			"provider":      string(providerConfig.Provider),
 		},
 	}
 }
 
-// handleUpdateRepoConfig updates the merge queue configuration for a repository
+// handleUpdateRepoConfig updates the configuration for a repository
 func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
 	name, ok := req.Args["name"].(string)
 	if !ok {
 		return socket.Response{Success: false, Error: "missing or invalid 'name' argument"}
 	}
 
-	// Get current config
-	currentConfig, err := d.state.GetMergeQueueConfig(name)
+	// Get current merge queue config
+	currentMQConfig, err := d.state.GetMergeQueueConfig(name)
 	if err != nil {
 		return socket.Response{Success: false, Error: err.Error()}
 	}
 
-	// Update with provided values
+	// Update merge queue config with provided values
+	mqUpdated := false
 	if mqEnabled, ok := req.Args["mq_enabled"].(bool); ok {
-		currentConfig.Enabled = mqEnabled
+		currentMQConfig.Enabled = mqEnabled
+		mqUpdated = true
 	}
 	if mqTrackMode, ok := req.Args["mq_track_mode"].(string); ok {
 		switch mqTrackMode {
 		case "all":
-			currentConfig.TrackMode = state.TrackModeAll
+			currentMQConfig.TrackMode = state.TrackModeAll
 		case "author":
-			currentConfig.TrackMode = state.TrackModeAuthor
+			currentMQConfig.TrackMode = state.TrackModeAuthor
 		case "assigned":
-			currentConfig.TrackMode = state.TrackModeAssigned
+			currentMQConfig.TrackMode = state.TrackModeAssigned
 		default:
 			return socket.Response{Success: false, Error: fmt.Sprintf("invalid track mode: %s", mqTrackMode)}
 		}
+		mqUpdated = true
 	}
 
-	// Save updated config
-	if err := d.state.UpdateMergeQueueConfig(name, currentConfig); err != nil {
+	if mqUpdated {
+		if err := d.state.UpdateMergeQueueConfig(name, currentMQConfig); err != nil {
+			return socket.Response{Success: false, Error: err.Error()}
+		}
+		d.logger.Info("Updated merge queue config for repo %s: enabled=%v, track=%s", name, currentMQConfig.Enabled, currentMQConfig.TrackMode)
+	}
+
+	// Handle provider config update
+	if providerVal, ok := req.Args["provider"].(string); ok {
+		switch providerVal {
+		case "claude", "happy":
+			// Validate the provider is available before setting
+			if _, err := provider.Resolve(state.ProviderType(providerVal)); err != nil {
+				return socket.Response{Success: false, Error: fmt.Sprintf("provider %s not available: %v", providerVal, err)}
+			}
+			providerConfig := state.ProviderConfig{Provider: state.ProviderType(providerVal)}
+			if err := d.state.UpdateProviderConfig(name, providerConfig); err != nil {
+				return socket.Response{Success: false, Error: err.Error()}
+			}
+			d.logger.Info("Updated provider for repo %s: %s", name, providerVal)
+		default:
+			return socket.Response{Success: false, Error: fmt.Sprintf("invalid provider: %s (must be 'claude' or 'happy')", providerVal)}
+		}
+	}
+
+	return socket.Response{Success: true}
+}
+
+// handleSetCurrentRepo sets the current/default repository
+func (d *Daemon) handleSetCurrentRepo(req socket.Request) socket.Response {
+	name, ok := req.Args["name"].(string)
+	if !ok || name == "" {
+		return socket.Response{Success: false, Error: "missing 'name': repository name is required"}
+	}
+
+	if err := d.state.SetCurrentRepo(name); err != nil {
 		return socket.Response{Success: false, Error: err.Error()}
 	}
 
-	d.logger.Info("Updated merge queue config for repo %s: enabled=%v, track=%s", name, currentConfig.Enabled, currentConfig.TrackMode)
+	d.logger.Info("Set current repository to: %s", name)
+	return socket.Response{Success: true, Data: name}
+}
+
+// handleGetCurrentRepo returns the current/default repository
+func (d *Daemon) handleGetCurrentRepo(req socket.Request) socket.Response {
+	currentRepo := d.state.GetCurrentRepo()
+	if currentRepo == "" {
+		return socket.Response{Success: false, Error: "no current repository set"}
+	}
+	return socket.Response{Success: true, Data: currentRepo}
+}
+
+// handleClearCurrentRepo clears the current/default repository
+func (d *Daemon) handleClearCurrentRepo(req socket.Request) socket.Response {
+	if err := d.state.ClearCurrentRepo(); err != nil {
+		return socket.Response{Success: false, Error: err.Error()}
+	}
+
+	d.logger.Info("Cleared current repository")
 	return socket.Response{Success: true}
 }
 
@@ -1224,10 +1301,31 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 	return nil
 }
 
+// getProviderBinaryPath resolves the CLI binary path for a repository based on its provider config
+func (d *Daemon) getProviderBinaryPath(repoName string) (string, error) {
+	providerConfig, err := d.state.GetProviderConfig(repoName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get provider config: %w", err)
+	}
+
+	info, err := provider.Resolve(providerConfig.Provider)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve provider: %w", err)
+	}
+
+	return info.BinaryPath, nil
+}
+
 // startAgent starts a Claude agent in a tmux window and registers it with state
 func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName string, agentType prompts.AgentType, workDir string) error {
+	// Resolve provider binary path for this repo
+	binaryPath, err := d.getProviderBinaryPath(repoName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve provider: %w", err)
+	}
+
 	// Generate session ID
-	sessionID, err := generateSessionID()
+	sessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate session ID: %w", err)
 	}
@@ -1244,9 +1342,9 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
-	// Build Claude command
+	// Build CLI command
 	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
-		d.claudeBinaryPath, sessionID, promptFile)
+		binaryPath, sessionID, promptFile)
 
 	// Send command to tmux window
 	target := fmt.Sprintf("%s:%s", repo.TmuxSession, agentName)
@@ -1261,8 +1359,7 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 	// Get PID
 	pid, err := d.tmux.GetPanePID(repo.TmuxSession, agentName)
 	if err != nil {
-		d.logger.Warn("Failed to get PID for %s: %v", agentName, err)
-		pid = 0
+		return fmt.Errorf("failed to get Claude PID: %w", err)
 	}
 
 	// Register agent with state
@@ -1285,8 +1382,14 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 
 // startMergeQueueAgent starts a merge-queue agent with tracking mode configuration
 func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, workDir string, mqConfig state.MergeQueueConfig) error {
+	// Resolve provider binary path for this repo
+	binaryPath, err := d.getProviderBinaryPath(repoName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve provider: %w", err)
+	}
+
 	// Generate session ID
-	sessionID, err := generateSessionID()
+	sessionID, err := claude.GenerateSessionID()
 	if err != nil {
 		return fmt.Errorf("failed to generate session ID: %w", err)
 	}
@@ -1303,9 +1406,9 @@ func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, w
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
-	// Build Claude command
+	// Build CLI command
 	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
-		d.claudeBinaryPath, sessionID, promptFile)
+		binaryPath, sessionID, promptFile)
 
 	// Send command to tmux window
 	target := fmt.Sprintf("%s:merge-queue", repo.TmuxSession)
@@ -1320,8 +1423,7 @@ func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, w
 	// Get PID
 	pid, err := d.tmux.GetPanePID(repo.TmuxSession, "merge-queue")
 	if err != nil {
-		d.logger.Warn("Failed to get PID for merge-queue: %v", err)
-		pid = 0
+		return fmt.Errorf("failed to get Claude PID: %w", err)
 	}
 
 	// Register agent with state
@@ -1411,6 +1513,53 @@ Monitor and process all multiclaude-labeled PRs regardless of author or assignee
 	}
 }
 
+// restartManagedAgent restarts a managed agent (supervisor, merge-queue) that has exited.
+// It uses --resume to continue the existing session if history exists.
+func (d *Daemon) restartManagedAgent(repoName, agentName string, agent state.Agent, repo *state.Repository) error {
+	// Check if the session has history
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	claudeProjectsDir := filepath.Join(home, ".claude", "projects")
+	encodedPath := strings.ReplaceAll(agent.WorktreePath, "/", "-")
+	sessionFile := filepath.Join(claudeProjectsDir, encodedPath, agent.SessionID+".jsonl")
+
+	hasHistory := false
+	if info, err := os.Stat(sessionFile); err == nil && info.Size() > 0 {
+		hasHistory = true
+	}
+
+	// Get the existing prompt file path
+	promptFile := filepath.Join(d.paths.Root, "prompts", agentName+".md")
+	if _, err := os.Stat(promptFile); os.IsNotExist(err) {
+		// Regenerate the prompt file if it doesn't exist
+		promptFile, err = d.writePromptFile(repoName, prompts.AgentType(agent.Type), agentName)
+		if err != nil {
+			return fmt.Errorf("failed to regenerate prompt file: %w", err)
+		}
+	}
+
+	// Restart Claude using the runner
+	result, err := d.claudeRunner.Start(repo.TmuxSession, agentName, claude.Config{
+		SessionID:        agent.SessionID,
+		Resume:           hasHistory,
+		SystemPromptFile: promptFile,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to restart Claude: %w", err)
+	}
+
+	// Update the agent's PID in state
+	if err := d.state.UpdateAgentPID(repoName, agentName, result.PID); err != nil {
+		d.logger.Warn("Failed to update agent PID: %v", err)
+	}
+
+	d.logger.Info("Restarted agent %s with PID %d (resumed=%v)", agentName, result.PID, hasHistory)
+	return nil
+}
+
 // writePromptFile writes the agent prompt to a file and returns the path
 func (d *Daemon) writePromptFile(repoName string, agentType prompts.AgentType, agentName string) (string, error) {
 	repoPath := d.paths.RepoDir(repoName)
@@ -1466,26 +1615,6 @@ func (d *Daemon) copyHooksConfig(repoPath, workDir string) error {
 	return nil
 }
 
-// generateSessionID generates a unique UUID v4 session ID
-func generateSessionID() (string, error) {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("failed to generate session ID: %w", err)
-	}
-
-	// Set version (4) and variant bits for UUID v4
-	bytes[6] = (bytes[6] & 0x0f) | 0x40 // Version 4
-	bytes[8] = (bytes[8] & 0x3f) | 0x80 // Variant 10
-
-	return fmt.Sprintf("%x-%x-%x-%x-%x",
-		bytes[0:4],
-		bytes[4:6],
-		bytes[6:8],
-		bytes[8:10],
-		bytes[10:16],
-	), nil
-}
-
 // isProcessAlive checks if a process is running
 func isProcessAlive(pid int) bool {
 	process, err := os.FindProcess(pid)
@@ -1531,6 +1660,11 @@ func RunDetached() error {
 	pidFile := NewPIDFile(paths.DaemonPID)
 	if running, pid, _ := pidFile.IsRunning(); running {
 		return fmt.Errorf("daemon already running (PID: %d)", pid)
+	}
+
+	// Ensure config directory exists
+	if err := os.MkdirAll(paths.Root, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	// Create log file for output

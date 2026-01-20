@@ -899,3 +899,80 @@ func TestTrackModeConstants(t *testing.T) {
 		t.Errorf("TrackModeAssigned = %q, want 'assigned'", TrackModeAssigned)
 	}
 }
+
+func TestCurrentRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Add a test repository
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "multiclaude-test-repo",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Test GetCurrentRepo when not set
+	if current := s.GetCurrentRepo(); current != "" {
+		t.Errorf("GetCurrentRepo() = %q, want empty string", current)
+	}
+
+	// Test SetCurrentRepo
+	if err := s.SetCurrentRepo("test-repo"); err != nil {
+		t.Fatalf("SetCurrentRepo() failed: %v", err)
+	}
+
+	// Test GetCurrentRepo after setting
+	if current := s.GetCurrentRepo(); current != "test-repo" {
+		t.Errorf("GetCurrentRepo() = %q, want 'test-repo'", current)
+	}
+
+	// Test SetCurrentRepo with non-existent repo
+	if err := s.SetCurrentRepo("nonexistent"); err == nil {
+		t.Error("SetCurrentRepo() with non-existent repo should return error")
+	}
+
+	// Test ClearCurrentRepo
+	if err := s.ClearCurrentRepo(); err != nil {
+		t.Fatalf("ClearCurrentRepo() failed: %v", err)
+	}
+
+	// Verify cleared
+	if current := s.GetCurrentRepo(); current != "" {
+		t.Errorf("GetCurrentRepo() after clear = %q, want empty string", current)
+	}
+}
+
+func TestCurrentRepoPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Create state and set current repo
+	s := New(statePath)
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "multiclaude-test-repo",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+	if err := s.SetCurrentRepo("test-repo"); err != nil {
+		t.Fatalf("SetCurrentRepo() failed: %v", err)
+	}
+
+	// Load state from disk
+	loaded, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Verify current repo persisted
+	if current := loaded.GetCurrentRepo(); current != "test-repo" {
+		t.Errorf("Loaded GetCurrentRepo() = %q, want 'test-repo'", current)
+	}
+}

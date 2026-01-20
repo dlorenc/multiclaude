@@ -31,6 +31,29 @@ const (
 	TrackModeAssigned TrackMode = "assigned"
 )
 
+// ProviderType defines which CLI backend to use
+type ProviderType string
+
+const (
+	// ProviderClaude uses the claude CLI (default)
+	ProviderClaude ProviderType = "claude"
+	// ProviderHappy uses the happy CLI from happy.engineering
+	ProviderHappy ProviderType = "happy"
+)
+
+// ProviderConfig holds configuration for the CLI provider
+type ProviderConfig struct {
+	// Provider is the CLI backend to use: "claude" or "happy" (default: "claude")
+	Provider ProviderType `json:"provider"`
+}
+
+// DefaultProviderConfig returns the default provider configuration
+func DefaultProviderConfig() ProviderConfig {
+	return ProviderConfig{
+		Provider: ProviderClaude,
+	}
+}
+
 // MergeQueueConfig holds configuration for the merge queue agent
 type MergeQueueConfig struct {
 	// Enabled determines whether the merge queue agent should run (default: true)
@@ -54,7 +77,7 @@ type Agent struct {
 	TmuxWindow      string    `json:"tmux_window"`
 	SessionID       string    `json:"session_id"`
 	PID             int       `json:"pid"`
-	Task            string    `json:"task,omitempty"`             // Only for workers
+	Task            string    `json:"task,omitempty"` // Only for workers
 	CreatedAt       time.Time `json:"created_at"`
 	LastNudge       time.Time `json:"last_nudge,omitempty"`
 	ReadyForCleanup bool      `json:"ready_for_cleanup,omitempty"` // Only for workers
@@ -66,13 +89,15 @@ type Repository struct {
 	TmuxSession      string           `json:"tmux_session"`
 	Agents           map[string]Agent `json:"agents"`
 	MergeQueueConfig MergeQueueConfig `json:"merge_queue_config,omitempty"`
+	ProviderConfig   ProviderConfig   `json:"provider_config,omitempty"`
 }
 
 // State represents the entire daemon state
 type State struct {
-	Repos map[string]*Repository `json:"repos"`
-	mu    sync.RWMutex
-	path  string
+	Repos       map[string]*Repository `json:"repos"`
+	CurrentRepo string                 `json:"current_repo,omitempty"`
+	mu          sync.RWMutex
+	path        string
 }
 
 // New creates a new empty state
@@ -183,6 +208,36 @@ func (s *State) ListRepos() []string {
 	return repos
 }
 
+// SetCurrentRepo sets the current/default repository
+func (s *State) SetCurrentRepo(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Verify the repo exists
+	if _, exists := s.Repos[name]; !exists {
+		return fmt.Errorf("repository %q not found", name)
+	}
+
+	s.CurrentRepo = name
+	return s.saveUnlocked()
+}
+
+// GetCurrentRepo returns the current/default repository name
+func (s *State) GetCurrentRepo() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.CurrentRepo
+}
+
+// ClearCurrentRepo clears the current/default repository
+func (s *State) ClearCurrentRepo() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.CurrentRepo = ""
+	return s.saveUnlocked()
+}
+
 // GetAllRepos returns a snapshot of all repositories
 // This is safe for iteration and won't cause concurrent map access issues
 func (s *State) GetAllRepos() map[string]*Repository {
@@ -198,6 +253,7 @@ func (s *State) GetAllRepos() map[string]*Repository {
 			TmuxSession:      repo.TmuxSession,
 			Agents:           make(map[string]Agent, len(repo.Agents)),
 			MergeQueueConfig: repo.MergeQueueConfig,
+			ProviderConfig:   repo.ProviderConfig,
 		}
 		// Copy agents
 		for agentName, agent := range repo.Agents {
@@ -240,6 +296,26 @@ func (s *State) UpdateAgent(repoName, agentName string, agent Agent) error {
 		return fmt.Errorf("agent %q not found in repository %q", agentName, repoName)
 	}
 
+	repo.Agents[agentName] = agent
+	return s.saveUnlocked()
+}
+
+// UpdateAgentPID updates just the PID of an agent
+func (s *State) UpdateAgentPID(repoName, agentName string, pid int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return fmt.Errorf("repository %q not found", repoName)
+	}
+
+	agent, exists := repo.Agents[agentName]
+	if !exists {
+		return fmt.Errorf("agent %q not found in repository %q", agentName, repoName)
+	}
+
+	agent.PID = pid
 	repo.Agents[agentName] = agent
 	return s.saveUnlocked()
 }
@@ -317,6 +393,37 @@ func (s *State) UpdateMergeQueueConfig(repoName string, config MergeQueueConfig)
 	}
 
 	repo.MergeQueueConfig = config
+	return s.saveUnlocked()
+}
+
+// GetProviderConfig returns the provider config for a repository
+func (s *State) GetProviderConfig(repoName string) (ProviderConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return ProviderConfig{}, fmt.Errorf("repository %q not found", repoName)
+	}
+
+	// Return default config if not set (for backward compatibility)
+	if repo.ProviderConfig.Provider == "" {
+		return DefaultProviderConfig(), nil
+	}
+	return repo.ProviderConfig, nil
+}
+
+// UpdateProviderConfig updates the provider config for a repository
+func (s *State) UpdateProviderConfig(repoName string, config ProviderConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return fmt.Errorf("repository %q not found", repoName)
+	}
+
+	repo.ProviderConfig = config
 	return s.saveUnlocked()
 }
 

@@ -12,75 +12,75 @@ import (
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
-	"github.com/dlorenc/multiclaude/pkg/tmux"
 	"github.com/dlorenc/multiclaude/pkg/config"
+	"github.com/dlorenc/multiclaude/pkg/tmux"
 )
 
 func TestParseFlags(t *testing.T) {
 	tests := []struct {
-		name         string
-		args         []string
-		wantFlags    map[string]string
+		name           string
+		args           []string
+		wantFlags      map[string]string
 		wantPositional []string
 	}{
 		{
-			name:         "empty args",
-			args:         []string{},
-			wantFlags:    map[string]string{},
+			name:           "empty args",
+			args:           []string{},
+			wantFlags:      map[string]string{},
 			wantPositional: nil,
 		},
 		{
-			name:         "positional only",
-			args:         []string{"arg1", "arg2", "arg3"},
-			wantFlags:    map[string]string{},
+			name:           "positional only",
+			args:           []string{"arg1", "arg2", "arg3"},
+			wantFlags:      map[string]string{},
 			wantPositional: []string{"arg1", "arg2", "arg3"},
 		},
 		{
-			name:         "long flag with value",
-			args:         []string{"--repo", "myrepo"},
-			wantFlags:    map[string]string{"repo": "myrepo"},
+			name:           "long flag with value",
+			args:           []string{"--repo", "myrepo"},
+			wantFlags:      map[string]string{"repo": "myrepo"},
 			wantPositional: nil,
 		},
 		{
-			name:         "long flag boolean",
-			args:         []string{"--verbose"},
-			wantFlags:    map[string]string{"verbose": "true"},
+			name:           "long flag boolean",
+			args:           []string{"--verbose"},
+			wantFlags:      map[string]string{"verbose": "true"},
 			wantPositional: nil,
 		},
 		{
-			name:         "short flag with value",
-			args:         []string{"-r", "myrepo"},
-			wantFlags:    map[string]string{"r": "myrepo"},
+			name:           "short flag with value",
+			args:           []string{"-r", "myrepo"},
+			wantFlags:      map[string]string{"r": "myrepo"},
 			wantPositional: nil,
 		},
 		{
-			name:         "short flag boolean",
-			args:         []string{"-v"},
-			wantFlags:    map[string]string{"v": "true"},
+			name:           "short flag boolean",
+			args:           []string{"-v"},
+			wantFlags:      map[string]string{"v": "true"},
 			wantPositional: nil,
 		},
 		{
-			name:         "mixed flags and positional",
-			args:         []string{"--repo", "myrepo", "task", "description", "-v"},
-			wantFlags:    map[string]string{"repo": "myrepo", "v": "true"},
+			name:           "mixed flags and positional",
+			args:           []string{"--repo", "myrepo", "task", "description", "-v"},
+			wantFlags:      map[string]string{"repo": "myrepo", "v": "true"},
 			wantPositional: []string{"task", "description"},
 		},
 		{
-			name:         "multiple long flags",
-			args:         []string{"--name", "worker1", "--branch", "main", "--dry-run"},
-			wantFlags:    map[string]string{"name": "worker1", "branch": "main", "dry-run": "true"},
+			name:           "multiple long flags",
+			args:           []string{"--name", "worker1", "--branch", "main", "--dry-run"},
+			wantFlags:      map[string]string{"name": "worker1", "branch": "main", "dry-run": "true"},
 			wantPositional: nil,
 		},
 		{
-			name:         "flag followed by flag (boolean)",
-			args:         []string{"--verbose", "--debug"},
-			wantFlags:    map[string]string{"verbose": "true", "debug": "true"},
+			name:           "flag followed by flag (boolean)",
+			args:           []string{"--verbose", "--debug"},
+			wantFlags:      map[string]string{"verbose": "true", "debug": "true"},
 			wantPositional: nil,
 		},
 		{
-			name:         "positional before flags",
-			args:         []string{"command", "--flag", "value"},
-			wantFlags:    map[string]string{"flag": "value"},
+			name:           "positional before flags",
+			args:           []string{"command", "--flag", "value"},
+			wantFlags:      map[string]string{"flag": "value"},
 			wantPositional: []string{"command"},
 		},
 	}
@@ -221,36 +221,7 @@ func TestTruncateString(t *testing.T) {
 	}
 }
 
-func TestGenerateSessionID(t *testing.T) {
-	// Generate multiple session IDs and verify uniqueness
-	ids := make(map[string]bool)
-	for i := 0; i < 100; i++ {
-		id, err := generateSessionID()
-		if err != nil {
-			t.Fatalf("generateSessionID() error = %v", err)
-		}
-
-		// Check format: UUID v4 format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-		parts := strings.Split(id, "-")
-		if len(parts) != 5 {
-			t.Errorf("generateSessionID() = %q, expected 5 parts separated by dashes", id)
-		}
-
-		// Check part lengths: 8-4-4-4-12
-		expectedLens := []int{8, 4, 4, 4, 12}
-		for j, part := range parts {
-			if len(part) != expectedLens[j] {
-				t.Errorf("generateSessionID() part %d len = %d, want %d", j, len(part), expectedLens[j])
-			}
-		}
-
-		// Check uniqueness
-		if ids[id] {
-			t.Errorf("generateSessionID() generated duplicate ID: %q", id)
-		}
-		ids[id] = true
-	}
-}
+// TestGenerateSessionID is now in pkg/claude/claude_test.go
 
 func TestGenerateDocumentation(t *testing.T) {
 	// Create a minimal CLI with commands registered
@@ -1071,19 +1042,16 @@ func TestNewWithPaths(t *testing.T) {
 		OutputDir:    filepath.Join(tmpDir, "output"),
 	}
 
-	// Test with empty claude path
+	// Test CLI creation (second parameter is now ignored, provider resolved at runtime)
 	cli := NewWithPaths(paths, "")
 	if cli == nil {
 		t.Fatal("CLI should not be nil")
 	}
-	if cli.claudeBinaryPath != "claude" {
-		t.Errorf("claudeBinaryPath = %s, want 'claude'", cli.claudeBinaryPath)
-	}
 
-	// Test with custom claude path
+	// Test with custom path (now ignored - provider resolved per-repo at runtime)
 	cli = NewWithPaths(paths, "/custom/path/claude")
-	if cli.claudeBinaryPath != "/custom/path/claude" {
-		t.Errorf("claudeBinaryPath = %s, want '/custom/path/claude'", cli.claudeBinaryPath)
+	if cli == nil {
+		t.Fatal("CLI should not be nil")
 	}
 
 	// Verify commands are registered
@@ -1403,11 +1371,11 @@ func TestInferAgentContext(t *testing.T) {
 
 	// Test worktree cases - these should work reliably
 	tests := []struct {
-		name       string
-		cwd        string
-		wantRepo   string
-		wantAgent  string
-		wantError  bool
+		name      string
+		cwd       string
+		wantRepo  string
+		wantAgent string
+		wantError bool
 	}{
 		{
 			name:      "in worker worktree",
@@ -2135,5 +2103,96 @@ func TestCLIRepoRmNonexistent(t *testing.T) {
 	err := cli.Execute([]string{"repo", "rm", "nonexistent"})
 	if err == nil {
 		t.Error("removing nonexistent repo should fail")
+	}
+}
+
+func TestInitRepoNameParsing(t *testing.T) {
+	tests := []struct {
+		name        string
+		url         string
+		wantError   bool
+		errContains string
+	}{
+		{
+			name:      "normal URL",
+			url:       "https://github.com/user/repo",
+			wantError: false, // Will fail later, but name parsing succeeds
+		},
+		{
+			name:      "URL with .git suffix",
+			url:       "https://github.com/user/repo.git",
+			wantError: false,
+		},
+		{
+			name:      "URL with trailing slash",
+			url:       "https://github.com/user/repo/",
+			wantError: false, // Should work - trailing slash is trimmed
+		},
+		{
+			name:      "URL with multiple trailing slashes",
+			url:       "https://github.com/user/repo///",
+			wantError: false, // TrimRight removes all trailing slashes
+		},
+		{
+			name:        "URL that is just slashes",
+			url:         "///",
+			wantError:   true,
+			errContains: "could not determine repository name",
+		},
+		{
+			name:        "domain only URL with trailing slash",
+			url:         "https://github.com/",
+			wantError:   true,
+			errContains: "could not determine repository name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cli, _, cleanup := setupTestEnvironment(t)
+			defer cleanup()
+
+			err := cli.Execute([]string{"init", tt.url})
+
+			if tt.wantError {
+				if err == nil {
+					t.Error("expected error but got none")
+				} else if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("error %q should contain %q", err.Error(), tt.errContains)
+				}
+			} else {
+				// For valid URLs, we expect the error to be about something other than the name
+				// (e.g., git clone failing because the repo doesn't exist)
+				if err != nil && strings.Contains(err.Error(), "could not determine repository name") {
+					t.Errorf("unexpected name parsing error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestSanitizeTmuxSessionName(t *testing.T) {
+	tests := []struct {
+		repoName string
+		want     string
+	}{
+		{"my-repo", "mc-my-repo"},
+		{"demos.expanso.io", "mc-demos-expanso-io"},
+		{"repo.with.many.dots", "mc-repo-with-many-dots"},
+		{"repo:with:colons", "mc-repo-with-colons"},
+		{"repo with spaces", "mc-repo-with-spaces"},
+		{"simple", "mc-simple"},
+		{"repo/with/slashes", "mc-repo-with-slashes"},
+		{"path/to/repo.git", "mc-path-to-repo-git"},
+		{"repo\x00with\x1fnull", "mc-repowithnull"}, // control characters stripped
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.repoName, func(t *testing.T) {
+			got := sanitizeTmuxSessionName(tt.repoName)
+			if got != tt.want {
+				t.Errorf("sanitizeTmuxSessionName(%q) = %q, want %q", tt.repoName, got, tt.want)
+			}
+		})
 	}
 }

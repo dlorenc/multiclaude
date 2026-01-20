@@ -237,3 +237,50 @@ func TestWithSuggestion_Chaining(t *testing.T) {
 		t.Errorf("expected suggestion to be set, got: %s", err.Suggestion)
 	}
 }
+
+func TestTmuxOperationFailed_SpecificSuggestions(t *testing.T) {
+	tests := []struct {
+		name         string
+		operation    string
+		causeMsg     string
+		wantContains string
+	}{
+		{
+			name:         "tmux not found",
+			operation:    "create session",
+			causeMsg:     "executable file not found in $PATH",
+			wantContains: "could not find 'tmux' binary in PATH",
+		},
+		{
+			name:         "duplicate session",
+			operation:    "create session",
+			causeMsg:     "duplicate session: mc-repo",
+			wantContains: "tmux kill-session -t",
+		},
+		{
+			name:         "generic error has no suggestion",
+			operation:    "create session",
+			causeMsg:     "exit status 1",
+			wantContains: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cause error
+			if tt.causeMsg != "" {
+				cause = errors.New(tt.causeMsg)
+			}
+
+			err := TmuxOperationFailed(tt.operation, cause)
+
+			if tt.wantContains == "" {
+				if err.Suggestion != "" {
+					t.Errorf("expected no suggestion, got %q", err.Suggestion)
+				}
+			} else if !strings.Contains(err.Suggestion, tt.wantContains) {
+				t.Errorf("suggestion %q should contain %q", err.Suggestion, tt.wantContains)
+			}
+		})
+	}
+}

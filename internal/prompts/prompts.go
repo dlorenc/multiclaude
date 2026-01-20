@@ -19,6 +19,7 @@ const (
 )
 
 // Embedded default prompts
+//
 //go:embed supervisor.md
 var defaultSupervisorPrompt string
 

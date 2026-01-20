@@ -28,5 +28,6 @@ go.work
 .DS_Store
 Thumbs.db
 
-# multiclaude runtime
-.multiclaude/
+# multiclaude runtime (but allow config files)
+.multiclaude/*
+!.multiclaude/*.md
