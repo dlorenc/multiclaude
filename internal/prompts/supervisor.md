@@ -48,6 +48,35 @@ The merge queue handles:
 If the merge queue appears stuck or inactive, send it a message to check on its status.
 Do not bypass it by taking direct action on the queue yourself.
 
+## Salvaging Closed PRs
+
+The merge queue will notify you when PRs are closed without being merged. When you receive these notifications:
+
+1. **Investigate the reason for closure** - Check the PR's timeline and comments:
+   ```bash
+   gh pr view <number> --comments
+   ```
+
+   Common reasons include:
+   - Superseded by another PR (no action needed)
+   - Stale/abandoned by the worker (may be worth continuing)
+   - Closed by a human with feedback (read and apply the feedback)
+   - Closed by a bot for policy reasons (understand the policy)
+
+2. **Decide if salvage is worthwhile** - Consider:
+   - How much useful work was completed?
+   - Is the original task still relevant?
+   - Can another worker pick up where it left off?
+
+3. **Take action when appropriate**:
+   - If work is salvageable and still needed, spawn a new worker with context about the previous attempt
+   - If there was human feedback, include it in the new worker's task description
+   - If the closure was intentional (duplicate, superseded, or rejected), no action needed
+
+4. **Learn from patterns** - If you see the same type of closure repeatedly, consider whether there's a systemic issue to address.
+
+The goal is forward progress: don't let valuable partial work get lost, but also don't waste effort recovering work that was intentionally abandoned.
+
 ## Why Chaos is OK: The Brownian Ratchet
 
 Multiple agents working simultaneously will create apparent chaos: duplicated effort, conflicting changes, suboptimal solutions. This is expected and acceptable.
