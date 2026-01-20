@@ -1647,6 +1647,51 @@ func (d *Daemon) copyHooksConfig(repoPath, workDir string) error {
 		return fmt.Errorf("failed to write settings.json: %w", err)
 	}
 
+	// Link global credentials to worktree
+	if err := d.linkGlobalCredentials(workDir); err != nil {
+		d.logger.Warn("Failed to link credentials: %v", err)
+	}
+
+	return nil
+}
+
+// linkGlobalCredentials creates a symlink from the worktree's .claude/.credentials.json
+// to the global ~/.claude/.credentials.json. This ensures workers can access OAuth
+// credentials without duplicating sensitive files.
+func (d *Daemon) linkGlobalCredentials(worktreePath string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
+	localClaudeDir := filepath.Join(worktreePath, ".claude")
+	localCredFile := filepath.Join(localClaudeDir, ".credentials.json")
+
+	// Check if global credentials exist
+	if _, err := os.Stat(globalCredFile); os.IsNotExist(err) {
+		// No global credentials - user might be using API key
+		return nil
+	}
+
+	// Check if symlink already exists and is valid
+	if linkTarget, err := os.Readlink(localCredFile); err == nil {
+		if linkTarget == globalCredFile {
+			// Already correctly linked
+			return nil
+		}
+		// Invalid link, remove it
+		os.Remove(localCredFile)
+	} else if _, err := os.Stat(localCredFile); err == nil {
+		// File exists but is not a symlink, remove it
+		os.Remove(localCredFile)
+	}
+
+	// Create symlink
+	if err := os.Symlink(globalCredFile, localCredFile); err != nil {
+		return fmt.Errorf("failed to create credentials symlink: %w", err)
+	}
+
 	return nil
 }
 
