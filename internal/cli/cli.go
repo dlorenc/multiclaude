@@ -216,6 +216,10 @@ func (c *CLI) showCommandHelp(cmd *Command) error {
 	if len(cmd.Subcommands) > 0 {
 		fmt.Println("Subcommands:")
 		for name, subcmd := range cmd.Subcommands {
+			// Skip internal commands (prefixed with _)
+			if strings.HasPrefix(name, "_") {
+				continue
+			}
 			fmt.Printf("  %-15s %s\n", name, subcmd.Description)
 		}
 		fmt.Println()
@@ -243,24 +247,28 @@ func (c *CLI) registerCommands() {
 	daemonCmd.Subcommands["start"] = &Command{
 		Name:        "start",
 		Description: "Start the daemon",
+		Usage:       "multiclaude daemon start",
 		Run:         c.startDaemon,
 	}
 
 	daemonCmd.Subcommands["stop"] = &Command{
 		Name:        "stop",
 		Description: "Stop the daemon",
+		Usage:       "multiclaude daemon stop",
 		Run:         c.stopDaemon,
 	}
 
 	daemonCmd.Subcommands["status"] = &Command{
 		Name:        "status",
-		Description: "Check daemon status",
+		Description: "Show daemon status",
+		Usage:       "multiclaude daemon status",
 		Run:         c.daemonStatus,
 	}
 
 	daemonCmd.Subcommands["logs"] = &Command{
 		Name:        "logs",
 		Description: "View daemon logs",
+		Usage:       "multiclaude daemon logs [-f|--follow] [-n <lines>]",
 		Run:         c.daemonLogs,
 	}
 
@@ -291,6 +299,7 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["list"] = &Command{
 		Name:        "list",
 		Description: "List tracked repositories",
+		Usage:       "multiclaude list",
 		Run:         c.listRepos,
 	}
 
@@ -304,27 +313,27 @@ func (c *CLI) registerCommands() {
 	repoCmd.Subcommands["rm"] = &Command{
 		Name:        "rm",
 		Description: "Remove a tracked repository",
-		Usage:       "multiclaude repo rm [name]",
+		Usage:       "multiclaude repo rm <name>",
 		Run:         c.removeRepo,
 	}
 
 	repoCmd.Subcommands["use"] = &Command{
 		Name:        "use",
-		Description: "Set the current/default repository",
+		Description: "Set the default repository",
 		Usage:       "multiclaude repo use <name>",
 		Run:         c.setCurrentRepo,
 	}
 
 	repoCmd.Subcommands["current"] = &Command{
 		Name:        "current",
-		Description: "Show the current/default repository",
+		Description: "Show the default repository",
 		Usage:       "multiclaude repo current",
 		Run:         c.getCurrentRepo,
 	}
 
 	repoCmd.Subcommands["unset"] = &Command{
 		Name:        "unset",
-		Description: "Clear the current/default repository",
+		Description: "Clear the default repository",
 		Usage:       "multiclaude repo unset",
 		Run:         c.clearCurrentRepo,
 	}
@@ -335,6 +344,7 @@ func (c *CLI) registerCommands() {
 	workCmd := &Command{
 		Name:        "work",
 		Description: "Manage worker agents",
+		Usage:       "multiclaude work [<task>] [--repo <repo>]",
 		Subcommands: make(map[string]*Command),
 	}
 
@@ -342,14 +352,15 @@ func (c *CLI) registerCommands() {
 
 	workCmd.Subcommands["list"] = &Command{
 		Name:        "list",
-		Description: "List workers",
+		Description: "List active workers",
+		Usage:       "multiclaude work list [--repo <repo>]",
 		Run:         c.listWorkers,
 	}
 
 	workCmd.Subcommands["rm"] = &Command{
 		Name:        "rm",
 		Description: "Remove a worker",
-		Usage:       "multiclaude work rm [worker-name]",
+		Usage:       "multiclaude work rm <worker-name>",
 		Run:         c.removeWorker,
 	}
 
@@ -359,6 +370,7 @@ func (c *CLI) registerCommands() {
 	workspaceCmd := &Command{
 		Name:        "workspace",
 		Description: "Manage workspaces",
+		Usage:       "multiclaude workspace [<name>]",
 		Subcommands: make(map[string]*Command),
 	}
 
@@ -374,20 +386,21 @@ func (c *CLI) registerCommands() {
 	workspaceCmd.Subcommands["rm"] = &Command{
 		Name:        "rm",
 		Description: "Remove a workspace",
-		Usage:       "multiclaude workspace rm [name]",
+		Usage:       "multiclaude workspace rm <name>",
 		Run:         c.removeWorkspace,
 	}
 
 	workspaceCmd.Subcommands["list"] = &Command{
 		Name:        "list",
 		Description: "List workspaces",
+		Usage:       "multiclaude workspace list",
 		Run:         c.listWorkspaces,
 	}
 
 	workspaceCmd.Subcommands["connect"] = &Command{
 		Name:        "connect",
 		Description: "Connect to a workspace",
-		Usage:       "multiclaude workspace connect [name]",
+		Usage:       "multiclaude workspace connect <name>",
 		Run:         c.connectWorkspace,
 	}
 
@@ -403,30 +416,35 @@ func (c *CLI) registerCommands() {
 	agentCmd.Subcommands["send-message"] = &Command{
 		Name:        "send-message",
 		Description: "Send a message to another agent",
+		Usage:       "multiclaude agent send-message <recipient> <message>",
 		Run:         c.sendMessage,
 	}
 
 	agentCmd.Subcommands["list-messages"] = &Command{
 		Name:        "list-messages",
-		Description: "List messages",
+		Description: "List pending messages",
+		Usage:       "multiclaude agent list-messages",
 		Run:         c.listMessages,
 	}
 
 	agentCmd.Subcommands["read-message"] = &Command{
 		Name:        "read-message",
 		Description: "Read a specific message",
+		Usage:       "multiclaude agent read-message <message-id>",
 		Run:         c.readMessage,
 	}
 
 	agentCmd.Subcommands["ack-message"] = &Command{
 		Name:        "ack-message",
 		Description: "Acknowledge a message",
+		Usage:       "multiclaude agent ack-message <message-id>",
 		Run:         c.ackMessage,
 	}
 
 	agentCmd.Subcommands["complete"] = &Command{
 		Name:        "complete",
 		Description: "Signal worker completion",
+		Usage:       "multiclaude agent complete",
 		Run:         c.completeWorker,
 	}
 
@@ -436,7 +454,7 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["attach"] = &Command{
 		Name:        "attach",
 		Description: "Attach to an agent",
-		Usage:       "multiclaude attach [agent-name] [--read-only]",
+		Usage:       "multiclaude attach <agent-name> [--read-only]",
 		Run:         c.attachAgent,
 	}
 
@@ -467,6 +485,7 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["docs"] = &Command{
 		Name:        "docs",
 		Description: "Show generated CLI documentation",
+		Usage:       "multiclaude docs",
 		Run:         c.showDocs,
 	}
 
@@ -482,6 +501,7 @@ func (c *CLI) registerCommands() {
 	logsCmd := &Command{
 		Name:        "logs",
 		Description: "View and manage agent output logs",
+		Usage:       "multiclaude logs [<agent-name>] [-f|--follow]",
 		Subcommands: make(map[string]*Command),
 	}
 
@@ -490,6 +510,7 @@ func (c *CLI) registerCommands() {
 	logsCmd.Subcommands["list"] = &Command{
 		Name:        "list",
 		Description: "List log files",
+		Usage:       "multiclaude logs list [--repo <repo>]",
 		Run:         c.listLogs,
 	}
 
@@ -502,7 +523,7 @@ func (c *CLI) registerCommands() {
 
 	logsCmd.Subcommands["clean"] = &Command{
 		Name:        "clean",
-		Description: "Clean old logs",
+		Description: "Remove old logs",
 		Usage:       "multiclaude logs clean --older-than <duration>",
 		Run:         c.cleanLogs,
 	}
