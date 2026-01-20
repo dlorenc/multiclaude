@@ -2194,3 +2194,177 @@ func TestSanitizeTmuxSessionName(t *testing.T) {
 		})
 	}
 }
+
+func TestLinkGlobalCredentials(t *testing.T) {
+	// Create temp directories for test
+	tmpDir := t.TempDir()
+	home := filepath.Join(tmpDir, "home")
+	worktree := filepath.Join(tmpDir, "worktree")
+
+	// Create directory structure
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatalf("Failed to create home .claude dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(worktree, ".claude"), 0755); err != nil {
+		t.Fatalf("Failed to create worktree .claude dir: %v", err)
+	}
+
+	// Create mock global credentials
+	globalCred := filepath.Join(home, ".claude", ".credentials.json")
+	if err := os.WriteFile(globalCred, []byte(`{"token":"test123"}`), 0600); err != nil {
+		t.Fatalf("Failed to create global credentials: %v", err)
+	}
+
+	// Mock UserHomeDir to return our test home
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", originalHome)
+
+	cli := &CLI{}
+
+	// Test 1: Create symlink successfully
+	if err := cli.linkGlobalCredentials(worktree); err != nil {
+		t.Fatalf("linkGlobalCredentials failed: %v", err)
+	}
+
+	// Verify symlink exists and points to right place
+	localCred := filepath.Join(worktree, ".claude", ".credentials.json")
+	target, err := os.Readlink(localCred)
+	if err != nil {
+		t.Fatalf("Symlink not created: %v", err)
+	}
+
+	if target != globalCred {
+		t.Errorf("Symlink points to %s, expected %s", target, globalCred)
+	}
+
+	// Test 2: Running again should not error (idempotent)
+	if err := cli.linkGlobalCredentials(worktree); err != nil {
+		t.Errorf("linkGlobalCredentials should be idempotent: %v", err)
+	}
+
+	// Test 3: If file exists instead of symlink, it should be replaced
+	os.Remove(localCred)
+	if err := os.WriteFile(localCred, []byte("bad content"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	if err := cli.linkGlobalCredentials(worktree); err != nil {
+		t.Errorf("linkGlobalCredentials should replace file with symlink: %v", err)
+	}
+
+	// Verify it's now a symlink
+	target, err = os.Readlink(localCred)
+	if err != nil {
+		t.Errorf("Should have created symlink: %v", err)
+	}
+	if target != globalCred {
+		t.Errorf("Symlink points to %s, expected %s", target, globalCred)
+	}
+
+	// Test 4: No global credentials should not error
+	worktree2 := filepath.Join(tmpDir, "worktree2")
+	if err := os.MkdirAll(filepath.Join(worktree2, ".claude"), 0755); err != nil {
+		t.Fatalf("Failed to create worktree2 .claude dir: %v", err)
+	}
+
+	os.Remove(globalCred)
+	if err := cli.linkGlobalCredentials(worktree2); err != nil {
+		t.Errorf("linkGlobalCredentials should not error when no global credentials: %v", err)
+	}
+
+	// Verify no symlink was created
+	localCred2 := filepath.Join(worktree2, ".claude", ".credentials.json")
+	if _, err := os.Lstat(localCred2); !os.IsNotExist(err) {
+		t.Error("Should not have created symlink when no global credentials")
+	}
+}
+
+func TestRepairCredentials(t *testing.T) {
+	tmpDir := t.TempDir()
+	home := filepath.Join(tmpDir, "home")
+
+	// Create global credentials
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatalf("Failed to create home .claude dir: %v", err)
+	}
+	globalCred := filepath.Join(home, ".claude", ".credentials.json")
+	if err := os.WriteFile(globalCred, []byte(`{"token":"test"}`), 0600); err != nil {
+		t.Fatalf("Failed to create global credentials: %v", err)
+	}
+
+	// Mock UserHomeDir
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", originalHome)
+
+	// Setup paths
+	paths := &config.Paths{
+		Root:         tmpDir,
+		StateFile:    filepath.Join(tmpDir, "state.json"),
+		WorktreesDir: filepath.Join(tmpDir, "wts"),
+	}
+
+	if err := os.MkdirAll(paths.WorktreesDir, 0755); err != nil {
+		t.Fatalf("Failed to create worktrees dir: %v", err)
+	}
+
+	// Create state with a repo
+	st := state.New(paths.StateFile)
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := st.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Create worktrees with .claude directories
+	worktrees := []string{"worker1", "worker2", "worker3"}
+	for _, wt := range worktrees {
+		wtPath := filepath.Join(paths.WorktreesDir, "test-repo", wt, ".claude")
+		if err := os.MkdirAll(wtPath, 0755); err != nil {
+			t.Fatalf("Failed to create worktree: %v", err)
+		}
+	}
+
+	// worker1: No credentials (needs repair)
+	// worker2: Has valid symlink (should be skipped)
+	// worker3: Has file instead of symlink (needs repair)
+
+	worker2Cred := filepath.Join(paths.WorktreesDir, "test-repo", "worker2", ".claude", ".credentials.json")
+	if err := os.Symlink(globalCred, worker2Cred); err != nil {
+		t.Fatalf("Failed to create worker2 symlink: %v", err)
+	}
+
+	worker3Cred := filepath.Join(paths.WorktreesDir, "test-repo", "worker3", ".claude", ".credentials.json")
+	if err := os.WriteFile(worker3Cred, []byte("wrong"), 0644); err != nil {
+		t.Fatalf("Failed to create worker3 file: %v", err)
+	}
+
+	// Create CLI and run repair
+	cli := &CLI{paths: paths}
+	fixed, err := cli.repairCredentials(false)
+	if err != nil {
+		t.Fatalf("repairCredentials failed: %v", err)
+	}
+
+	// Should have fixed 2 worktrees (worker1 and worker3)
+	if fixed != 2 {
+		t.Errorf("Expected 2 worktrees fixed, got %d", fixed)
+	}
+
+	// Verify all three now have valid symlinks
+	for _, wt := range worktrees {
+		credPath := filepath.Join(paths.WorktreesDir, "test-repo", wt, ".claude", ".credentials.json")
+		target, err := os.Readlink(credPath)
+		if err != nil {
+			t.Errorf("Worker %s should have symlink: %v", wt, err)
+			continue
+		}
+		if target != globalCred {
+			t.Errorf("Worker %s symlink points to %s, expected %s", wt, target, globalCred)
+		}
+	}
+}

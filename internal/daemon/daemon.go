@@ -1477,6 +1477,11 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
+	// Link global credentials to worktree
+	if err := d.linkGlobalCredentials(workDir); err != nil {
+		d.logger.Warn("Failed to link credentials: %v", err)
+	}
+
 	// Build CLI command
 	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
 		binaryPath, sessionID, promptFile)
@@ -1539,6 +1544,11 @@ func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, w
 	repoPath := d.paths.RepoDir(repoName)
 	if err := hooks.CopyConfig(repoPath, workDir); err != nil {
 		d.logger.Warn("Failed to copy hooks config: %v", err)
+	}
+
+	// Link global credentials to worktree
+	if err := d.linkGlobalCredentials(workDir); err != nil {
+		d.logger.Warn("Failed to link credentials: %v", err)
 	}
 
 	// Build CLI command
@@ -1833,4 +1843,44 @@ func isLogFile(path string) bool {
 	base := filepath.Base(path)
 	// Only match .log files, not already-rotated files (which have timestamps)
 	return len(base) > 4 && base[len(base)-4:] == ".log"
+}
+
+// linkGlobalCredentials creates a symlink from the worktree's .claude/.credentials.json
+// to the global ~/.claude/.credentials.json. This ensures workers can access OAuth
+// credentials without duplicating sensitive files.
+func (d *Daemon) linkGlobalCredentials(worktreePath string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
+	localClaudeDir := filepath.Join(worktreePath, ".claude")
+	localCredFile := filepath.Join(localClaudeDir, ".credentials.json")
+
+	// Check if global credentials exist
+	if _, err := os.Stat(globalCredFile); os.IsNotExist(err) {
+		// No global credentials - user might be using API key
+		return nil
+	}
+
+	// Check if symlink already exists and is valid
+	if linkTarget, err := os.Readlink(localCredFile); err == nil {
+		if linkTarget == globalCredFile {
+			// Already correctly linked
+			return nil
+		}
+		// Invalid link, remove it
+		os.Remove(localCredFile)
+	} else if _, err := os.Stat(localCredFile); err == nil {
+		// File exists but is not a symlink, remove it
+		os.Remove(localCredFile)
+	}
+
+	// Create symlink
+	if err := os.Symlink(globalCredFile, localCredFile); err != nil {
+		return fmt.Errorf("failed to create credentials symlink: %w", err)
+	}
+
+	return nil
 }
