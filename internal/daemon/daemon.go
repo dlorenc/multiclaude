@@ -1477,14 +1477,20 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
-	// Link global credentials to worktree
-	if err := d.linkGlobalCredentials(workDir); err != nil {
+	// Set up per-agent Claude config directory with slash commands
+	agentConfigDir := d.paths.AgentClaudeConfigDir(repoName, agentName)
+	if err := commands.SetupAgentCommands(agentConfigDir); err != nil {
+		d.logger.Warn("Failed to setup agent commands: %v", err)
+	}
+
+	// Link global credentials to CLAUDE_CONFIG_DIR (where Claude actually looks for them)
+	if err := d.linkGlobalCredentials(agentConfigDir); err != nil {
 		d.logger.Warn("Failed to link credentials: %v", err)
 	}
 
-	// Build CLI command
-	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
-		binaryPath, sessionID, promptFile)
+	// Build CLI command with CLAUDE_CONFIG_DIR set
+	claudeCmd := fmt.Sprintf("CLAUDE_CONFIG_DIR=%s %s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
+		agentConfigDir, binaryPath, sessionID, promptFile)
 
 	// Send command to tmux window
 	target := fmt.Sprintf("%s:%s", repo.TmuxSession, agentName)
@@ -1546,14 +1552,20 @@ func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, w
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
-	// Link global credentials to worktree
-	if err := d.linkGlobalCredentials(workDir); err != nil {
+	// Set up per-agent Claude config directory with slash commands
+	agentConfigDir := d.paths.AgentClaudeConfigDir(repoName, "merge-queue")
+	if err := commands.SetupAgentCommands(agentConfigDir); err != nil {
+		d.logger.Warn("Failed to setup agent commands: %v", err)
+	}
+
+	// Link global credentials to CLAUDE_CONFIG_DIR (where Claude actually looks for them)
+	if err := d.linkGlobalCredentials(agentConfigDir); err != nil {
 		d.logger.Warn("Failed to link credentials: %v", err)
 	}
 
-	// Build CLI command
-	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
-		binaryPath, sessionID, promptFile)
+	// Build CLI command with CLAUDE_CONFIG_DIR set
+	claudeCmd := fmt.Sprintf("CLAUDE_CONFIG_DIR=%s %s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
+		agentConfigDir, binaryPath, sessionID, promptFile)
 
 	// Send command to tmux window
 	target := fmt.Sprintf("%s:merge-queue", repo.TmuxSession)
@@ -1845,23 +1857,30 @@ func isLogFile(path string) bool {
 	return len(base) > 4 && base[len(base)-4:] == ".log"
 }
 
-// linkGlobalCredentials creates a symlink from the worktree's .claude/.credentials.json
+// linkGlobalCredentials creates a symlink from the Claude config directory's .credentials.json
 // to the global ~/.claude/.credentials.json. This ensures workers can access OAuth
 // credentials without duplicating sensitive files.
-func (d *Daemon) linkGlobalCredentials(worktreePath string) error {
+//
+// When CLAUDE_CONFIG_DIR is set, Claude looks for credentials there, not in the
+// project's .claude directory or the global ~/.claude directory.
+func (d *Daemon) linkGlobalCredentials(claudeConfigDir string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
 	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
-	localClaudeDir := filepath.Join(worktreePath, ".claude")
-	localCredFile := filepath.Join(localClaudeDir, ".credentials.json")
+	localCredFile := filepath.Join(claudeConfigDir, ".credentials.json")
 
 	// Check if global credentials exist
 	if _, err := os.Stat(globalCredFile); os.IsNotExist(err) {
 		// No global credentials - user might be using API key
 		return nil
+	}
+
+	// Ensure the config directory exists
+	if err := os.MkdirAll(claudeConfigDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	// Check if symlink already exists and is valid

@@ -2199,14 +2199,11 @@ func TestLinkGlobalCredentials(t *testing.T) {
 	// Create temp directories for test
 	tmpDir := t.TempDir()
 	home := filepath.Join(tmpDir, "home")
-	worktree := filepath.Join(tmpDir, "worktree")
+	configDir := filepath.Join(tmpDir, "claude-config")
 
 	// Create directory structure
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
 		t.Fatalf("Failed to create home .claude dir: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(worktree, ".claude"), 0755); err != nil {
-		t.Fatalf("Failed to create worktree .claude dir: %v", err)
 	}
 
 	// Create mock global credentials
@@ -2222,13 +2219,13 @@ func TestLinkGlobalCredentials(t *testing.T) {
 
 	cli := &CLI{}
 
-	// Test 1: Create symlink successfully
-	if err := cli.linkGlobalCredentials(worktree); err != nil {
+	// Test 1: Create symlink successfully (also creates the config directory)
+	if err := cli.linkGlobalCredentials(configDir); err != nil {
 		t.Fatalf("linkGlobalCredentials failed: %v", err)
 	}
 
 	// Verify symlink exists and points to right place
-	localCred := filepath.Join(worktree, ".claude", ".credentials.json")
+	localCred := filepath.Join(configDir, ".credentials.json")
 	target, err := os.Readlink(localCred)
 	if err != nil {
 		t.Fatalf("Symlink not created: %v", err)
@@ -2239,7 +2236,7 @@ func TestLinkGlobalCredentials(t *testing.T) {
 	}
 
 	// Test 2: Running again should not error (idempotent)
-	if err := cli.linkGlobalCredentials(worktree); err != nil {
+	if err := cli.linkGlobalCredentials(configDir); err != nil {
 		t.Errorf("linkGlobalCredentials should be idempotent: %v", err)
 	}
 
@@ -2249,7 +2246,7 @@ func TestLinkGlobalCredentials(t *testing.T) {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	if err := cli.linkGlobalCredentials(worktree); err != nil {
+	if err := cli.linkGlobalCredentials(configDir); err != nil {
 		t.Errorf("linkGlobalCredentials should replace file with symlink: %v", err)
 	}
 
@@ -2263,18 +2260,15 @@ func TestLinkGlobalCredentials(t *testing.T) {
 	}
 
 	// Test 4: No global credentials should not error
-	worktree2 := filepath.Join(tmpDir, "worktree2")
-	if err := os.MkdirAll(filepath.Join(worktree2, ".claude"), 0755); err != nil {
-		t.Fatalf("Failed to create worktree2 .claude dir: %v", err)
-	}
+	configDir2 := filepath.Join(tmpDir, "claude-config2")
 
 	os.Remove(globalCred)
-	if err := cli.linkGlobalCredentials(worktree2); err != nil {
+	if err := cli.linkGlobalCredentials(configDir2); err != nil {
 		t.Errorf("linkGlobalCredentials should not error when no global credentials: %v", err)
 	}
 
 	// Verify no symlink was created
-	localCred2 := filepath.Join(worktree2, ".claude", ".credentials.json")
+	localCred2 := filepath.Join(configDir2, ".credentials.json")
 	if _, err := os.Lstat(localCred2); !os.IsNotExist(err) {
 		t.Error("Should not have created symlink when no global credentials")
 	}
@@ -2283,6 +2277,7 @@ func TestLinkGlobalCredentials(t *testing.T) {
 func TestRepairCredentials(t *testing.T) {
 	tmpDir := t.TempDir()
 	home := filepath.Join(tmpDir, "home")
+	claudeConfigDir := filepath.Join(tmpDir, "claude-config")
 
 	// Create global credentials
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
@@ -2300,9 +2295,10 @@ func TestRepairCredentials(t *testing.T) {
 
 	// Setup paths
 	paths := &config.Paths{
-		Root:         tmpDir,
-		StateFile:    filepath.Join(tmpDir, "state.json"),
-		WorktreesDir: filepath.Join(tmpDir, "wts"),
+		Root:            tmpDir,
+		StateFile:       filepath.Join(tmpDir, "state.json"),
+		WorktreesDir:    filepath.Join(tmpDir, "wts"),
+		ClaudeConfigDir: claudeConfigDir,
 	}
 
 	if err := os.MkdirAll(paths.WorktreesDir, 0755); err != nil {
@@ -2320,12 +2316,12 @@ func TestRepairCredentials(t *testing.T) {
 		t.Fatalf("Failed to add repo: %v", err)
 	}
 
-	// Create worktrees with .claude directories
-	worktrees := []string{"worker1", "worker2", "worker3"}
-	for _, wt := range worktrees {
-		wtPath := filepath.Join(paths.WorktreesDir, "test-repo", wt, ".claude")
-		if err := os.MkdirAll(wtPath, 0755); err != nil {
-			t.Fatalf("Failed to create worktree: %v", err)
+	// Create CLAUDE_CONFIG_DIR directories for agents
+	agents := []string{"worker1", "worker2", "worker3"}
+	for _, agent := range agents {
+		agentConfigDir := filepath.Join(claudeConfigDir, "test-repo", agent)
+		if err := os.MkdirAll(agentConfigDir, 0755); err != nil {
+			t.Fatalf("Failed to create agent config dir: %v", err)
 		}
 	}
 
@@ -2333,12 +2329,12 @@ func TestRepairCredentials(t *testing.T) {
 	// worker2: Has valid symlink (should be skipped)
 	// worker3: Has file instead of symlink (needs repair)
 
-	worker2Cred := filepath.Join(paths.WorktreesDir, "test-repo", "worker2", ".claude", ".credentials.json")
+	worker2Cred := filepath.Join(claudeConfigDir, "test-repo", "worker2", ".credentials.json")
 	if err := os.Symlink(globalCred, worker2Cred); err != nil {
 		t.Fatalf("Failed to create worker2 symlink: %v", err)
 	}
 
-	worker3Cred := filepath.Join(paths.WorktreesDir, "test-repo", "worker3", ".claude", ".credentials.json")
+	worker3Cred := filepath.Join(claudeConfigDir, "test-repo", "worker3", ".credentials.json")
 	if err := os.WriteFile(worker3Cred, []byte("wrong"), 0644); err != nil {
 		t.Fatalf("Failed to create worker3 file: %v", err)
 	}
@@ -2350,21 +2346,21 @@ func TestRepairCredentials(t *testing.T) {
 		t.Fatalf("repairCredentials failed: %v", err)
 	}
 
-	// Should have fixed 2 worktrees (worker1 and worker3)
+	// Should have fixed 2 agents (worker1 and worker3)
 	if fixed != 2 {
-		t.Errorf("Expected 2 worktrees fixed, got %d", fixed)
+		t.Errorf("Expected 2 agents fixed, got %d", fixed)
 	}
 
 	// Verify all three now have valid symlinks
-	for _, wt := range worktrees {
-		credPath := filepath.Join(paths.WorktreesDir, "test-repo", wt, ".claude", ".credentials.json")
+	for _, agent := range agents {
+		credPath := filepath.Join(claudeConfigDir, "test-repo", agent, ".credentials.json")
 		target, err := os.Readlink(credPath)
 		if err != nil {
-			t.Errorf("Worker %s should have symlink: %v", wt, err)
+			t.Errorf("Agent %s should have symlink: %v", agent, err)
 			continue
 		}
 		if target != globalCred {
-			t.Errorf("Worker %s symlink points to %s, expected %s", wt, target, globalCred)
+			t.Errorf("Agent %s symlink points to %s, expected %s", agent, target, globalCred)
 		}
 	}
 }
