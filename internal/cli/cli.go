@@ -889,8 +889,8 @@ func (c *CLI) initRepo(args []string) error {
 	// Start Claude in supervisor window (skip in test mode)
 	var supervisorPID, mergeQueuePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve provider for this repository
-		providerInfo, err := c.getProviderForRepo(repoName)
+		// Resolve provider directly for new repos (can't query daemon - repo not registered yet)
+		providerInfo, err := provider.Resolve(state.ProviderClaude)
 		if err != nil {
 			return fmt.Errorf("failed to resolve provider: %w", err)
 		}
