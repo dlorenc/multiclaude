@@ -283,16 +283,16 @@ func (d *Daemon) checkAgentHealth() {
 				if !isProcessAlive(agent.PID) {
 					d.logger.Warn("Agent %s process (PID %d) not running", agentName, agent.PID)
 
-					// For managed agents (supervisor, merge-queue), attempt auto-restart
-					if agent.Type == state.AgentTypeSupervisor || agent.Type == state.AgentTypeMergeQueue {
-						d.logger.Info("Attempting to auto-restart managed agent %s", agentName)
-						if err := d.restartManagedAgent(repoName, agentName, agent, repo); err != nil {
+					// For persistent agents (supervisor, merge-queue, workspace), attempt auto-restart
+					if agent.Type == state.AgentTypeSupervisor || agent.Type == state.AgentTypeMergeQueue || agent.Type == state.AgentTypeWorkspace {
+						d.logger.Info("Attempting to auto-restart agent %s", agentName)
+						if err := d.restartAgent(repoName, agentName, agent, repo); err != nil {
 							d.logger.Error("Failed to restart agent %s: %v", agentName, err)
 						} else {
 							d.logger.Info("Successfully restarted agent %s", agentName)
 						}
 					}
-					// For other agents (workers, workspaces), don't clean up - user might restart manually
+					// For transient agents (workers, review), don't auto-restart - they complete and clean up
 				}
 			}
 		}
@@ -1274,6 +1274,7 @@ func (d *Daemon) cleanupMergedBranches() {
 }
 
 // restoreTrackedRepos restores agents for tracked repos that are missing their tmux sessions
+// or have dead Claude processes
 func (d *Daemon) restoreTrackedRepos() {
 	d.logger.Info("Checking tracked repos for restoration")
 
@@ -1288,6 +1289,8 @@ func (d *Daemon) restoreTrackedRepos() {
 
 		if hasSession {
 			d.logger.Debug("Tmux session %s exists for repo %s", repo.TmuxSession, repoName)
+			// Session exists but agents might have dead processes - check and restart them
+			d.restoreDeadAgents(repoName, repo)
 			continue
 		}
 
@@ -1295,6 +1298,54 @@ func (d *Daemon) restoreTrackedRepos() {
 		d.logger.Info("Restoring agents for repo %s (tmux session %s was missing)", repoName, repo.TmuxSession)
 		if err := d.restoreRepoAgents(repoName, repo); err != nil {
 			d.logger.Error("Failed to restore agents for repo %s: %v", repoName, err)
+		}
+	}
+}
+
+// restoreDeadAgents restarts agents that have dead Claude processes but existing tmux windows.
+// This is called on daemon startup when the tmux session exists but Claude processes may have died
+// (e.g., after a system restart or Claude crash).
+func (d *Daemon) restoreDeadAgents(repoName string, repo *state.Repository) {
+	d.logger.Debug("Checking for dead agents in repo %s", repoName)
+
+	for agentName, agent := range repo.Agents {
+		// Skip agents without a PID (shouldn't happen, but be safe)
+		if agent.PID <= 0 {
+			d.logger.Debug("Agent %s has no PID, skipping", agentName)
+			continue
+		}
+
+		// Check if the tmux window still exists
+		hasWindow, err := d.tmux.HasWindow(repo.TmuxSession, agent.TmuxWindow)
+		if err != nil {
+			d.logger.Error("Failed to check window for agent %s: %v", agentName, err)
+			continue
+		}
+
+		if !hasWindow {
+			d.logger.Debug("Agent %s window not found, will be handled by health check", agentName)
+			continue
+		}
+
+		// Check if the process is still alive
+		if isProcessAlive(agent.PID) {
+			d.logger.Debug("Agent %s process (PID %d) is alive", agentName, agent.PID)
+			continue
+		}
+
+		// Process is dead but window exists - restart persistent agents with --resume
+		d.logger.Info("Agent %s process (PID %d) is dead, attempting restart", agentName, agent.PID)
+
+		// For persistent agents (supervisor, merge-queue, workspace), auto-restart
+		// For transient agents (workers, review), they will be cleaned up by health check
+		if agent.Type == state.AgentTypeSupervisor || agent.Type == state.AgentTypeMergeQueue || agent.Type == state.AgentTypeWorkspace {
+			if err := d.restartAgent(repoName, agentName, agent, repo); err != nil {
+				d.logger.Error("Failed to restart agent %s: %v", agentName, err)
+			} else {
+				d.logger.Info("Successfully restarted agent %s with --resume", agentName)
+			}
+		} else {
+			d.logger.Debug("Skipping transient agent %s (type %s) - will be cleaned up", agentName, agent.Type)
 		}
 	}
 }
@@ -1555,9 +1606,10 @@ func (d *Daemon) writeMergeQueuePromptFile(repoName string, agentName string, mq
 	return promptPath, nil
 }
 
-// restartManagedAgent restarts a managed agent (supervisor, merge-queue) that has exited.
+// restartAgent restarts an agent that has exited.
 // It uses --resume to continue the existing session if history exists.
-func (d *Daemon) restartManagedAgent(repoName, agentName string, agent state.Agent, repo *state.Repository) error {
+// This works for all agent types: supervisor, merge-queue, workspace, workers, and review agents.
+func (d *Daemon) restartAgent(repoName, agentName string, agent state.Agent, repo *state.Repository) error {
 	// Check if the session has history
 	home, err := os.UserHomeDir()
 	if err != nil {

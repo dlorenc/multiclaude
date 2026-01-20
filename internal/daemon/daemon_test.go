@@ -1836,6 +1836,216 @@ func TestRestoreRepoAgentsMissingRepoPath(t *testing.T) {
 	}
 }
 
+func TestRestoreDeadAgentsWithExistingSession(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a tmux session
+	sessionName := "mc-test-restore-dead"
+	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(sessionName)
+
+	// Create a window for the supervisor agent
+	if err := tmuxClient.CreateWindow(sessionName, "supervisor"); err != nil {
+		t.Fatalf("Failed to create window: %v", err)
+	}
+
+	// Add repo with an agent that has a dead PID (99999 is unlikely to exist)
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents: map[string]state.Agent{
+			"supervisor": {
+				Type:         state.AgentTypeSupervisor,
+				WorktreePath: d.paths.RepoDir("test-repo"),
+				TmuxWindow:   "supervisor",
+				SessionID:    "test-session-id",
+				PID:          99999, // Dead PID
+			},
+		},
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Call restoreDeadAgents - should attempt to restart the dead agent
+	// Note: This won't actually restart successfully without a real Claude binary,
+	// but it should not panic and should log the attempt
+	d.restoreDeadAgents("test-repo", repo)
+
+	// Session and window should still exist
+	hasSession, _ := tmuxClient.HasSession(sessionName)
+	if !hasSession {
+		t.Error("Session should still exist after restore attempt")
+	}
+}
+
+func TestRestoreDeadAgentsSkipsAliveProcesses(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a tmux session
+	sessionName := "mc-test-restore-alive"
+	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(sessionName)
+
+	// Create a window for the supervisor agent
+	if err := tmuxClient.CreateWindow(sessionName, "supervisor"); err != nil {
+		t.Fatalf("Failed to create window: %v", err)
+	}
+
+	// Use the current process PID as a "live" process
+	alivePID := os.Getpid()
+
+	// Add repo with an agent that has an alive PID
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents: map[string]state.Agent{
+			"supervisor": {
+				Type:         state.AgentTypeSupervisor,
+				WorktreePath: d.paths.RepoDir("test-repo"),
+				TmuxWindow:   "supervisor",
+				SessionID:    "test-session-id",
+				PID:          alivePID,
+			},
+		},
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Call restoreDeadAgents - should skip since process is alive
+	d.restoreDeadAgents("test-repo", repo)
+
+	// Verify agent PID was not changed (no restart attempted)
+	updatedAgent, exists := d.state.GetAgent("test-repo", "supervisor")
+	if !exists {
+		t.Fatal("Agent should still exist")
+	}
+	if updatedAgent.PID != alivePID {
+		t.Errorf("PID should not change for alive process, got %d want %d", updatedAgent.PID, alivePID)
+	}
+}
+
+func TestRestoreDeadAgentsSkipsTransientAgents(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a tmux session
+	sessionName := "mc-test-restore-transient"
+	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(sessionName)
+
+	// Create a window for a worker agent
+	if err := tmuxClient.CreateWindow(sessionName, "test-worker"); err != nil {
+		t.Fatalf("Failed to create window: %v", err)
+	}
+
+	// Add repo with a worker agent that has a dead PID
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents: map[string]state.Agent{
+			"test-worker": {
+				Type:         state.AgentTypeWorker, // Transient agent type
+				WorktreePath: d.paths.RepoDir("test-repo"),
+				TmuxWindow:   "test-worker",
+				SessionID:    "test-session-id",
+				PID:          99999, // Dead PID
+			},
+		},
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Call restoreDeadAgents - should skip workers (transient agents)
+	d.restoreDeadAgents("test-repo", repo)
+
+	// Verify agent PID was not changed (no restart attempted for transient agents)
+	updatedAgent, exists := d.state.GetAgent("test-repo", "test-worker")
+	if !exists {
+		t.Fatal("Agent should still exist")
+	}
+	// PID should remain the same since workers are not auto-restarted
+	if updatedAgent.PID != 99999 {
+		t.Errorf("PID should not change for transient agents, got %d want %d", updatedAgent.PID, 99999)
+	}
+}
+
+func TestRestoreDeadAgentsIncludesWorkspace(t *testing.T) {
+	tmuxClient := tmux.NewClient()
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Create a tmux session
+	sessionName := "mc-test-restore-workspace"
+	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+		t.Fatalf("Failed to create tmux session: %v", err)
+	}
+	defer tmuxClient.KillSession(sessionName)
+
+	// Create a window for the workspace agent
+	if err := tmuxClient.CreateWindow(sessionName, "workspace"); err != nil {
+		t.Fatalf("Failed to create window: %v", err)
+	}
+
+	// Add repo with a workspace agent that has a dead PID
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: sessionName,
+		Agents: map[string]state.Agent{
+			"workspace": {
+				Type:         state.AgentTypeWorkspace, // Persistent agent type
+				WorktreePath: d.paths.RepoDir("test-repo"),
+				TmuxWindow:   "workspace",
+				SessionID:    "test-session-id",
+				PID:          99999, // Dead PID
+			},
+		},
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Call restoreDeadAgents - should attempt to restart workspace (persistent agent)
+	// Note: This won't actually restart successfully without a real Claude binary,
+	// but it will attempt the restart (unlike transient agents)
+	d.restoreDeadAgents("test-repo", repo)
+
+	// Session and window should still exist
+	hasSession, _ := tmuxClient.HasSession(sessionName)
+	if !hasSession {
+		t.Error("Session should still exist after restore attempt")
+	}
+}
+
 // Tests for handle functions error cases
 
 func TestHandleGetRepoConfigMissingName(t *testing.T) {
