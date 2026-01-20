@@ -155,6 +155,40 @@ Messages are JSON files in `~/.multiclaude/messages/<repo>/<agent>/<msg-id>.json
 
 The daemon routes messages every 2 minutes via `SendKeysLiteralWithEnter()` - this atomically sends text + Enter to avoid race conditions (see `pkg/tmux/client.go:264`).
 
+## Agent Slash Commands
+
+Each agent has access to multiclaude-specific slash commands via `CLAUDE_CONFIG_DIR`. These are automatically set up when agents spawn.
+
+### Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `/refresh` | Sync worktree with main branch (fetch, rebase) |
+| `/status` | Show system status, git status, and pending messages |
+| `/workers` | List active workers for the repository |
+| `/messages` | Check and manage inter-agent messages |
+
+### Implementation
+
+Slash commands are embedded in `internal/prompts/commands/` and deployed per-agent:
+
+```
+~/.multiclaude/claude-config/<repo>/<agent>/
+└── commands/
+    ├── refresh.md
+    ├── status.md
+    ├── workers.md
+    └── messages.md
+```
+
+The daemon sets `CLAUDE_CONFIG_DIR` when starting Claude, which tells Claude Code where to find the custom commands.
+
+### Adding New Commands
+
+1. Create `internal/prompts/commands/<name>.md` with instructions
+2. Add to `AvailableCommands` in `commands.go`
+3. Rebuild: `go build ./cmd/multiclaude`
+
 ## Agent Prompts System
 
 ### Embedded Prompts
@@ -221,13 +255,19 @@ Agent runs: multiclaude agent complete
 
 ### Health Check Cycle
 
-The daemon runs health checks every 2 minutes:
+The daemon runs health checks every 2 minutes with **self-healing behavior**:
 
 1. Check if tmux session exists for each repo
-2. For each agent, verify tmux window exists
-3. Clean up any agents with `ReadyForCleanup=true`
-4. Prune orphaned worktrees (disk but not in git)
-5. Prune orphaned message directories
+2. If tmux session is missing, **attempt restoration** before cleanup:
+   - Recreate the tmux session
+   - Restart supervisor, merge-queue, and any tracked agents
+   - Only mark agents for cleanup if restoration fails
+3. For each agent, verify tmux window exists
+4. Clean up any agents with `ReadyForCleanup=true`
+5. Prune orphaned worktrees (disk but not in git)
+6. Prune orphaned message directories
+
+This self-healing makes the daemon resilient to tmux server restarts, manual session kills, or other unexpected session losses.
 
 ## State Management
 

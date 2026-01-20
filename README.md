@@ -178,9 +178,12 @@ multiclaude workspace <name>               # Connect to workspace (shorthand)
 ```bash
 multiclaude work "task description"        # Create worker for task
 multiclaude work "task" --branch feature   # Start from specific branch
+multiclaude work "Fix tests" --branch origin/work/fox --push-to work/fox  # Iterate on existing PR
 multiclaude work list                      # List active workers
 multiclaude work rm <name>                 # Remove worker (warns if uncommitted work)
 ```
+
+The `--push-to` flag creates a worker that pushes to an existing branch instead of creating a new PR. Use this when you want to iterate on an existing PR.
 
 ### Observing
 
@@ -199,6 +202,15 @@ multiclaude agent list-messages            # List incoming messages
 multiclaude agent ack-message <id>         # Acknowledge a message
 multiclaude agent complete                 # Signal task completion (workers)
 ```
+
+### Agent Slash Commands (available within Claude sessions)
+
+Agents have access to multiclaude-specific slash commands:
+
+- `/refresh` - Sync worktree with main branch
+- `/status` - Show system status and pending messages
+- `/workers` - List active workers for the repo
+- `/messages` - Check inter-agent messages
 
 ## Working with multiclaude
 
@@ -394,7 +406,8 @@ When CI fails, the merge queue can spawn workers to fix it:
 ├── state.json          # Persisted state
 ├── repos/<repo>/       # Cloned repositories
 ├── wts/<repo>/         # Git worktrees (supervisor, merge-queue, workers)
-└── messages/<repo>/    # Inter-agent messages
+├── messages/<repo>/    # Inter-agent messages
+└── claude-config/<repo>/<agent>/  # Per-agent Claude configuration (slash commands)
 ```
 
 ### Repository Configuration

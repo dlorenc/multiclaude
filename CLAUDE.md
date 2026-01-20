@@ -70,13 +70,15 @@ MULTICLAUDE_TEST_MODE=1 go test ./test/...  # Skip Claude startup
 | `internal/daemon` | Background process | `Daemon`, daemon loops |
 | `internal/state` | Persistence | `State`, `Agent`, `Repository` |
 | `internal/messages` | Inter-agent IPC | `Manager`, `Message` |
-| `internal/prompts` | Agent system prompts | Embedded `*.md` files |
+| `internal/prompts` | Agent system prompts | Embedded `*.md` files, `GenerateTrackingModePrompt()` |
+| `internal/prompts/commands` | Per-agent slash commands | `SetupAgentCommands()`, embedded `*.md` |
+| `internal/hooks` | Claude hooks config | `CopyConfig()` |
 | `internal/worktree` | Git worktree ops | `Manager`, `WorktreeInfo` |
 | `internal/tmux` | Internal tmux client | `Client` (internal use) |
 | `internal/socket` | Unix socket IPC | `Server`, `Client`, `Request` |
 | `internal/errors` | User-friendly errors | `CLIError`, error constructors |
 | `internal/names` | Worker name generation | `Generate()` (adjective-animal) |
-| `pkg/config` | Path configuration | `Paths` |
+| `pkg/config` | Path configuration | `Paths`, `NewTestPaths()` |
 | `pkg/tmux` | **Public** tmux library | `Client` (multiline support) |
 | `pkg/claude` | **Public** Claude runner | `Runner`, `Config` |
 
@@ -84,9 +86,9 @@ MULTICLAUDE_TEST_MODE=1 go test ./test/...  # Skip Claude startup
 
 1. **CLI** parses args → sends `Request` via Unix socket
 2. **Daemon** handles request → updates `state.json` → manages tmux
-3. **Agents** run in tmux windows with embedded prompts
+3. **Agents** run in tmux windows with embedded prompts and per-agent slash commands (via `CLAUDE_CONFIG_DIR`)
 4. **Messages** flow via filesystem JSON files, routed by daemon
-5. **Health checks** clean up dead agents every 2 minutes
+5. **Health checks** (every 2 min) attempt self-healing restoration before cleanup of dead agents
 
 ## Key Files to Understand
 
@@ -173,13 +175,9 @@ MULTICLAUDE_TEST_MODE=1 go test ./test/...
 ### Writing Tests
 
 ```go
-// Create isolated test environment
+// Create isolated test environment using the helper
 tmpDir, _ := os.MkdirTemp("", "multiclaude-test-*")
-paths := &config.Paths{
-    Root:       tmpDir,
-    StateFile:  filepath.Join(tmpDir, "state.json"),
-    // ... other paths
-}
+paths := config.NewTestPaths(tmpDir)  // Sets up all paths correctly
 defer os.RemoveAll(tmpDir)
 
 // Use NewWithPaths for testing
@@ -226,8 +224,10 @@ When modifying daemon loops:
 ├── repos/<repo>/           # Cloned repositories
 ├── wts/<repo>/<agent>/     # Git worktrees (one per agent)
 ├── messages/<repo>/<agent>/ # Message JSON files
-└── output/<repo>/          # Agent output logs
-    └── workers/            # Worker-specific logs
+├── output/<repo>/          # Agent output logs
+│   └── workers/            # Worker-specific logs
+└── claude-config/<repo>/<agent>/ # Per-agent CLAUDE_CONFIG_DIR
+    └── commands/           # Slash command files (*.md)
 ```
 
 ## Common Operations
