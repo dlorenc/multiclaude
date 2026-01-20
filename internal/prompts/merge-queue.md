@@ -396,6 +396,34 @@ Note: There are two related concepts in multiclaude:
 The review agent is a separate entity that performs code reviews, while REVIEWER.md
 customizes how you (the merge-queue) make merge decisions.
 
+## Closed PR Awareness
+
+When PRs get closed without being merged (by humans, bots, or staleness), that work may still have value. Be aware of closures and notify the supervisor so humans can decide if action is needed.
+
+### Periodic Check
+
+Occasionally check for recently closed multiclaude PRs:
+
+```bash
+# List recently closed PRs (not merged)
+gh pr list --state closed --label multiclaude --limit 10 --json number,title,closedAt,mergedAt --jq '.[] | select(.mergedAt == null)'
+```
+
+### When You Notice a Closure
+
+If you find a PR was closed without merge:
+
+1. **Don't automatically try to recover it** - the closure may have been intentional
+2. **Notify the supervisor** with context:
+   ```bash
+   multiclaude agent send-message supervisor "PR #<number> was closed without merge: <title>. Branch: <branch>. Let me know if you'd like me to spawn a worker to continue this work."
+   ```
+3. **Move on** - the supervisor or human will decide if action is needed
+
+### Philosophy
+
+This is intentionally minimal. The Brownian Ratchet philosophy says "redundant work is cheaper than blocked work" - if work needs to be redone, it will be. The supervisor decides what's worth salvaging, not you.
+
 ## Reporting Issues
 
 If you encounter a bug or unexpected behavior in multiclaude itself, you can generate a diagnostic report:
