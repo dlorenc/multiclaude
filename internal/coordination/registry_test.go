@@ -285,3 +285,407 @@ func TestLocalRegistry_GetNonExistent(t *testing.T) {
 		t.Error("expected error for non-existent agent")
 	}
 }
+
+func TestLocalRegistry_UnregisterErrors(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	// Non-existent repo
+	err := registry.Unregister("no-repo", "agent")
+	if err == nil {
+		t.Error("expected error for non-existent repo")
+	}
+
+	// Non-existent agent in existing repo
+	registry.Register(&AgentInfo{Name: "exists", Type: "worker", RepoName: "repo"})
+	err = registry.Unregister("repo", "no-agent")
+	if err == nil {
+		t.Error("expected error for non-existent agent")
+	}
+}
+
+func TestLocalRegistry_UpdateHeartbeatErrors(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	// Non-existent repo
+	err := registry.UpdateHeartbeat("no-repo", "agent")
+	if err == nil {
+		t.Error("expected error for non-existent repo")
+	}
+
+	// Non-existent agent in existing repo
+	registry.Register(&AgentInfo{Name: "exists", Type: "worker", RepoName: "repo"})
+	err = registry.UpdateHeartbeat("repo", "no-agent")
+	if err == nil {
+		t.Error("expected error for non-existent agent")
+	}
+}
+
+func TestLocalRegistry_UpdateStatusErrors(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	// Non-existent repo
+	err := registry.UpdateStatus("no-repo", "agent", StatusActive)
+	if err == nil {
+		t.Error("expected error for non-existent repo")
+	}
+
+	// Non-existent agent in existing repo
+	registry.Register(&AgentInfo{Name: "exists", Type: "worker", RepoName: "repo"})
+	err = registry.UpdateStatus("repo", "no-agent", StatusActive)
+	if err == nil {
+		t.Error("expected error for non-existent agent")
+	}
+}
+
+func TestLocalRegistry_GetStaleAgentsEmptyRepo(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	// Non-existent repo returns empty list (not error)
+	stale, err := registry.GetStaleAgents("no-repo", 2*time.Minute)
+	if err != nil {
+		t.Fatalf("GetStaleAgents on empty repo should not error: %v", err)
+	}
+	if len(stale) != 0 {
+		t.Errorf("expected empty list for non-existent repo, got %d", len(stale))
+	}
+}
+
+func TestLocalRegistry_GetStaleAgentsTerminated(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	// Register a terminated agent with old heartbeat - should NOT be returned as stale
+	agent := &AgentInfo{
+		Name:          "terminated-worker",
+		Type:          "worker",
+		RepoName:      "test-repo",
+		Location:      LocationLocal,
+		Status:        StatusTerminated,
+		LastHeartbeat: time.Now().Add(-10 * time.Minute),
+	}
+	registry.mu.Lock()
+	if registry.agents["test-repo"] == nil {
+		registry.agents["test-repo"] = make(map[string]*AgentInfo)
+	}
+	registry.agents["test-repo"]["terminated-worker"] = agent
+	registry.mu.Unlock()
+
+	stale, err := registry.GetStaleAgents("test-repo", 2*time.Minute)
+	if err != nil {
+		t.Fatalf("GetStaleAgents failed: %v", err)
+	}
+
+	// Terminated agents should not be in stale list
+	if len(stale) != 0 {
+		t.Errorf("terminated agents should not be returned as stale, got %d", len(stale))
+	}
+}
+
+func TestLocalRegistry_ListEmptyRepo(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	// Non-existent repo returns empty list
+	result, err := registry.List("no-repo")
+	if err != nil {
+		t.Fatalf("List on empty repo should not error: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty list, got %d agents", len(result))
+	}
+}
+
+func TestLocalRegistry_RegisterUpdate(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	// Register initial agent
+	agent := &AgentInfo{
+		Name:     "test-worker",
+		Type:     "worker",
+		RepoName: "test-repo",
+		Location: LocationLocal,
+		Status:   StatusActive,
+	}
+	registry.Register(agent)
+
+	// Get initial registration time
+	got, _ := registry.Get("test-repo", "test-worker")
+	initialRegTime := got.RegisteredAt
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Re-register with updated status
+	agent2 := &AgentInfo{
+		Name:         "test-worker",
+		Type:         "worker",
+		RepoName:     "test-repo",
+		Location:     LocationLocal,
+		Status:       StatusBusy,
+		RegisteredAt: initialRegTime, // Preserve registration time
+	}
+	registry.Register(agent2)
+
+	// Verify update
+	got, _ = registry.Get("test-repo", "test-worker")
+	if got.Status != StatusBusy {
+		t.Errorf("Status = %q, want %q", got.Status, StatusBusy)
+	}
+	if got.RegisteredAt != initialRegTime {
+		t.Error("RegisteredAt should be preserved on update")
+	}
+}
+
+func TestLocalRegistry_GetReturnsACopy(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	agent := &AgentInfo{
+		Name:     "test-worker",
+		Type:     "worker",
+		RepoName: "test-repo",
+		Location: LocationLocal,
+		Status:   StatusActive,
+	}
+	registry.Register(agent)
+
+	// Get the agent
+	got, _ := registry.Get("test-repo", "test-worker")
+
+	// Modify the returned copy
+	got.Status = StatusBusy
+
+	// Original in registry should be unchanged
+	original, _ := registry.Get("test-repo", "test-worker")
+	if original.Status == StatusBusy {
+		t.Error("Get should return a copy, but modification affected original")
+	}
+}
+
+func TestLocalRegistry_ListReturnsACopy(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	agent := &AgentInfo{
+		Name:     "test-worker",
+		Type:     "worker",
+		RepoName: "test-repo",
+		Location: LocationLocal,
+		Status:   StatusActive,
+	}
+	registry.Register(agent)
+
+	// List agents
+	list, _ := registry.List("test-repo")
+
+	// Modify the returned copy
+	list[0].Status = StatusBusy
+
+	// Original in registry should be unchanged
+	original, _ := registry.Get("test-repo", "test-worker")
+	if original.Status == StatusBusy {
+		t.Error("List should return copies, but modification affected original")
+	}
+}
+
+func TestLocalRegistry_ConcurrentAccess(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	// Pre-register the agent
+	agent := &AgentInfo{
+		Name:     "concurrent-worker",
+		Type:     "worker",
+		RepoName: "test-repo",
+		Location: LocationLocal,
+		Status:   StatusActive,
+	}
+	registry.Register(agent)
+
+	// Run concurrent operations
+	done := make(chan bool)
+	iterations := 100
+
+	// Concurrent heartbeat updates
+	go func() {
+		for i := 0; i < iterations; i++ {
+			registry.UpdateHeartbeat("test-repo", "concurrent-worker")
+		}
+		done <- true
+	}()
+
+	// Concurrent status updates
+	go func() {
+		for i := 0; i < iterations; i++ {
+			status := StatusActive
+			if i%2 == 0 {
+				status = StatusBusy
+			}
+			registry.UpdateStatus("test-repo", "concurrent-worker", status)
+		}
+		done <- true
+	}()
+
+	// Concurrent reads
+	go func() {
+		for i := 0; i < iterations; i++ {
+			registry.Get("test-repo", "concurrent-worker")
+		}
+		done <- true
+	}()
+
+	// Concurrent lists
+	go func() {
+		for i := 0; i < iterations; i++ {
+			registry.List("test-repo")
+		}
+		done <- true
+	}()
+
+	// Wait for all goroutines
+	for i := 0; i < 4; i++ {
+		<-done
+	}
+
+	// Verify agent is still accessible
+	got, err := registry.Get("test-repo", "concurrent-worker")
+	if err != nil {
+		t.Fatalf("agent should still exist: %v", err)
+	}
+	if got.Name != "concurrent-worker" {
+		t.Errorf("Name = %q, want %q", got.Name, "concurrent-worker")
+	}
+}
+
+func TestLocalRegistry_ConcurrentRegisterUnregister(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	done := make(chan bool)
+	iterations := 50
+
+	// Concurrent registrations
+	go func() {
+		for i := 0; i < iterations; i++ {
+			agent := &AgentInfo{
+				Name:     "worker-a",
+				Type:     "worker",
+				RepoName: "test-repo",
+				Location: LocationLocal,
+			}
+			registry.Register(agent)
+		}
+		done <- true
+	}()
+
+	// Concurrent unregistrations (may fail, that's ok)
+	go func() {
+		for i := 0; i < iterations; i++ {
+			registry.Unregister("test-repo", "worker-a")
+		}
+		done <- true
+	}()
+
+	// Wait for all goroutines
+	for i := 0; i < 2; i++ {
+		<-done
+	}
+
+	// Test should complete without panic or deadlock
+}
+
+func TestLocalRegistry_MultipleRepos(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	// Register agents in different repos
+	agent1 := &AgentInfo{Name: "worker-1", Type: "worker", RepoName: "repo-a", Location: LocationLocal}
+	agent2 := &AgentInfo{Name: "worker-2", Type: "worker", RepoName: "repo-b", Location: LocationLocal}
+	agent3 := &AgentInfo{Name: "worker-3", Type: "worker", RepoName: "repo-a", Location: LocationLocal}
+
+	registry.Register(agent1)
+	registry.Register(agent2)
+	registry.Register(agent3)
+
+	// List repo-a
+	repoA, _ := registry.List("repo-a")
+	if len(repoA) != 2 {
+		t.Errorf("repo-a should have 2 agents, got %d", len(repoA))
+	}
+
+	// List repo-b
+	repoB, _ := registry.List("repo-b")
+	if len(repoB) != 1 {
+		t.Errorf("repo-b should have 1 agent, got %d", len(repoB))
+	}
+
+	// Clear repo-a
+	registry.Clear("repo-a")
+
+	// repo-a should be empty
+	repoA, _ = registry.List("repo-a")
+	if len(repoA) != 0 {
+		t.Errorf("repo-a should be empty after Clear, got %d", len(repoA))
+	}
+
+	// repo-b should be unaffected
+	repoB, _ = registry.List("repo-b")
+	if len(repoB) != 1 {
+		t.Errorf("repo-b should still have 1 agent, got %d", len(repoB))
+	}
+}
+
+func TestLocalRegistry_ImplementsRegistryInterface(t *testing.T) {
+	// Compile-time check that LocalRegistry implements Registry
+	var _ Registry = (*LocalRegistry)(nil)
+
+	// Also test instantiation
+	var registry Registry = NewLocalRegistry()
+
+	agent := &AgentInfo{
+		Name:     "test-worker",
+		Type:     "worker",
+		RepoName: "test-repo",
+		Location: LocationLocal,
+	}
+
+	err := registry.Register(agent)
+	if err != nil {
+		t.Fatalf("Register via interface failed: %v", err)
+	}
+
+	got, err := registry.Get("test-repo", "test-worker")
+	if err != nil {
+		t.Fatalf("Get via interface failed: %v", err)
+	}
+	if got.Name != "test-worker" {
+		t.Errorf("Name = %q, want %q", got.Name, "test-worker")
+	}
+}
+
+func TestLocalRegistry_AutoOwnership(t *testing.T) {
+	registry := NewLocalRegistry()
+
+	tests := []struct {
+		agentType string
+		expected  OwnershipLevel
+	}{
+		{"supervisor", OwnershipRepo},
+		{"merge-queue", OwnershipRepo},
+		{"workspace", OwnershipUser},
+		{"worker", OwnershipTask},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.agentType, func(t *testing.T) {
+			agent := &AgentInfo{
+				Name:     tt.agentType + "-agent",
+				Type:     tt.agentType,
+				RepoName: "test-repo",
+				Location: LocationLocal,
+				// Ownership intentionally not set
+			}
+			registry.Register(agent)
+
+			got, _ := registry.Get("test-repo", tt.agentType+"-agent")
+			if got.Ownership != tt.expected {
+				t.Errorf("auto Ownership for %s = %q, want %q", tt.agentType, got.Ownership, tt.expected)
+			}
+
+			// Clean up
+			registry.Unregister("test-repo", tt.agentType+"-agent")
+		})
+	}
+}
