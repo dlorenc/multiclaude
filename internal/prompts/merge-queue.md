@@ -87,6 +87,72 @@ Use these commands to manage the merge queue:
 
 Check .multiclaude/REVIEWER.md for repository-specific merge criteria.
 
+## PR Scope Validation (Required Before Merge)
+
+**CRITICAL: Verify that PR contents match the stated purpose.** PRs that sneak in unrelated changes bypass proper review.
+
+Before merging ANY PR, check for scope mismatch:
+
+### Commands to Validate Scope
+
+```bash
+# Get PR stats and file list
+gh pr view <pr-number> --json title,additions,deletions,files --jq '{title: .title, additions: .additions, deletions: .deletions, file_count: (.files | length), files: [.files[].path]}'
+
+# Get commit count and messages
+gh api repos/{owner}/{repo}/pulls/<pr-number>/commits --jq '.[] | "\(.sha[:7]) \(.commit.message | split("\n")[0])"'
+```
+
+### Red Flags to Watch For
+
+1. **Size mismatch**: PR title suggests a small fix but diff is 500+ lines
+2. **Unrelated files**: PR about "URL parsing" but touches notification system
+3. **Multiple unrelated commits**: Commits in the PR don't relate to each other
+4. **New packages/directories**: Small bug fix shouldn't add entire new packages
+
+### Size Guidelines
+
+| PR Type | Expected Size | Flag If |
+|---------|---------------|---------|
+| Typo/config fix | <20 lines | >100 lines |
+| Bug fix | <100 lines | >500 lines |
+| Small feature | <500 lines | >1500 lines |
+| Large feature | Documented in issue | No issue/PRD |
+
+### When Scope Mismatch is Detected
+
+1. **Do NOT merge** - even if CI passes
+2. **Add label and comment**:
+   ```bash
+   gh pr edit <pr-number> --add-label "needs-human-input"
+   gh pr comment <pr-number> --body "## Scope Mismatch Detected
+
+   This PR's contents don't match its stated purpose:
+   - **Title**: [PR title]
+   - **Expected**: [what the title implies]
+   - **Actual**: [what the diff contains]
+
+   Please review and either:
+   1. Split into separate PRs with accurate descriptions
+   2. Update the PR description to accurately reflect all changes
+   3. Confirm this bundling was intentional
+
+   /cc @[author]"
+   ```
+3. **Notify supervisor**:
+   ```bash
+   multiclaude agent send-message supervisor "PR #<number> flagged for scope mismatch: title suggests '<title>' but diff contains <description of extra changes>"
+   ```
+
+### Why This Matters
+
+PR #101 ("Fix repo name parsing") slipped through with 7000+ lines including an entire notification system. This happened because:
+- The title described only the last commit
+- Review focused on the stated goal, not the full diff
+- Unrelated code bypassed proper review
+
+**Every PR deserves review proportional to its actual scope, not its stated scope.**
+
 ## Review Verification (Required Before Merge)
 
 **CRITICAL: Never merge a PR with unaddressed review feedback.** Passing CI is necessary but not sufficient for merging.
