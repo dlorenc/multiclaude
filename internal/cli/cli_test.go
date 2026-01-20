@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -889,10 +890,10 @@ func TestCLIWorkCreateWithRealTmux(t *testing.T) {
 
 	// Create tmux session
 	tmuxSession := "mc-test-repo"
-	if err := tmuxClient.CreateSession(tmuxSession, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), tmuxSession, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(tmuxSession)
+	defer tmuxClient.KillSession(context.Background(), tmuxSession)
 
 	// Add repo to daemon
 	repo := &state.Repository{
@@ -931,7 +932,7 @@ func TestCLIWorkCreateWithRealTmux(t *testing.T) {
 	}
 
 	// Verify tmux window was created
-	hasWindow, err := tmuxClient.HasWindow(tmuxSession, "test-worker")
+	hasWindow, err := tmuxClient.HasWindow(context.Background(), tmuxSession, "test-worker")
 	if err != nil {
 		t.Fatalf("Failed to check window: %v", err)
 	}
@@ -1822,13 +1823,13 @@ func TestCLIRemoveWorkerWithRealTmux(t *testing.T) {
 
 	// Create tmux session
 	tmuxSession := "mc-test-rm"
-	if err := tmuxClient.CreateSession(tmuxSession, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), tmuxSession, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(tmuxSession)
+	defer tmuxClient.KillSession(context.Background(), tmuxSession)
 
 	// Create worker window
-	if err := tmuxClient.CreateWindow(tmuxSession, "test-worker"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), tmuxSession, "test-worker"); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 

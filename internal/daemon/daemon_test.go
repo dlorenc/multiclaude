@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -875,13 +876,13 @@ func TestHealthCheckLoopWithRealTmux(t *testing.T) {
 
 	// Create a real tmux session
 	sessionName := "mc-test-healthcheck"
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create a window for the agent
-	if err := tmuxClient.CreateWindow(sessionName, "test-agent"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "test-agent"); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
@@ -914,7 +915,7 @@ func TestHealthCheckLoopWithRealTmux(t *testing.T) {
 	}
 
 	// Kill the window
-	if err := tmuxClient.KillWindow(sessionName, "test-agent"); err != nil {
+	if err := tmuxClient.KillWindow(context.Background(), sessionName, "test-agent"); err != nil {
 		t.Fatalf("Failed to kill window: %v", err)
 	}
 
@@ -939,13 +940,13 @@ func TestHealthCheckCleansUpMarkedAgents(t *testing.T) {
 
 	// Create a real tmux session
 	sessionName := "mc-test-cleanup"
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create a window for the agent
-	if err := tmuxClient.CreateWindow(sessionName, "to-cleanup"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "to-cleanup"); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
@@ -985,7 +986,7 @@ func TestHealthCheckCleansUpMarkedAgents(t *testing.T) {
 	}
 
 	// Verify window is killed
-	hasWindow, _ := tmuxClient.HasWindow(sessionName, "to-cleanup")
+	hasWindow, _ := tmuxClient.HasWindow(context.Background(), sessionName, "to-cleanup")
 	if hasWindow {
 		t.Error("Window should be killed when agent is cleaned up")
 	}
@@ -1003,16 +1004,16 @@ func TestMessageRoutingWithRealTmux(t *testing.T) {
 	// Create a real tmux session
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-routing"
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Skipf("tmux cannot create sessions in this environment: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create windows for agents
-	if err := tmuxClient.CreateWindow(sessionName, "supervisor"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "supervisor"); err != nil {
 		t.Fatalf("Failed to create supervisor window: %v", err)
 	}
-	if err := tmuxClient.CreateWindow(sessionName, "worker1"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "worker1"); err != nil {
 		t.Fatalf("Failed to create worker window: %v", err)
 	}
 
@@ -1081,13 +1082,13 @@ func TestWakeLoopUpdatesNudgeTime(t *testing.T) {
 
 	// Create a real tmux session
 	sessionName := "mc-test-wake"
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create window for agent
-	if err := tmuxClient.CreateWindow(sessionName, "supervisor"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "supervisor"); err != nil {
 		t.Fatalf("Failed to create supervisor window: %v", err)
 	}
 
@@ -1140,13 +1141,13 @@ func TestWakeLoopSkipsRecentlyNudgedAgents(t *testing.T) {
 
 	// Create a real tmux session
 	sessionName := "mc-test-wake-skip"
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create window for agent
-	if err := tmuxClient.CreateWindow(sessionName, "worker"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "worker"); err != nil {
 		t.Fatalf("Failed to create worker window: %v", err)
 	}
 
@@ -1788,10 +1789,10 @@ func TestRestoreTrackedReposExistingSession(t *testing.T) {
 
 	// Create a tmux session
 	sessionName := "mc-test-restore-existing"
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Add repo with existing session
 	repo := &state.Repository{
@@ -1808,7 +1809,7 @@ func TestRestoreTrackedReposExistingSession(t *testing.T) {
 
 	// Session should still exist and no agents should be created
 	// (agents would only be created during actual init)
-	hasSession, _ := tmuxClient.HasSession(sessionName)
+	hasSession, _ := tmuxClient.HasSession(context.Background(), sessionName)
 	if !hasSession {
 		t.Error("Session should still exist after restore check")
 	}
@@ -1847,13 +1848,13 @@ func TestRestoreDeadAgentsWithExistingSession(t *testing.T) {
 
 	// Create a tmux session
 	sessionName := "mc-test-restore-dead"
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create a window for the supervisor agent
-	if err := tmuxClient.CreateWindow(sessionName, "supervisor"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "supervisor"); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
@@ -1881,7 +1882,7 @@ func TestRestoreDeadAgentsWithExistingSession(t *testing.T) {
 	d.restoreDeadAgents("test-repo", repo)
 
 	// Session and window should still exist
-	hasSession, _ := tmuxClient.HasSession(sessionName)
+	hasSession, _ := tmuxClient.HasSession(context.Background(), sessionName)
 	if !hasSession {
 		t.Error("Session should still exist after restore attempt")
 	}
@@ -1898,13 +1899,13 @@ func TestRestoreDeadAgentsSkipsAliveProcesses(t *testing.T) {
 
 	// Create a tmux session
 	sessionName := "mc-test-restore-alive"
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create a window for the supervisor agent
-	if err := tmuxClient.CreateWindow(sessionName, "supervisor"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "supervisor"); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
@@ -1953,13 +1954,13 @@ func TestRestoreDeadAgentsSkipsTransientAgents(t *testing.T) {
 
 	// Create a tmux session
 	sessionName := "mc-test-restore-transient"
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create a window for a worker agent
-	if err := tmuxClient.CreateWindow(sessionName, "test-worker"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "test-worker"); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
@@ -2006,13 +2007,13 @@ func TestRestoreDeadAgentsIncludesWorkspace(t *testing.T) {
 
 	// Create a tmux session
 	sessionName := "mc-test-restore-workspace"
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create a window for the workspace agent
-	if err := tmuxClient.CreateWindow(sessionName, "workspace"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "workspace"); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
@@ -2040,7 +2041,7 @@ func TestRestoreDeadAgentsIncludesWorkspace(t *testing.T) {
 	d.restoreDeadAgents("test-repo", repo)
 
 	// Session and window should still exist
-	hasSession, _ := tmuxClient.HasSession(sessionName)
+	hasSession, _ := tmuxClient.HasSession(context.Background(), sessionName)
 	if !hasSession {
 		t.Error("Session should still exist after restore attempt")
 	}
@@ -2204,9 +2205,9 @@ func TestHandleListReposRichFormat(t *testing.T) {
 	sessionName := "mc-test-rich"
 	sessionExists := false
 	if tmuxClient.IsTmuxAvailable() {
-		if err := tmuxClient.CreateSession(sessionName, true); err == nil {
+		if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err == nil {
 			sessionExists = true
-			defer tmuxClient.KillSession(sessionName)
+			defer tmuxClient.KillSession(context.Background(), sessionName)
 		}
 	}
 
@@ -2280,7 +2281,7 @@ func TestHealthCheckAttemptsRestorationBeforeCleanup(t *testing.T) {
 	sessionName := "mc-test-selfheal"
 
 	// Ensure the session doesn't exist at the start
-	tmuxClient.KillSession(sessionName)
+	tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create the repo directory on disk (required for restoration to succeed)
 	repoPath := d.paths.RepoDir("test-repo")
@@ -2331,13 +2332,13 @@ func TestHealthCheckAttemptsRestorationBeforeCleanup(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify a tmux session was created (restoration was attempted)
-	hasSession, err := tmuxClient.HasSession(sessionName)
+	hasSession, err := tmuxClient.HasSession(context.Background(), sessionName)
 	if err != nil {
 		t.Fatalf("Failed to check session: %v", err)
 	}
 
 	// Clean up the session we created
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	if hasSession {
 		t.Log("Self-healing succeeded: tmux session was restored")

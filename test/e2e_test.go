@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -108,17 +109,17 @@ func TestPhase2Integration(t *testing.T) {
 	// Test: Add repository
 	tmuxSession := "mc-test-repo"
 	// Create tmux session first (will be cleaned up at end of test)
-	if err := tmuxClient.CreateSession(tmuxSession, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), tmuxSession, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(tmuxSession)
+	defer tmuxClient.KillSession(context.Background(), tmuxSession)
 
 	t.Run("AddRepository", func(t *testing.T) {
 		// Create windows for supervisor and merge-queue
-		if err := tmuxClient.CreateWindow(tmuxSession, "supervisor"); err != nil {
+		if err := tmuxClient.CreateWindow(context.Background(), tmuxSession, "supervisor"); err != nil {
 			t.Fatalf("Failed to create supervisor window: %v", err)
 		}
-		if err := tmuxClient.CreateWindow(tmuxSession, "merge-queue"); err != nil {
+		if err := tmuxClient.CreateWindow(context.Background(), tmuxSession, "merge-queue"); err != nil {
 			t.Fatalf("Failed to create merge-queue window: %v", err)
 		}
 
@@ -173,7 +174,7 @@ func TestPhase2Integration(t *testing.T) {
 		}
 
 		// Create tmux window
-		if err := tmuxClient.CreateWindow(tmuxSession, workerName); err != nil {
+		if err := tmuxClient.CreateWindow(context.Background(), tmuxSession, workerName); err != nil {
 			t.Fatalf("Failed to create worker window: %v", err)
 		}
 

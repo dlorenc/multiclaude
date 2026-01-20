@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -653,17 +654,17 @@ func (c *CLI) stopAll(args []string) error {
 	if tmuxClient.IsTmuxAvailable() {
 		for _, repo := range repos {
 			sessionName := fmt.Sprintf("mc-%s", repo)
-			exists, err := tmuxClient.HasSession(sessionName)
+			exists, err := tmuxClient.HasSession(context.Background(), sessionName)
 			if err == nil && exists {
 				fmt.Printf("Killing tmux session: %s\n", sessionName)
-				if err := tmuxClient.KillSession(sessionName); err != nil {
+				if err := tmuxClient.KillSession(context.Background(), sessionName); err != nil {
 					fmt.Printf("Warning: failed to kill session %s: %v\n", sessionName, err)
 				}
 			}
 		}
 
 		// Also check for any mc-* sessions we might have missed
-		sessions, err := tmuxClient.ListSessions()
+		sessions, err := tmuxClient.ListSessions(context.Background())
 		if err == nil {
 			for _, session := range sessions {
 				if strings.HasPrefix(session, "mc-") {
@@ -676,7 +677,7 @@ func (c *CLI) stopAll(args []string) error {
 					}
 					if !exists {
 						fmt.Printf("Killing orphaned tmux session: %s\n", session)
-						if err := tmuxClient.KillSession(session); err != nil {
+						if err := tmuxClient.KillSession(context.Background(), session); err != nil {
 							fmt.Printf("Warning: failed to kill session %s: %v\n", session, err)
 						}
 					}
@@ -1213,9 +1214,9 @@ func (c *CLI) removeRepo(args []string) error {
 	// Kill tmux session
 	tmuxSession := sanitizeTmuxSessionName(repoName)
 	tmuxClient := tmux.NewClient()
-	if exists, err := tmuxClient.HasSession(tmuxSession); err == nil && exists {
+	if exists, err := tmuxClient.HasSession(context.Background(), tmuxSession); err == nil && exists {
 		fmt.Printf("Killing tmux session: %s\n", tmuxSession)
-		if err := tmuxClient.KillSession(tmuxSession); err != nil {
+		if err := tmuxClient.KillSession(context.Background(), tmuxSession); err != nil {
 			fmt.Printf("Warning: failed to kill tmux session: %v\n", err)
 		}
 	}
@@ -1590,13 +1591,13 @@ func (c *CLI) createWorker(args []string) error {
 	// Ensure tmux session exists before creating window
 	// This handles cases where the session was killed or daemon didn't restore it
 	tmuxClient := tmux.NewClient()
-	hasSession, err := tmuxClient.HasSession(tmuxSession)
+	hasSession, err := tmuxClient.HasSession(context.Background(), tmuxSession)
 	if err != nil {
 		return errors.TmuxOperationFailed("check session", err)
 	}
 	if !hasSession {
 		fmt.Printf("Tmux session '%s' not found, creating it...\n", tmuxSession)
-		if err := tmuxClient.CreateSession(tmuxSession, true); err != nil {
+		if err := tmuxClient.CreateSession(context.Background(), tmuxSession, true); err != nil {
 			return errors.TmuxOperationFailed("create session", err)
 		}
 	}
@@ -3701,7 +3702,7 @@ func (c *CLI) localCleanup(dryRun bool, verbose bool) error {
 	// Check for orphaned tmux sessions (mc-* sessions not in state)
 	tmuxClient := tmux.NewClient()
 	if tmuxClient.IsTmuxAvailable() {
-		sessions, err := tmuxClient.ListSessions()
+		sessions, err := tmuxClient.ListSessions(context.Background())
 		if err == nil {
 			repos := st.ListRepos()
 			validSessions := make(map[string]bool)
@@ -3722,7 +3723,7 @@ func (c *CLI) localCleanup(dryRun bool, verbose bool) error {
 					if dryRun {
 						fmt.Printf("  Would kill: %s\n", session)
 					} else {
-						if err := tmuxClient.KillSession(session); err != nil {
+						if err := tmuxClient.KillSession(context.Background(), session); err != nil {
 							fmt.Printf("  Failed to kill %s: %v\n", session, err)
 						} else {
 							fmt.Printf("  Killed: %s\n", session)
@@ -4011,7 +4012,7 @@ func (c *CLI) localRepair(verbose bool) error {
 	orphanedSessions := []string{}
 
 	// Get all tmux sessions and find orphaned ones
-	sessions, err := tmuxClient.ListSessions()
+	sessions, err := tmuxClient.ListSessions(context.Background())
 	if err == nil {
 		repos := st.ListRepos()
 		validSessions := make(map[string]bool)
@@ -4033,7 +4034,7 @@ func (c *CLI) localRepair(verbose bool) error {
 		}
 
 		// Check if tmux session exists
-		hasSession, err := tmuxClient.HasSession(repo.TmuxSession)
+		hasSession, err := tmuxClient.HasSession(context.Background(), repo.TmuxSession)
 		if err != nil && verbose {
 			fmt.Printf("  Warning: failed to check session %s: %v\n", repo.TmuxSession, err)
 			continue
@@ -4059,7 +4060,7 @@ func (c *CLI) localRepair(verbose bool) error {
 		// Check each agent
 		for agentName, agent := range repo.Agents {
 			// Check if window exists
-			hasWindow, _ := tmuxClient.HasWindow(repo.TmuxSession, agent.TmuxWindow)
+			hasWindow, _ := tmuxClient.HasWindow(context.Background(), repo.TmuxSession, agent.TmuxWindow)
 			if !hasWindow {
 				if verbose {
 					fmt.Printf("  Removing agent %s (window %s not found)\n", agentName, agent.TmuxWindow)
@@ -4439,7 +4440,7 @@ func (c *CLI) setupOutputCapture(tmuxSession, tmuxWindow, repoName, agentName, a
 
 	// Set up pipe-pane
 	tmuxClient := tmux.NewClient()
-	if err := tmuxClient.StartPipePane(tmuxSession, tmuxWindow, logFile); err != nil {
+	if err := tmuxClient.StartPipePane(context.Background(), tmuxSession, tmuxWindow, logFile); err != nil {
 		return fmt.Errorf("failed to start output capture: %w", err)
 	}
 
@@ -4477,7 +4478,7 @@ func (c *CLI) startClaudeInTmux(binaryPath, tmuxSession, tmuxWindow, workDir, se
 
 	// Get the PID of the Claude process
 	tmuxClient := tmux.NewClient()
-	pid, err := tmuxClient.GetPanePID(tmuxSession, tmuxWindow)
+	pid, err := tmuxClient.GetPanePID(context.Background(), tmuxSession, tmuxWindow)
 	if err != nil {
 		// Non-fatal - we'll just not have the PID
 		fmt.Printf("Warning: failed to get Claude PID: %v\n", err)
@@ -4491,7 +4492,7 @@ func (c *CLI) startClaudeInTmux(binaryPath, tmuxSession, tmuxWindow, workDir, se
 
 		// Send message using atomic method to avoid race conditions (issue #63)
 		// The atomic method sends text + Enter in a single exec call
-		if err := tmuxClient.SendKeysLiteralWithEnter(tmuxSession, tmuxWindow, initialMessage); err != nil {
+		if err := tmuxClient.SendKeysLiteralWithEnter(context.Background(), tmuxSession, tmuxWindow, initialMessage); err != nil {
 			return pid, fmt.Errorf("failed to send initial message to Claude: %w", err)
 		}
 	}

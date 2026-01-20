@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -69,12 +70,12 @@ func uniqueSessionName() string {
 // waitForSession polls until a session exists or timeout is reached.
 // This handles the race condition where tmux reports success but the session
 // isn't immediately visible in subsequent queries.
-func waitForSession(client *Client, sessionName string, timeout time.Duration) error {
+func waitForSession(ctx context.Context, client *Client, sessionName string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	pollInterval := 10 * time.Millisecond
 
 	for time.Now().Before(deadline) {
-		exists, err := client.HasSession(sessionName)
+		exists, err := client.HasSession(ctx, sessionName)
 		if err != nil {
 			return err
 		}
@@ -87,12 +88,12 @@ func waitForSession(client *Client, sessionName string, timeout time.Duration) e
 }
 
 // waitForNoSession polls until a session no longer exists or timeout is reached.
-func waitForNoSession(client *Client, sessionName string, timeout time.Duration) error {
+func waitForNoSession(ctx context.Context, client *Client, sessionName string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	pollInterval := 10 * time.Millisecond
 
 	for time.Now().Before(deadline) {
-		exists, err := client.HasSession(sessionName)
+		exists, err := client.HasSession(ctx, sessionName)
 		if err != nil {
 			return err
 		}
@@ -129,11 +130,12 @@ func TestIsTmuxAvailable(t *testing.T) {
 }
 
 func TestHasSession(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Session should not exist initially
-	exists, err := client.HasSession(sessionName)
+	exists, err := client.HasSession(ctx, sessionName)
 	if err != nil {
 		t.Fatalf("HasSession failed: %v", err)
 	}
@@ -142,18 +144,18 @@ func TestHasSession(t *testing.T) {
 	}
 
 	// Create session
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	// Wait for session to be visible (handles tmux timing race)
-	if err := waitForSession(client, sessionName, 2*time.Second); err != nil {
+	if err := waitForSession(ctx, client, sessionName, 2*time.Second); err != nil {
 		t.Fatalf("Session not visible after creation: %v", err)
 	}
 
 	// Session should now exist
-	exists, err = client.HasSession(sessionName)
+	exists, err = client.HasSession(ctx, sessionName)
 	if err != nil {
 		t.Fatalf("HasSession failed: %v", err)
 	}
@@ -163,22 +165,23 @@ func TestHasSession(t *testing.T) {
 }
 
 func TestCreateSession(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Create detached session
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	// Wait for session to be visible (handles tmux timing race)
-	if err := waitForSession(client, sessionName, 2*time.Second); err != nil {
+	if err := waitForSession(ctx, client, sessionName, 2*time.Second); err != nil {
 		t.Fatalf("Session not visible after creation: %v", err)
 	}
 
 	// Verify session exists
-	exists, err := client.HasSession(sessionName)
+	exists, err := client.HasSession(ctx, sessionName)
 	if err != nil {
 		t.Fatalf("HasSession failed: %v", err)
 	}
@@ -187,30 +190,31 @@ func TestCreateSession(t *testing.T) {
 	}
 
 	// Creating duplicate session should fail
-	err = client.CreateSession(sessionName, true)
+	err = client.CreateSession(ctx, sessionName, true)
 	if err == nil {
 		t.Error("Creating duplicate session should fail")
 	}
 }
 
 func TestCreateWindow(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Create session first
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	// Create window
 	windowName := "test-window"
-	if err := client.CreateWindow(sessionName, windowName); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, windowName); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
 	// Verify window exists
-	exists, err := client.HasWindow(sessionName, windowName)
+	exists, err := client.HasWindow(ctx, sessionName, windowName)
 	if err != nil {
 		t.Fatalf("HasWindow failed: %v", err)
 	}
@@ -220,17 +224,18 @@ func TestCreateWindow(t *testing.T) {
 }
 
 func TestHasWindow(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Create session
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	// Non-existent window should return false
-	exists, err := client.HasWindow(sessionName, "nonexistent")
+	exists, err := client.HasWindow(ctx, sessionName, "nonexistent")
 	if err != nil {
 		t.Fatalf("HasWindow failed: %v", err)
 	}
@@ -240,12 +245,12 @@ func TestHasWindow(t *testing.T) {
 
 	// Create window
 	windowName := "test-window"
-	if err := client.CreateWindow(sessionName, windowName); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, windowName); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
 	// Window should now exist
-	exists, err = client.HasWindow(sessionName, windowName)
+	exists, err = client.HasWindow(ctx, sessionName, windowName)
 	if err != nil {
 		t.Fatalf("HasWindow failed: %v", err)
 	}
@@ -254,31 +259,90 @@ func TestHasWindow(t *testing.T) {
 	}
 }
 
-func TestKillWindow(t *testing.T) {
+func TestHasWindowExactMatch(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Create session
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
+
+	// Create window named "test"
+	if err := client.CreateWindow(ctx, sessionName, "test"); err != nil {
+		t.Fatalf("Failed to create window: %v", err)
+	}
+
+	// Create window named "test-longer"
+	if err := client.CreateWindow(ctx, sessionName, "test-longer"); err != nil {
+		t.Fatalf("Failed to create window: %v", err)
+	}
+
+	// "test" should exist
+	exists, err := client.HasWindow(ctx, sessionName, "test")
+	if err != nil {
+		t.Fatalf("HasWindow failed: %v", err)
+	}
+	if !exists {
+		t.Error("Window 'test' should exist")
+	}
+
+	// "test-longer" should exist
+	exists, err = client.HasWindow(ctx, sessionName, "test-longer")
+	if err != nil {
+		t.Fatalf("HasWindow failed: %v", err)
+	}
+	if !exists {
+		t.Error("Window 'test-longer' should exist")
+	}
+
+	// "test-long" should NOT exist (exact match required)
+	exists, err = client.HasWindow(ctx, sessionName, "test-long")
+	if err != nil {
+		t.Fatalf("HasWindow failed: %v", err)
+	}
+	if exists {
+		t.Error("Window 'test-long' should NOT exist - exact match required")
+	}
+
+	// "tes" should NOT exist (exact match required)
+	exists, err = client.HasWindow(ctx, sessionName, "tes")
+	if err != nil {
+		t.Fatalf("HasWindow failed: %v", err)
+	}
+	if exists {
+		t.Error("Window 'tes' should NOT exist - exact match required")
+	}
+}
+
+func TestKillWindow(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient()
+	sessionName := uniqueSessionName()
+
+	// Create session
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+	defer client.KillSession(ctx, sessionName)
 
 	// Create two windows (we need at least 2 to kill one)
-	if err := client.CreateWindow(sessionName, "window1"); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, "window1"); err != nil {
 		t.Fatalf("Failed to create window1: %v", err)
 	}
-	if err := client.CreateWindow(sessionName, "window2"); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, "window2"); err != nil {
 		t.Fatalf("Failed to create window2: %v", err)
 	}
 
 	// Kill window1
-	if err := client.KillWindow(sessionName, "window1"); err != nil {
+	if err := client.KillWindow(ctx, sessionName, "window1"); err != nil {
 		t.Fatalf("Failed to kill window: %v", err)
 	}
 
 	// Verify window1 no longer exists
-	exists, err := client.HasWindow(sessionName, "window1")
+	exists, err := client.HasWindow(ctx, sessionName, "window1")
 	if err != nil {
 		t.Fatalf("HasWindow failed: %v", err)
 	}
@@ -287,7 +351,7 @@ func TestKillWindow(t *testing.T) {
 	}
 
 	// Verify window2 still exists
-	exists, err = client.HasWindow(sessionName, "window2")
+	exists, err = client.HasWindow(ctx, sessionName, "window2")
 	if err != nil {
 		t.Fatalf("HasWindow failed: %v", err)
 	}
@@ -297,31 +361,32 @@ func TestKillWindow(t *testing.T) {
 }
 
 func TestKillSession(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Create session
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
 
 	// Wait for session to be visible before killing
-	if err := waitForSession(client, sessionName, 2*time.Second); err != nil {
+	if err := waitForSession(ctx, client, sessionName, 2*time.Second); err != nil {
 		t.Fatalf("Session not visible after creation: %v", err)
 	}
 
 	// Kill session
-	if err := client.KillSession(sessionName); err != nil {
+	if err := client.KillSession(ctx, sessionName); err != nil {
 		t.Fatalf("Failed to kill session: %v", err)
 	}
 
 	// Wait for session to be gone (handles tmux timing race)
-	if err := waitForNoSession(client, sessionName, 2*time.Second); err != nil {
+	if err := waitForNoSession(ctx, client, sessionName, 2*time.Second); err != nil {
 		t.Fatalf("Session still visible after killing: %v", err)
 	}
 
 	// Verify session no longer exists
-	exists, err := client.HasSession(sessionName)
+	exists, err := client.HasSession(ctx, sessionName)
 	if err != nil {
 		t.Fatalf("HasSession failed: %v", err)
 	}
@@ -331,18 +396,19 @@ func TestKillSession(t *testing.T) {
 }
 
 func TestSendKeys(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Create session with a window running a shell
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	// Create a window
 	windowName := "test-window"
-	if err := client.CreateWindow(sessionName, windowName); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, windowName); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
@@ -350,7 +416,7 @@ func TestSendKeys(t *testing.T) {
 	testFile := fmt.Sprintf("/tmp/tmux-test-%d", time.Now().UnixNano())
 	defer os.Remove(testFile)
 
-	if err := client.SendKeys(sessionName, windowName, fmt.Sprintf("touch %s", testFile)); err != nil {
+	if err := client.SendKeys(ctx, sessionName, windowName, fmt.Sprintf("touch %s", testFile)); err != nil {
 		t.Fatalf("Failed to send keys: %v", err)
 	}
 
@@ -376,103 +442,151 @@ func TestSendKeys(t *testing.T) {
 }
 
 func TestSendKeysLiteral(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Create session
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	// Create a window
 	windowName := "test-window"
-	if err := client.CreateWindow(sessionName, windowName); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, windowName); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
 	// SendKeysLiteral should not execute (no Enter key)
 	// We can't easily verify this without reading pane content,
 	// but we can at least verify it doesn't error
-	if err := client.SendKeysLiteral(sessionName, windowName, "echo test"); err != nil {
+	if err := client.SendKeysLiteral(ctx, sessionName, windowName, "echo test"); err != nil {
 		t.Fatalf("Failed to send keys literal: %v", err)
 	}
 }
 
 func TestSendKeysLiteralWithNewlines(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Create session
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	// Create a window
 	windowName := "test-window"
-	if err := client.CreateWindow(sessionName, windowName); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, windowName); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
 	// Test sending text with newlines - should not error
 	multiLineText := "line1\nline2\nline3"
-	if err := client.SendKeysLiteral(sessionName, windowName, multiLineText); err != nil {
+	if err := client.SendKeysLiteral(ctx, sessionName, windowName, multiLineText); err != nil {
 		t.Fatalf("Failed to send multi-line text: %v", err)
 	}
 
 	// Test with empty lines
 	textWithEmptyLines := "first\n\nlast"
-	if err := client.SendKeysLiteral(sessionName, windowName, textWithEmptyLines); err != nil {
+	if err := client.SendKeysLiteral(ctx, sessionName, windowName, textWithEmptyLines); err != nil {
 		t.Fatalf("Failed to send text with empty lines: %v", err)
 	}
 
 	// Test with trailing newline
 	textWithTrailingNewline := "content\n"
-	if err := client.SendKeysLiteral(sessionName, windowName, textWithTrailingNewline); err != nil {
+	if err := client.SendKeysLiteral(ctx, sessionName, windowName, textWithTrailingNewline); err != nil {
 		t.Fatalf("Failed to send text with trailing newline: %v", err)
 	}
 }
 
 func TestSendEnter(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Create session
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	// Create a window
 	windowName := "test-window"
-	if err := client.CreateWindow(sessionName, windowName); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, windowName); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
 	// SendEnter should work without error
-	if err := client.SendEnter(sessionName, windowName); err != nil {
+	if err := client.SendEnter(ctx, sessionName, windowName); err != nil {
 		t.Fatalf("Failed to send enter: %v", err)
 	}
 }
 
+func TestSendKeysLiteralWithEnter(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient()
+	sessionName := uniqueSessionName()
+
+	// Create session with a window running a shell
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+	defer client.KillSession(ctx, sessionName)
+
+	// Create a window
+	windowName := "test-window"
+	if err := client.CreateWindow(ctx, sessionName, windowName); err != nil {
+		t.Fatalf("Failed to create window: %v", err)
+	}
+
+	// Send keys atomically to create a file
+	testFile := fmt.Sprintf("/tmp/tmux-test-atomic-%d", time.Now().UnixNano())
+	defer os.Remove(testFile)
+
+	if err := client.SendKeysLiteralWithEnter(ctx, sessionName, windowName, fmt.Sprintf("touch %s", testFile)); err != nil {
+		t.Fatalf("Failed to send keys atomically: %v", err)
+	}
+
+	// Poll for the file to be created with timeout
+	timeout := 5 * time.Second
+	pollInterval := 50 * time.Millisecond
+	deadline := time.Now().Add(timeout)
+
+	fileCreated := false
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(testFile); err == nil {
+			fileCreated = true
+			break
+		}
+		time.Sleep(pollInterval)
+	}
+
+	if !fileCreated {
+		t.Error("SendKeysLiteralWithEnter did not execute command - file was not created within timeout")
+	}
+}
+
 func TestListSessions(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 
 	// Create a test session
 	sessionName := uniqueSessionName()
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	// Wait for session to be visible (handles tmux timing race)
-	if err := waitForSession(client, sessionName, 2*time.Second); err != nil {
+	if err := waitForSession(ctx, client, sessionName, 2*time.Second); err != nil {
 		t.Fatalf("Session not visible after creation: %v", err)
 	}
 
 	// List sessions
-	sessions, err := client.ListSessions()
+	sessions, err := client.ListSessions(ctx)
 	if err != nil {
 		t.Fatalf("Failed to list sessions: %v", err)
 	}
@@ -493,17 +607,18 @@ func TestListSessions(t *testing.T) {
 }
 
 func TestListWindows(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Create session
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	// List windows (should have default window)
-	windows, err := client.ListWindows(sessionName)
+	windows, err := client.ListWindows(ctx, sessionName)
 	if err != nil {
 		t.Fatalf("Failed to list windows: %v", err)
 	}
@@ -512,15 +627,15 @@ func TestListWindows(t *testing.T) {
 	}
 
 	// Create additional windows
-	if err := client.CreateWindow(sessionName, "window1"); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, "window1"); err != nil {
 		t.Fatalf("Failed to create window1: %v", err)
 	}
-	if err := client.CreateWindow(sessionName, "window2"); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, "window2"); err != nil {
 		t.Fatalf("Failed to create window2: %v", err)
 	}
 
 	// List windows again
-	windows, err = client.ListWindows(sessionName)
+	windows, err = client.ListWindows(ctx, sessionName)
 	if err != nil {
 		t.Fatalf("Failed to list windows: %v", err)
 	}
@@ -547,23 +662,24 @@ func TestListWindows(t *testing.T) {
 }
 
 func TestGetPanePID(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := uniqueSessionName()
 
 	// Create session
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	// Create a window
 	windowName := "test-window"
-	if err := client.CreateWindow(sessionName, windowName); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, windowName); err != nil {
 		t.Fatalf("Failed to create window: %v", err)
 	}
 
 	// Get pane PID
-	pid, err := client.GetPanePID(sessionName, windowName)
+	pid, err := client.GetPanePID(ctx, sessionName, windowName)
 	if err != nil {
 		t.Fatalf("Failed to get pane PID: %v", err)
 	}
@@ -584,6 +700,7 @@ func TestGetPanePID(t *testing.T) {
 }
 
 func TestMultipleSessions(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 
 	// Create multiple test sessions with unique names
@@ -593,23 +710,23 @@ func TestMultipleSessions(t *testing.T) {
 	time.Sleep(1 * time.Millisecond)
 	session3 := fmt.Sprintf("test-tmux-%d-3", time.Now().UnixNano())
 
-	if err := client.CreateSession(session1, true); err != nil {
+	if err := client.CreateSession(ctx, session1, true); err != nil {
 		t.Fatalf("Failed to create session1: %v", err)
 	}
-	defer client.KillSession(session1)
+	defer client.KillSession(ctx, session1)
 
-	if err := client.CreateSession(session2, true); err != nil {
+	if err := client.CreateSession(ctx, session2, true); err != nil {
 		t.Fatalf("Failed to create session2: %v", err)
 	}
-	defer client.KillSession(session2)
+	defer client.KillSession(ctx, session2)
 
-	if err := client.CreateSession(session3, true); err != nil {
+	if err := client.CreateSession(ctx, session3, true); err != nil {
 		t.Fatalf("Failed to create session3: %v", err)
 	}
-	defer client.KillSession(session3)
+	defer client.KillSession(ctx, session3)
 
 	// Verify all sessions exist
-	sessions, err := client.ListSessions()
+	sessions, err := client.ListSessions(ctx)
 	if err != nil {
 		t.Fatalf("Failed to list sessions: %v", err)
 	}
@@ -624,17 +741,17 @@ func TestMultipleSessions(t *testing.T) {
 	}
 
 	// Create windows in different sessions
-	if err := client.CreateWindow(session1, "win1"); err != nil {
+	if err := client.CreateWindow(ctx, session1, "win1"); err != nil {
 		t.Fatalf("Failed to create window in session1: %v", err)
 	}
-	if err := client.CreateWindow(session2, "win2"); err != nil {
+	if err := client.CreateWindow(ctx, session2, "win2"); err != nil {
 		t.Fatalf("Failed to create window in session2: %v", err)
 	}
 
 	// Verify windows are in correct sessions
-	hasWin1, _ := client.HasWindow(session1, "win1")
-	hasWin2, _ := client.HasWindow(session2, "win2")
-	hasWin1InSession2, _ := client.HasWindow(session2, "win1")
+	hasWin1, _ := client.HasWindow(ctx, session1, "win1")
+	hasWin2, _ := client.HasWindow(ctx, session2, "win2")
+	hasWin1InSession2, _ := client.HasWindow(ctx, session2, "win1")
 
 	if !hasWin1 {
 		t.Error("win1 should exist in session1")
@@ -648,32 +765,58 @@ func TestMultipleSessions(t *testing.T) {
 }
 
 func TestErrorHandling(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 
 	// Test operations on non-existent session
-	err := client.CreateWindow("nonexistent-session", "window")
+	err := client.CreateWindow(ctx, "nonexistent-session", "window")
 	if err == nil {
 		t.Error("CreateWindow on non-existent session should fail")
 	}
+	// Verify it's a CommandError
+	if _, ok := err.(*CommandError); !ok {
+		t.Errorf("Expected CommandError, got %T", err)
+	}
 
-	err = client.KillWindow("nonexistent-session", "window")
+	err = client.KillWindow(ctx, "nonexistent-session", "window")
 	if err == nil {
 		t.Error("KillWindow on non-existent session should fail")
 	}
 
-	_, err = client.GetPanePID("nonexistent-session", "window")
+	_, err = client.GetPanePID(ctx, "nonexistent-session", "window")
 	if err == nil {
 		t.Error("GetPanePID on non-existent session should fail")
 	}
 
 	// Test ListWindows on non-existent session
-	_, err = client.ListWindows("nonexistent-session")
+	_, err = client.ListWindows(ctx, "nonexistent-session")
 	if err == nil {
 		t.Error("ListWindows on non-existent session should fail")
 	}
 }
 
+func TestContextCancellation(t *testing.T) {
+	client := NewClient()
+	sessionName := uniqueSessionName()
+
+	// Create a context that's already cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Operations should fail with context error
+	_, err := client.HasSession(ctx, sessionName)
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled, got %v", err)
+	}
+
+	err = client.CreateSession(ctx, sessionName, true)
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled, got %v", err)
+	}
+}
+
 func TestPipePane(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 	session := uniqueSessionName()
 	window := "testwindow"
@@ -683,7 +826,7 @@ func TestPipePane(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(session)
+	defer client.KillSession(ctx, session)
 
 	// Create a temp file to capture output
 	tmpFile, err := os.CreateTemp("", "pipe-pane-test-*.log")
@@ -694,13 +837,13 @@ func TestPipePane(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 
 	// Start pipe-pane
-	if err := client.StartPipePane(session, window, tmpFile.Name()); err != nil {
+	if err := client.StartPipePane(ctx, session, window, tmpFile.Name()); err != nil {
 		t.Fatalf("StartPipePane failed: %v", err)
 	}
 
 	// Send some output to the pane
 	testMessage := "Hello from pipe-pane test"
-	if err := client.SendKeys(session, window, fmt.Sprintf("echo '%s'", testMessage)); err != nil {
+	if err := client.SendKeys(ctx, session, window, fmt.Sprintf("echo '%s'", testMessage)); err != nil {
 		t.Fatalf("Failed to send keys: %v", err)
 	}
 
@@ -719,12 +862,12 @@ func TestPipePane(t *testing.T) {
 	}
 
 	// Stop pipe-pane
-	if err := client.StopPipePane(session, window); err != nil {
+	if err := client.StopPipePane(ctx, session, window); err != nil {
 		t.Fatalf("StopPipePane failed: %v", err)
 	}
 
 	// Send more output after stopping
-	if err := client.SendKeys(session, window, "echo 'This should not be captured'"); err != nil {
+	if err := client.SendKeys(ctx, session, window, "echo 'This should not be captured'"); err != nil {
 		t.Fatalf("Failed to send keys: %v", err)
 	}
 	time.Sleep(500 * time.Millisecond)
@@ -743,54 +886,93 @@ func TestPipePane(t *testing.T) {
 }
 
 func TestPipePaneErrorHandling(t *testing.T) {
+	ctx := context.Background()
 	client := NewClient()
 
 	// Test StartPipePane on non-existent session
-	err := client.StartPipePane("nonexistent-session", "window", "/tmp/test.log")
+	err := client.StartPipePane(ctx, "nonexistent-session", "window", "/tmp/test.log")
 	if err == nil {
 		t.Error("StartPipePane on non-existent session should fail")
 	}
 
 	// Test StopPipePane on non-existent session
-	err = client.StopPipePane("nonexistent-session", "window")
+	err = client.StopPipePane(ctx, "nonexistent-session", "window")
 	if err == nil {
 		t.Error("StopPipePane on non-existent session should fail")
 	}
 }
 
+func TestCustomErrorTypes(t *testing.T) {
+	// Test SessionNotFoundError
+	sessionErr := &SessionNotFoundError{Name: "test-session"}
+	if sessionErr.Error() != "tmux session not found: test-session" {
+		t.Errorf("Unexpected error message: %s", sessionErr.Error())
+	}
+	if !IsSessionNotFound(sessionErr) {
+		t.Error("IsSessionNotFound should return true")
+	}
+	if IsWindowNotFound(sessionErr) {
+		t.Error("IsWindowNotFound should return false for SessionNotFoundError")
+	}
+
+	// Test WindowNotFoundError
+	windowErr := &WindowNotFoundError{Session: "test-session", Window: "test-window"}
+	if windowErr.Error() != "tmux window not found: test-window in session test-session" {
+		t.Errorf("Unexpected error message: %s", windowErr.Error())
+	}
+	if !IsWindowNotFound(windowErr) {
+		t.Error("IsWindowNotFound should return true")
+	}
+	if IsSessionNotFound(windowErr) {
+		t.Error("IsSessionNotFound should return false for WindowNotFoundError")
+	}
+
+	// Test CommandError
+	cmdErr := &CommandError{Op: "send-keys", Session: "sess", Window: "win", Err: fmt.Errorf("underlying error")}
+	expected := "tmux send-keys failed for sess:win: underlying error"
+	if cmdErr.Error() != expected {
+		t.Errorf("Expected %q, got %q", expected, cmdErr.Error())
+	}
+	if cmdErr.Unwrap() == nil {
+		t.Error("CommandError.Unwrap should return underlying error")
+	}
+}
+
 // BenchmarkSendKeys measures the performance of sending keys to a tmux pane.
 func BenchmarkSendKeys(b *testing.B) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := fmt.Sprintf("bench-tmux-%d", time.Now().UnixNano())
 
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		b.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	windowName := "bench-window"
-	if err := client.CreateWindow(sessionName, windowName); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, windowName); err != nil {
 		b.Fatalf("Failed to create window: %v", err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client.SendKeysLiteral(sessionName, windowName, "test message")
+		client.SendKeysLiteral(ctx, sessionName, windowName, "test message")
 	}
 }
 
 // BenchmarkSendKeysMultiline measures sending multiline text via paste-buffer.
 func BenchmarkSendKeysMultiline(b *testing.B) {
+	ctx := context.Background()
 	client := NewClient()
 	sessionName := fmt.Sprintf("bench-tmux-%d", time.Now().UnixNano())
 
-	if err := client.CreateSession(sessionName, true); err != nil {
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
 		b.Fatalf("Failed to create session: %v", err)
 	}
-	defer client.KillSession(sessionName)
+	defer client.KillSession(ctx, sessionName)
 
 	windowName := "bench-window"
-	if err := client.CreateWindow(sessionName, windowName); err != nil {
+	if err := client.CreateWindow(ctx, sessionName, windowName); err != nil {
 		b.Fatalf("Failed to create window: %v", err)
 	}
 
@@ -798,6 +980,6 @@ func BenchmarkSendKeysMultiline(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client.SendKeysLiteral(sessionName, windowName, multilineText)
+		client.SendKeysLiteral(ctx, sessionName, windowName, multilineText)
 	}
 }

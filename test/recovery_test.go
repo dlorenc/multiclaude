@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,13 +121,13 @@ func TestOrphanedTmuxSessionCleanup(t *testing.T) {
 
 	// Create an "orphaned" tmux session (not tracked in state)
 	orphanSession := "mc-orphan-test"
-	if err := tmuxClient.CreateSession(orphanSession, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), orphanSession, true); err != nil {
 		t.Fatalf("Failed to create orphan session: %v", err)
 	}
-	defer tmuxClient.KillSession(orphanSession)
+	defer tmuxClient.KillSession(context.Background(), orphanSession)
 
 	// Verify session exists
-	exists, err := tmuxClient.HasSession(orphanSession)
+	exists, err := tmuxClient.HasSession(context.Background(), orphanSession)
 	if err != nil {
 		t.Fatalf("Failed to check session: %v", err)
 	}
@@ -135,7 +136,7 @@ func TestOrphanedTmuxSessionCleanup(t *testing.T) {
 	}
 
 	// List sessions - should see our orphan
-	sessions, err := tmuxClient.ListSessions()
+	sessions, err := tmuxClient.ListSessions(context.Background())
 	if err != nil {
 		t.Fatalf("Failed to list sessions: %v", err)
 	}
@@ -389,13 +390,13 @@ func TestDaemonCrashRecovery(t *testing.T) {
 	// Create the tmux session BEFORE starting the daemon
 	// This is critical: when d2 starts, restoreTrackedRepos() will see the session
 	// exists and skip restoration, preserving the state as-is.
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create supervisor window for the agent we'll add
-	if err := tmuxClient.CreateWindow(sessionName, "supervisor"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "supervisor"); err != nil {
 		t.Fatalf("Failed to create supervisor window: %v", err)
 	}
 
@@ -606,13 +607,13 @@ func TestDaemonRestartSetsUpClaudeConfigDir(t *testing.T) {
 
 	// Create tmux session for the test
 	sessionName := "mc-config-test"
-	if err := tmuxClient.CreateSession(sessionName, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Fatalf("Failed to create tmux session: %v", err)
 	}
-	defer tmuxClient.KillSession(sessionName)
+	defer tmuxClient.KillSession(context.Background(), sessionName)
 
 	// Create supervisor window for the agent
-	if err := tmuxClient.CreateWindow(sessionName, "supervisor"); err != nil {
+	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "supervisor"); err != nil {
 		t.Fatalf("Failed to create supervisor window: %v", err)
 	}
 

@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,7 +81,7 @@ func setupIntegrationTest(t *testing.T, repoName string) (*cli.CLI, *daemon.Daem
 
 	// Create tmux session
 	tmuxSession := "mc-" + repoName
-	if err := tmuxClient.CreateSession(tmuxSession, true); err != nil {
+	if err := tmuxClient.CreateSession(context.Background(), tmuxSession, true); err != nil {
 		d.Stop()
 		os.RemoveAll(tmpDir)
 		t.Fatalf("Failed to create tmux session: %v", err)
@@ -90,7 +91,7 @@ func setupIntegrationTest(t *testing.T, repoName string) (*cli.CLI, *daemon.Daem
 	c := cli.NewWithPaths(paths)
 
 	cleanup := func() {
-		tmuxClient.KillSession(tmuxSession)
+		tmuxClient.KillSession(context.Background(), tmuxSession)
 		d.Stop()
 		os.RemoveAll(tmpDir)
 		os.Unsetenv("MULTICLAUDE_TEST_MODE")
@@ -198,7 +199,7 @@ func TestWorkerCreationIntegration(t *testing.T) {
 
 	// Verification 3: Tmux window was created
 	tmuxClient := tmux.NewClient()
-	hasWindow, err := tmuxClient.HasWindow(tmuxSession, workerName)
+	hasWindow, err := tmuxClient.HasWindow(context.Background(), tmuxSession, workerName)
 	if err != nil {
 		t.Fatalf("Failed to check tmux window: %v", err)
 	}
@@ -352,7 +353,7 @@ func TestRepoInitializationIntegration(t *testing.T) {
 
 	// Clean up tmux session created by init
 	tmuxSession := "mc-" + repoName
-	defer tmuxClient.KillSession(tmuxSession)
+	defer tmuxClient.KillSession(context.Background(), tmuxSession)
 
 	// Verification 1: Repo is registered with daemon
 	repo, exists := d.GetState().GetRepo(repoName)
@@ -373,7 +374,7 @@ func TestRepoInitializationIntegration(t *testing.T) {
 	}
 
 	// Verification 3: Tmux session was created
-	hasSession, err := tmuxClient.HasSession(tmuxSession)
+	hasSession, err := tmuxClient.HasSession(context.Background(), tmuxSession)
 	if err != nil {
 		t.Fatalf("Failed to check tmux session: %v", err)
 	}
@@ -401,7 +402,7 @@ func TestRepoInitializationIntegration(t *testing.T) {
 
 	// Verification 6: Check that supervisor and merge-queue windows exist
 	for _, windowName := range []string{"supervisor", "merge-queue"} {
-		hasWindow, err := tmuxClient.HasWindow(tmuxSession, windowName)
+		hasWindow, err := tmuxClient.HasWindow(context.Background(), tmuxSession, windowName)
 		if err != nil {
 			t.Fatalf("Failed to check %s window: %v", windowName, err)
 		}
@@ -491,7 +492,7 @@ func TestRepoInitializationWithMergeQueueDisabled(t *testing.T) {
 	}
 
 	tmuxSession := "mc-" + repoName
-	defer tmuxClient.KillSession(tmuxSession)
+	defer tmuxClient.KillSession(context.Background(), tmuxSession)
 
 	// Verify merge queue is disabled
 	repo, _ := d.GetState().GetRepo(repoName)

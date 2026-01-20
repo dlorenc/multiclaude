@@ -7,10 +7,12 @@
 //   - Session ID generation
 //   - Startup timing quirks
 //   - Terminal integration via the TerminalRunner interface
+//   - Context support for cancellation and timeouts
 //
 // # Quick Start
 //
 //	import (
+//	    "context"
 //	    "github.com/dlorenc/multiclaude/pkg/claude"
 //	    "github.com/dlorenc/multiclaude/pkg/tmux"
 //	)
@@ -20,14 +22,21 @@
 //	runner := claude.NewRunner(claude.WithTerminal(tmuxClient))
 //
 //	// Start Claude in a tmux session
+//	ctx := context.Background()
 //	config := claude.Config{
 //	    WorkDir:      "/path/to/workspace",
 //	    SystemPrompt: "You are a helpful coding assistant.",
 //	}
-//	pid, err := runner.Start("my-session", "claude-window", config)
+//	result, err := runner.Start(ctx, "my-session", "claude-window", config)
+//
+// # Sending Messages
+//
+//	// Send a message to a running Claude instance
+//	err := runner.SendMessage(ctx, "my-session", "claude-window", "Hello, Claude!")
 package claude
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"os/exec"
@@ -38,22 +47,26 @@ import (
 // The tmux.Client implements this interface.
 type TerminalRunner interface {
 	// SendKeys sends text followed by Enter to submit.
-	SendKeys(session, window, text string) error
+	SendKeys(ctx context.Context, session, window, text string) error
 
 	// SendKeysLiteral sends text without pressing Enter (supports multiline via paste-buffer).
-	SendKeysLiteral(session, window, text string) error
+	SendKeysLiteral(ctx context.Context, session, window, text string) error
 
 	// SendEnter sends just the Enter key.
-	SendEnter(session, window string) error
+	SendEnter(ctx context.Context, session, window string) error
+
+	// SendKeysLiteralWithEnter sends text + Enter atomically.
+	// This prevents race conditions where Enter might be lost between separate calls.
+	SendKeysLiteralWithEnter(ctx context.Context, session, window, text string) error
 
 	// GetPanePID gets the process ID running in a pane.
-	GetPanePID(session, window string) (int, error)
+	GetPanePID(ctx context.Context, session, window string) (int, error)
 
 	// StartPipePane starts capturing pane output to a file.
-	StartPipePane(session, window, outputFile string) error
+	StartPipePane(ctx context.Context, session, window, outputFile string) error
 
 	// StopPipePane stops capturing pane output.
-	StopPipePane(session, window string) error
+	StopPipePane(ctx context.Context, session, window string) error
 }
 
 // Runner manages Claude Code instances.
@@ -151,7 +164,7 @@ type Config struct {
 	Resume bool
 
 	// WorkDir is the working directory for Claude.
-	// If empty, uses the current directory.
+	// If non-empty, the command will cd to this directory before launching Claude.
 	WorkDir string
 
 	// SystemPromptFile is the path to a file containing the system prompt.
@@ -169,6 +182,11 @@ type Config struct {
 	// ClaudeConfigDir is the path to set as CLAUDE_CONFIG_DIR environment variable.
 	// This enables per-agent slash commands. If empty, CLAUDE_CONFIG_DIR is not set.
 	ClaudeConfigDir string
+
+	// MOTD is an optional message of the day to display before starting Claude.
+	// This is useful for showing restart instructions or other information.
+	// If empty, no MOTD is displayed.
+	MOTD string
 }
 
 // StartResult contains information about a started Claude instance.
@@ -184,7 +202,7 @@ type StartResult struct {
 }
 
 // Start launches Claude in the specified tmux session/window.
-func (r *Runner) Start(session, window string, cfg Config) (*StartResult, error) {
+func (r *Runner) Start(ctx context.Context, session, window string, cfg Config) (*StartResult, error) {
 	if r.Terminal == nil {
 		return nil, fmt.Errorf("terminal runner not configured")
 	}
@@ -204,47 +222,46 @@ func (r *Runner) Start(session, window string, cfg Config) (*StartResult, error)
 
 	// Start output capture if configured
 	if cfg.OutputFile != "" {
-		if err := r.Terminal.StartPipePane(session, window, cfg.OutputFile); err != nil {
+		if err := r.Terminal.StartPipePane(ctx, session, window, cfg.OutputFile); err != nil {
 			return nil, fmt.Errorf("failed to start output capture: %w", err)
 		}
 	}
 
-	// Print MOTD before starting Claude - this will be visible when Claude exits
-	motd := fmt.Sprintf(`echo "
-================================================================================
-  multiclaude agent: %s
-  session: %s
---------------------------------------------------------------------------------
-  If Claude exits, run:  multiclaude claude
-  To restart with the same session and context.
-================================================================================
-"`, window, sessionID)
-	if err := r.Terminal.SendKeys(session, window, motd); err != nil {
-		// Non-fatal - just log and continue
+	// Print MOTD before starting Claude if configured
+	if cfg.MOTD != "" {
+		motd := fmt.Sprintf("echo %q", cfg.MOTD)
+		if err := r.Terminal.SendKeys(ctx, session, window, motd); err != nil {
+			// Non-fatal - just continue
+		}
 	}
 
 	// Send the command to start Claude
-	if err := r.Terminal.SendKeys(session, window, cmd); err != nil {
+	if err := r.Terminal.SendKeys(ctx, session, window, cmd); err != nil {
 		return nil, fmt.Errorf("failed to send claude command: %w", err)
 	}
 
-	// Wait for Claude to start
-	time.Sleep(r.StartupDelay)
+	// Wait for Claude to start (respecting context)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(r.StartupDelay):
+	}
 
 	// Get the PID
-	pid, err := r.Terminal.GetPanePID(session, window)
+	pid, err := r.Terminal.GetPanePID(ctx, session, window)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Claude PID: %w", err)
 	}
 
 	// Send initial message if configured
 	if cfg.InitialMessage != "" {
-		time.Sleep(r.MessageDelay)
-		if err := r.Terminal.SendKeysLiteral(session, window, cfg.InitialMessage); err != nil {
-			return nil, fmt.Errorf("failed to send initial message: %w", err)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(r.MessageDelay):
 		}
-		if err := r.Terminal.SendEnter(session, window); err != nil {
-			return nil, fmt.Errorf("failed to submit initial message: %w", err)
+		if err := r.Terminal.SendKeysLiteralWithEnter(ctx, session, window, cfg.InitialMessage); err != nil {
+			return nil, fmt.Errorf("failed to send initial message: %w", err)
 		}
 	}
 
@@ -259,10 +276,15 @@ func (r *Runner) Start(session, window string, cfg Config) (*StartResult, error)
 func (r *Runner) buildCommand(sessionID string, cfg Config) string {
 	var cmd string
 
+	// If WorkDir is specified, cd to that directory first
+	if cfg.WorkDir != "" {
+		cmd = fmt.Sprintf("cd %q && ", cfg.WorkDir)
+	}
+
 	// Prepend CLAUDE_CONFIG_DIR environment variable if set
 	// This enables per-agent slash commands
 	if cfg.ClaudeConfigDir != "" {
-		cmd = fmt.Sprintf("CLAUDE_CONFIG_DIR=%s ", cfg.ClaudeConfigDir)
+		cmd += fmt.Sprintf("CLAUDE_CONFIG_DIR=%s ", cfg.ClaudeConfigDir)
 	}
 
 	cmd += r.BinaryPath
@@ -288,20 +310,16 @@ func (r *Runner) buildCommand(sessionID string, cfg Config) string {
 }
 
 // SendMessage sends a message to a running Claude instance.
-// This properly handles multiline messages using paste-buffer.
-func (r *Runner) SendMessage(session, window, message string) error {
+// This properly handles multiline messages using paste-buffer and sends
+// text + Enter atomically to prevent race conditions.
+func (r *Runner) SendMessage(ctx context.Context, session, window, message string) error {
 	if r.Terminal == nil {
 		return fmt.Errorf("terminal runner not configured")
 	}
 
-	// Send the message text
-	if err := r.Terminal.SendKeysLiteral(session, window, message); err != nil {
+	// Use atomic send for reliability
+	if err := r.Terminal.SendKeysLiteralWithEnter(ctx, session, window, message); err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
-	}
-
-	// Press Enter to submit
-	if err := r.Terminal.SendEnter(session, window); err != nil {
-		return fmt.Errorf("failed to submit message: %w", err)
 	}
 
 	return nil

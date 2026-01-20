@@ -6,6 +6,8 @@
 //   - Multiline text input via paste-buffer (avoids triggering intermediate processing)
 //   - Process PID extraction from panes
 //   - Output capture via pipe-pane
+//   - Context support for cancellation and timeouts
+//   - Custom error types for programmatic error handling
 //
 // # Quick Start
 //
@@ -16,18 +18,34 @@
 //	    log.Fatal("tmux is not installed")
 //	}
 //
-//	// Create a detached session
-//	if err := client.CreateSession("my-session", true); err != nil {
+//	// Create a detached session with context
+//	ctx := context.Background()
+//	if err := client.CreateSession(ctx, "my-session", true); err != nil {
 //	    log.Fatal(err)
 //	}
 //
 //	// Send commands to the session
-//	if err := client.SendKeys("my-session", "0", "echo hello"); err != nil {
+//	if err := client.SendKeys(ctx, "my-session", "0", "echo hello"); err != nil {
 //	    log.Fatal(err)
+//	}
+//
+// # Error Handling
+//
+// The package provides custom error types for programmatic error handling:
+//
+//	err := client.HasSession(ctx, "nonexistent")
+//	if errors.Is(err, &tmux.SessionNotFoundError{}) {
+//	    // Handle missing session
+//	}
+//
+//	// Or use helper functions:
+//	if tmux.IsSessionNotFound(err) {
+//	    // Handle missing session
 //	}
 package tmux
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -62,14 +80,15 @@ func NewClient(opts ...ClientOption) *Client {
 	return c
 }
 
-// tmuxCmd creates an exec.Cmd for the configured tmux binary.
-func (c *Client) tmuxCmd(args ...string) *exec.Cmd {
-	return exec.Command(c.tmuxPath, args...)
+// tmuxCmd creates an exec.Cmd for the configured tmux binary with context.
+func (c *Client) tmuxCmd(ctx context.Context, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, c.tmuxPath, args...)
 }
 
 // IsTmuxAvailable checks if tmux is installed and available.
+// This method does not take a context as it's a quick local check.
 func (c *Client) IsTmuxAvailable() bool {
-	cmd := c.tmuxCmd("-V")
+	cmd := exec.Command(c.tmuxPath, "-V")
 	return cmd.Run() == nil
 }
 
@@ -78,57 +97,69 @@ func (c *Client) IsTmuxAvailable() bool {
 // =============================================================================
 
 // HasSession checks if a tmux session with the given name exists.
-func (c *Client) HasSession(name string) (bool, error) {
-	cmd := c.tmuxCmd("has-session", "-t", name)
+func (c *Client) HasSession(ctx context.Context, name string) (bool, error) {
+	cmd := c.tmuxCmd(ctx, "has-session", "-t", name)
 	err := cmd.Run()
 	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// Exit code 1 means session doesn't exist
 			if exitErr.ExitCode() == 1 {
 				return false, nil
 			}
 		}
-		return false, fmt.Errorf("failed to check session: %w", err)
+		return false, &CommandError{Op: "has-session", Session: name, Err: err}
 	}
 	return true, nil
 }
 
 // CreateSession creates a new tmux session with the given name.
 // If detached is true, creates the session in detached mode (-d).
-func (c *Client) CreateSession(name string, detached bool) error {
+func (c *Client) CreateSession(ctx context.Context, name string, detached bool) error {
 	args := []string{"new-session", "-s", name}
 	if detached {
 		args = append(args, "-d")
 	}
 
-	cmd := c.tmuxCmd(args...)
+	cmd := c.tmuxCmd(ctx, args...)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &CommandError{Op: "new-session", Session: name, Err: err}
 	}
 	return nil
 }
 
 // KillSession terminates a tmux session.
-func (c *Client) KillSession(name string) error {
-	cmd := c.tmuxCmd("kill-session", "-t", name)
+func (c *Client) KillSession(ctx context.Context, name string) error {
+	cmd := c.tmuxCmd(ctx, "kill-session", "-t", name)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to kill session: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &CommandError{Op: "kill-session", Session: name, Err: err}
 	}
 	return nil
 }
 
 // ListSessions returns a list of all tmux session names.
-func (c *Client) ListSessions() ([]string, error) {
-	cmd := c.tmuxCmd("list-sessions", "-F", "#{session_name}")
+func (c *Client) ListSessions(ctx context.Context) ([]string, error) {
+	cmd := c.tmuxCmd(ctx, "list-sessions", "-F", "#{session_name}")
 	output, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// No sessions running
 			if exitErr.ExitCode() == 1 {
 				return []string{}, nil
 			}
 		}
-		return nil, fmt.Errorf("failed to list sessions: %w", err)
+		return nil, &CommandError{Op: "list-sessions", Err: err}
 	}
 
 	sessions := strings.Split(strings.TrimSpace(string(output)), "\n")
@@ -143,26 +174,35 @@ func (c *Client) ListSessions() ([]string, error) {
 // =============================================================================
 
 // CreateWindow creates a new window in the specified session.
-func (c *Client) CreateWindow(session, windowName string) error {
+func (c *Client) CreateWindow(ctx context.Context, session, windowName string) error {
 	target := fmt.Sprintf("%s:", session)
-	cmd := c.tmuxCmd("new-window", "-t", target, "-n", windowName)
+	cmd := c.tmuxCmd(ctx, "new-window", "-t", target, "-n", windowName)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create window: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &CommandError{Op: "new-window", Session: session, Window: windowName, Err: err}
 	}
 	return nil
 }
 
 // HasWindow checks if a window with the given name exists in the session.
-func (c *Client) HasWindow(session, windowName string) (bool, error) {
-	cmd := c.tmuxCmd("list-windows", "-t", session)
+// Uses exact matching via tmux format strings.
+func (c *Client) HasWindow(ctx context.Context, session, windowName string) (bool, error) {
+	// Use -F to get just the window names, one per line
+	cmd := c.tmuxCmd(ctx, "list-windows", "-t", session, "-F", "#{window_name}")
 	output, err := cmd.Output()
 	if err != nil {
-		return false, fmt.Errorf("failed to list windows: %w", err)
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return false, &CommandError{Op: "list-windows", Session: session, Err: err}
 	}
 
-	lines := strings.Split(string(output), "\n")
+	// Check for exact match
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	for _, line := range lines {
-		if strings.Contains(line, windowName) {
+		if line == windowName {
 			return true, nil
 		}
 	}
@@ -170,21 +210,27 @@ func (c *Client) HasWindow(session, windowName string) (bool, error) {
 }
 
 // KillWindow terminates a specific window in a session.
-func (c *Client) KillWindow(session, windowName string) error {
+func (c *Client) KillWindow(ctx context.Context, session, windowName string) error {
 	target := fmt.Sprintf("%s:%s", session, windowName)
-	cmd := c.tmuxCmd("kill-window", "-t", target)
+	cmd := c.tmuxCmd(ctx, "kill-window", "-t", target)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to kill window: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &CommandError{Op: "kill-window", Session: session, Window: windowName, Err: err}
 	}
 	return nil
 }
 
 // ListWindows returns a list of window names in the specified session.
-func (c *Client) ListWindows(session string) ([]string, error) {
-	cmd := c.tmuxCmd("list-windows", "-t", session, "-F", "#{window_name}")
+func (c *Client) ListWindows(ctx context.Context, session string) ([]string, error) {
+	cmd := c.tmuxCmd(ctx, "list-windows", "-t", session, "-F", "#{window_name}")
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to list windows: %w", err)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &CommandError{Op: "list-windows", Session: session, Err: err}
 	}
 
 	windows := strings.Split(strings.TrimSpace(string(output)), "\n")
@@ -200,11 +246,14 @@ func (c *Client) ListWindows(session string) ([]string, error) {
 
 // SendKeys sends text to a window followed by Enter (C-m).
 // This is equivalent to typing the text and pressing Enter.
-func (c *Client) SendKeys(session, windowName, text string) error {
+func (c *Client) SendKeys(ctx context.Context, session, windowName, text string) error {
 	target := fmt.Sprintf("%s:%s", session, windowName)
-	cmd := c.tmuxCmd("send-keys", "-t", target, text, "C-m")
+	cmd := c.tmuxCmd(ctx, "send-keys", "-t", target, text, "C-m")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to send keys: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &CommandError{Op: "send-keys", Session: session, Window: windowName, Err: err}
 	}
 	return nil
 }
@@ -218,29 +267,38 @@ func (c *Client) SendKeys(session, windowName, text string) error {
 // This is the key differentiator from other tmux libraries - it properly
 // handles multiline text when interacting with CLI applications that might
 // interpret newlines as command submission.
-func (c *Client) SendKeysLiteral(session, windowName, text string) error {
+func (c *Client) SendKeysLiteral(ctx context.Context, session, windowName, text string) error {
 	target := fmt.Sprintf("%s:%s", session, windowName)
 
 	// For multiline text, use paste buffer to avoid triggering processing on each line
 	if strings.Contains(text, "\n") {
 		// Set the buffer with the text
-		setCmd := c.tmuxCmd("set-buffer", text)
+		setCmd := c.tmuxCmd(ctx, "set-buffer", text)
 		if err := setCmd.Run(); err != nil {
-			return fmt.Errorf("failed to set buffer: %w", err)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return &CommandError{Op: "set-buffer", Session: session, Window: windowName, Err: err}
 		}
 
 		// Paste the buffer to the target
-		pasteCmd := c.tmuxCmd("paste-buffer", "-t", target)
+		pasteCmd := c.tmuxCmd(ctx, "paste-buffer", "-t", target)
 		if err := pasteCmd.Run(); err != nil {
-			return fmt.Errorf("failed to paste buffer: %w", err)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return &CommandError{Op: "paste-buffer", Session: session, Window: windowName, Err: err}
 		}
 		return nil
 	}
 
 	// No newlines, send the text using send-keys with literal mode
-	cmd := c.tmuxCmd("send-keys", "-t", target, "-l", text)
+	cmd := c.tmuxCmd(ctx, "send-keys", "-t", target, "-l", text)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to send keys: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &CommandError{Op: "send-keys", Session: session, Window: windowName, Err: err}
 	}
 	return nil
 }
@@ -248,11 +306,14 @@ func (c *Client) SendKeysLiteral(session, windowName, text string) error {
 // SendEnter sends just the Enter key (C-m) to a window.
 // Useful when you want to send text with SendKeysLiteral and then
 // separately trigger command execution.
-func (c *Client) SendEnter(session, windowName string) error {
+func (c *Client) SendEnter(ctx context.Context, session, windowName string) error {
 	target := fmt.Sprintf("%s:%s", session, windowName)
-	cmd := c.tmuxCmd("send-keys", "-t", target, "C-m")
+	cmd := c.tmuxCmd(ctx, "send-keys", "-t", target, "C-m")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to send enter: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &CommandError{Op: "send-keys", Session: session, Window: windowName, Err: err}
 	}
 	return nil
 }
@@ -261,7 +322,7 @@ func (c *Client) SendEnter(session, windowName string) error {
 // This prevents race conditions where Enter might be lost between separate exec calls.
 // Uses sh -c with && to chain tmux commands in a single shell execution.
 // This approach works reliably for both single-line and multiline messages.
-func (c *Client) SendKeysLiteralWithEnter(session, windowName, text string) error {
+func (c *Client) SendKeysLiteralWithEnter(ctx context.Context, session, windowName, text string) error {
 	target := fmt.Sprintf("%s:%s", session, windowName)
 
 	// Use sh -c to chain tmux commands atomically with &&
@@ -269,9 +330,12 @@ func (c *Client) SendKeysLiteralWithEnter(session, windowName, text string) erro
 	// Commands: set-buffer (load text) -> paste-buffer (insert to pane) -> send-keys Enter (submit)
 	cmdStr := fmt.Sprintf("%s set-buffer -- \"$1\" && %s paste-buffer -t %s && %s send-keys -t %s Enter",
 		c.tmuxPath, c.tmuxPath, target, c.tmuxPath, target)
-	cmd := exec.Command("sh", "-c", cmdStr, "sh", text)
+	cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr, "sh", text)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to send keys atomically: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &CommandError{Op: "send-keys-atomic", Session: session, Window: windowName, Err: err}
 	}
 	return nil
 }
@@ -282,17 +346,20 @@ func (c *Client) SendKeysLiteralWithEnter(session, windowName, text string) erro
 
 // GetPanePID gets the PID of the process running in the first pane of a window.
 // This allows monitoring whether the process in a tmux pane is still alive.
-func (c *Client) GetPanePID(session, windowName string) (int, error) {
+func (c *Client) GetPanePID(ctx context.Context, session, windowName string) (int, error) {
 	target := fmt.Sprintf("%s:%s", session, windowName)
-	cmd := c.tmuxCmd("display-message", "-t", target, "-p", "#{pane_pid}")
+	cmd := c.tmuxCmd(ctx, "display-message", "-t", target, "-p", "#{pane_pid}")
 	output, err := cmd.Output()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get pane PID: %w", err)
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return 0, &CommandError{Op: "display-message", Session: session, Window: windowName, Err: err}
 	}
 
 	var pid int
 	if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%d", &pid); err != nil {
-		return 0, fmt.Errorf("failed to parse PID: %w", err)
+		return 0, &CommandError{Op: "parse-pid", Session: session, Window: windowName, Err: err}
 	}
 
 	return pid, nil
@@ -307,28 +374,34 @@ func (c *Client) GetPanePID(session, windowName string) (int, error) {
 //
 // Example:
 //
-//	client.StartPipePane("my-session", "my-window", "/tmp/output.log")
+//	client.StartPipePane(ctx, "my-session", "my-window", "/tmp/output.log")
 //	// ... run commands in the pane ...
-//	client.StopPipePane("my-session", "my-window")
-func (c *Client) StartPipePane(session, windowName, outputFile string) error {
+//	client.StopPipePane(ctx, "my-session", "my-window")
+func (c *Client) StartPipePane(ctx context.Context, session, windowName, outputFile string) error {
 	target := fmt.Sprintf("%s:%s", session, windowName)
 	// Use -o to open a pipe (output only, not input)
 	// cat >> appends to the file so output is preserved
-	cmd := c.tmuxCmd("pipe-pane", "-o", "-t", target, fmt.Sprintf("cat >> '%s'", outputFile))
+	cmd := c.tmuxCmd(ctx, "pipe-pane", "-o", "-t", target, fmt.Sprintf("cat >> '%s'", outputFile))
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to start pipe-pane: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &CommandError{Op: "pipe-pane", Session: session, Window: windowName, Err: err}
 	}
 	return nil
 }
 
 // StopPipePane stops the pipe-pane for a window.
 // After calling this, output is no longer captured to the file.
-func (c *Client) StopPipePane(session, windowName string) error {
+func (c *Client) StopPipePane(ctx context.Context, session, windowName string) error {
 	target := fmt.Sprintf("%s:%s", session, windowName)
 	// Running pipe-pane with no command stops any existing pipe
-	cmd := c.tmuxCmd("pipe-pane", "-t", target)
+	cmd := c.tmuxCmd(ctx, "pipe-pane", "-t", target)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to stop pipe-pane: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &CommandError{Op: "pipe-pane-stop", Session: session, Window: windowName, Err: err}
 	}
 	return nil
 }

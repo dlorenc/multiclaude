@@ -227,7 +227,7 @@ func (d *Daemon) checkAgentHealth() {
 	repos := d.state.GetAllRepos()
 	for repoName, repo := range repos {
 		// Check if tmux session exists
-		hasSession, err := d.tmux.HasSession(repo.TmuxSession)
+		hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession)
 		if err != nil {
 			d.logger.Error("Failed to check session %s: %v", repo.TmuxSession, err)
 			continue
@@ -264,7 +264,7 @@ func (d *Daemon) checkAgentHealth() {
 			}
 
 			// Check if window exists
-			hasWindow, err := d.tmux.HasWindow(repo.TmuxSession, agent.TmuxWindow)
+			hasWindow, err := d.tmux.HasWindow(d.ctx, repo.TmuxSession, agent.TmuxWindow)
 			if err != nil {
 				d.logger.Error("Failed to check window %s: %v", agent.TmuxWindow, err)
 				continue
@@ -365,7 +365,7 @@ func (d *Daemon) routeMessages() {
 
 				// Send via tmux using atomic method to avoid race conditions
 				// where Enter might be lost between separate exec calls (issue #63)
-				if err := d.tmux.SendKeysLiteralWithEnter(repo.TmuxSession, agent.TmuxWindow, messageText); err != nil {
+				if err := d.tmux.SendKeysLiteralWithEnter(d.ctx, repo.TmuxSession, agent.TmuxWindow, messageText); err != nil {
 					d.logger.Error("Failed to deliver message %s to %s/%s: %v", msg.ID, repoName, agentName, err)
 					continue
 				}
@@ -440,7 +440,7 @@ func (d *Daemon) wakeAgents() {
 			}
 
 			// Send message using atomic method to avoid race conditions (issue #63)
-			if err := d.tmux.SendKeysLiteralWithEnter(repo.TmuxSession, agent.TmuxWindow, message); err != nil {
+			if err := d.tmux.SendKeysLiteralWithEnter(d.ctx, repo.TmuxSession, agent.TmuxWindow, message); err != nil {
 				d.logger.Error("Failed to send wake message to agent %s: %v", agentName, err)
 				continue
 			}
@@ -581,7 +581,7 @@ func (d *Daemon) handleListRepos(req socket.Request) socket.Response {
 
 		// Check session health
 		sessionHealthy := false
-		if hasSession, err := d.tmux.HasSession(repo.TmuxSession); err == nil {
+		if hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession); err == nil {
 			sessionHealthy = hasSession
 		}
 
@@ -787,7 +787,7 @@ func (d *Daemon) handleListAgents(req socket.Request) socket.Response {
 				status = "completed"
 			} else if repoExists {
 				// Check if window exists (means agent is running)
-				hasWindow, err := d.tmux.HasWindow(repo.TmuxSession, agent.TmuxWindow)
+				hasWindow, err := d.tmux.HasWindow(d.ctx, repo.TmuxSession, agent.TmuxWindow)
 				if err == nil && hasWindow {
 					status = "running"
 				} else {
@@ -919,7 +919,7 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 	// Check all agents and verify resources exist
 	for repoName, repo := range repos {
 		// Check tmux session
-		hasSession, err := d.tmux.HasSession(repo.TmuxSession)
+		hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession)
 		if err != nil {
 			d.logger.Error("Failed to check session %s: %v", repo.TmuxSession, err)
 			continue
@@ -939,7 +939,7 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 
 		// Check each agent's resources
 		for agentName, agent := range repo.Agents {
-			hasWindow, _ := d.tmux.HasWindow(repo.TmuxSession, agent.TmuxWindow)
+			hasWindow, _ := d.tmux.HasWindow(d.ctx, repo.TmuxSession, agent.TmuxWindow)
 			if !hasWindow {
 				d.logger.Info("Removing agent %s (window not found)", agentName)
 				if err := d.state.RemoveAgent(repoName, agentName); err == nil {
@@ -1111,7 +1111,7 @@ func (d *Daemon) cleanupDeadAgents(deadAgents map[string][]string) {
 			}
 
 			// Kill tmux window
-			if err := d.tmux.KillWindow(repo.TmuxSession, agent.TmuxWindow); err != nil {
+			if err := d.tmux.KillWindow(d.ctx, repo.TmuxSession, agent.TmuxWindow); err != nil {
 				d.logger.Warn("Failed to kill tmux window %s: %v", agent.TmuxWindow, err)
 			} else {
 				d.logger.Info("Killed tmux window for agent %s: %s", agentName, agent.TmuxWindow)
@@ -1282,7 +1282,7 @@ func (d *Daemon) restoreTrackedRepos() {
 	repos := d.state.GetAllRepos()
 	for repoName, repo := range repos {
 		// Check if tmux session exists
-		hasSession, err := d.tmux.HasSession(repo.TmuxSession)
+		hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession)
 		if err != nil {
 			d.logger.Error("Failed to check session %s: %v", repo.TmuxSession, err)
 			continue
@@ -1317,7 +1317,7 @@ func (d *Daemon) restoreDeadAgents(repoName string, repo *state.Repository) {
 		}
 
 		// Check if the tmux window still exists
-		hasWindow, err := d.tmux.HasWindow(repo.TmuxSession, agent.TmuxWindow)
+		hasWindow, err := d.tmux.HasWindow(d.ctx, repo.TmuxSession, agent.TmuxWindow)
 		if err != nil {
 			d.logger.Error("Failed to check window for agent %s: %v", agentName, err)
 			continue
@@ -1492,7 +1492,7 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 	time.Sleep(500 * time.Millisecond)
 
 	// Get PID
-	pid, err := d.tmux.GetPanePID(repo.TmuxSession, agentName)
+	pid, err := d.tmux.GetPanePID(d.ctx, repo.TmuxSession, agentName)
 	if err != nil {
 		return fmt.Errorf("failed to get Claude PID: %w", err)
 	}
@@ -1556,7 +1556,7 @@ func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, w
 	time.Sleep(500 * time.Millisecond)
 
 	// Get PID
-	pid, err := d.tmux.GetPanePID(repo.TmuxSession, "merge-queue")
+	pid, err := d.tmux.GetPanePID(d.ctx, repo.TmuxSession, "merge-queue")
 	if err != nil {
 		return fmt.Errorf("failed to get Claude PID: %w", err)
 	}
@@ -1644,7 +1644,7 @@ func (d *Daemon) restartAgent(repoName, agentName string, agent state.Agent, rep
 	}
 
 	// Restart Claude using the runner
-	result, err := d.claudeRunner.Start(repo.TmuxSession, agentName, claude.Config{
+	result, err := d.claudeRunner.Start(d.ctx, repo.TmuxSession, agentName, claude.Config{
 		SessionID:        agent.SessionID,
 		Resume:           hasHistory,
 		SystemPromptFile: promptFile,

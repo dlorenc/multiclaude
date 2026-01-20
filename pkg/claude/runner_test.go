@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -9,12 +10,13 @@ import (
 
 // mockTerminal implements TerminalRunner for testing.
 type mockTerminal struct {
-	sendKeysCalls        []sendKeysCall
-	sendKeysLiteralCalls []sendKeysCall
-	sendEnterCalls       []targetCall
-	getPanePIDCalls      []targetCall
-	startPipePaneCalls   []pipePaneCall
-	stopPipePaneCalls    []targetCall
+	sendKeysCalls                 []sendKeysCall
+	sendKeysLiteralCalls          []sendKeysCall
+	sendKeysLiteralWithEnterCalls []sendKeysCall
+	sendEnterCalls                []targetCall
+	getPanePIDCalls               []targetCall
+	startPipePaneCalls            []pipePaneCall
+	stopPipePaneCalls             []targetCall
 
 	getPanePIDReturn int
 	getPanePIDError  error
@@ -38,32 +40,37 @@ type pipePaneCall struct {
 	outputFile string
 }
 
-func (m *mockTerminal) SendKeys(session, window, text string) error {
+func (m *mockTerminal) SendKeys(ctx context.Context, session, window, text string) error {
 	m.sendKeysCalls = append(m.sendKeysCalls, sendKeysCall{session, window, text})
 	return m.sendKeysError
 }
 
-func (m *mockTerminal) SendKeysLiteral(session, window, text string) error {
+func (m *mockTerminal) SendKeysLiteral(ctx context.Context, session, window, text string) error {
 	m.sendKeysLiteralCalls = append(m.sendKeysLiteralCalls, sendKeysCall{session, window, text})
 	return m.sendKeysError
 }
 
-func (m *mockTerminal) SendEnter(session, window string) error {
+func (m *mockTerminal) SendKeysLiteralWithEnter(ctx context.Context, session, window, text string) error {
+	m.sendKeysLiteralWithEnterCalls = append(m.sendKeysLiteralWithEnterCalls, sendKeysCall{session, window, text})
+	return m.sendKeysError
+}
+
+func (m *mockTerminal) SendEnter(ctx context.Context, session, window string) error {
 	m.sendEnterCalls = append(m.sendEnterCalls, targetCall{session, window})
 	return nil
 }
 
-func (m *mockTerminal) GetPanePID(session, window string) (int, error) {
+func (m *mockTerminal) GetPanePID(ctx context.Context, session, window string) (int, error) {
 	m.getPanePIDCalls = append(m.getPanePIDCalls, targetCall{session, window})
 	return m.getPanePIDReturn, m.getPanePIDError
 }
 
-func (m *mockTerminal) StartPipePane(session, window, outputFile string) error {
+func (m *mockTerminal) StartPipePane(ctx context.Context, session, window, outputFile string) error {
 	m.startPipePaneCalls = append(m.startPipePaneCalls, pipePaneCall{session, window, outputFile})
 	return nil
 }
 
-func (m *mockTerminal) StopPipePane(session, window string) error {
+func (m *mockTerminal) StopPipePane(ctx context.Context, session, window string) error {
 	m.stopPipePaneCalls = append(m.stopPipePaneCalls, targetCall{session, window})
 	return nil
 }
@@ -115,6 +122,7 @@ func TestNewRunnerWithOptions(t *testing.T) {
 }
 
 func TestStart(t *testing.T) {
+	ctx := context.Background()
 	terminal := &mockTerminal{
 		getPanePIDReturn: 12345,
 	}
@@ -125,7 +133,7 @@ func TestStart(t *testing.T) {
 		WithStartupDelay(0), // No delay for tests
 	)
 
-	result, err := runner.Start("my-session", "my-window", Config{
+	result, err := runner.Start(ctx, "my-session", "my-window", Config{
 		SystemPromptFile: "/path/to/prompt.md",
 	})
 
@@ -141,19 +149,13 @@ func TestStart(t *testing.T) {
 		t.Errorf("expected PID to be 12345, got %d", result.PID)
 	}
 
-	// Verify SendKeys was called (MOTD + command = 2 calls)
-	if len(terminal.sendKeysCalls) != 2 {
-		t.Fatalf("expected 2 SendKeys calls (MOTD + command), got %d", len(terminal.sendKeysCalls))
+	// Verify SendKeys was called once for the command (no MOTD since it's empty)
+	if len(terminal.sendKeysCalls) != 1 {
+		t.Fatalf("expected 1 SendKeys call (command only), got %d", len(terminal.sendKeysCalls))
 	}
 
-	// First call is MOTD
-	motdCall := terminal.sendKeysCalls[0]
-	if !strings.Contains(motdCall.text, "multiclaude claude") {
-		t.Errorf("expected MOTD to contain restart hint, got %q", motdCall.text)
-	}
-
-	// Second call is the actual command
-	call := terminal.sendKeysCalls[1]
+	// First call is the actual command
+	call := terminal.sendKeysCalls[0]
 	if call.session != "my-session" {
 		t.Errorf("expected session 'my-session', got %q", call.session)
 	}
@@ -176,7 +178,50 @@ func TestStart(t *testing.T) {
 	}
 }
 
+func TestStartWithMOTD(t *testing.T) {
+	ctx := context.Background()
+	terminal := &mockTerminal{
+		getPanePIDReturn: 12345,
+	}
+
+	runner := NewRunner(
+		WithTerminal(terminal),
+		WithBinaryPath("/path/to/claude"),
+		WithStartupDelay(0),
+	)
+
+	result, err := runner.Start(ctx, "my-session", "my-window", Config{
+		MOTD: "Welcome to the agent session!",
+	})
+
+	if err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	if result.SessionID == "" {
+		t.Error("expected SessionID to be generated")
+	}
+
+	// Verify SendKeys was called twice (MOTD + command)
+	if len(terminal.sendKeysCalls) != 2 {
+		t.Fatalf("expected 2 SendKeys calls (MOTD + command), got %d", len(terminal.sendKeysCalls))
+	}
+
+	// First call is MOTD
+	motdCall := terminal.sendKeysCalls[0]
+	if !strings.Contains(motdCall.text, "Welcome to the agent session!") {
+		t.Errorf("expected MOTD to contain message, got %q", motdCall.text)
+	}
+
+	// Second call is the actual command
+	cmdCall := terminal.sendKeysCalls[1]
+	if !strings.Contains(cmdCall.text, "/path/to/claude") {
+		t.Errorf("expected command to contain binary path, got %q", cmdCall.text)
+	}
+}
+
 func TestStartWithCustomSessionID(t *testing.T) {
+	ctx := context.Background()
 	terminal := &mockTerminal{
 		getPanePIDReturn: 12345,
 	}
@@ -186,7 +231,7 @@ func TestStartWithCustomSessionID(t *testing.T) {
 		WithStartupDelay(0),
 	)
 
-	result, err := runner.Start("session", "window", Config{
+	result, err := runner.Start(ctx, "session", "window", Config{
 		SessionID: "my-custom-session-id",
 	})
 
@@ -198,16 +243,17 @@ func TestStartWithCustomSessionID(t *testing.T) {
 		t.Errorf("expected SessionID to be 'my-custom-session-id', got %q", result.SessionID)
 	}
 
-	// Verify command contains custom session ID (second call, after MOTD)
-	if len(terminal.sendKeysCalls) < 2 {
-		t.Fatalf("expected at least 2 SendKeys calls, got %d", len(terminal.sendKeysCalls))
+	// Verify command contains custom session ID
+	if len(terminal.sendKeysCalls) < 1 {
+		t.Fatalf("expected at least 1 SendKeys call, got %d", len(terminal.sendKeysCalls))
 	}
-	if !strings.Contains(terminal.sendKeysCalls[1].text, "--session-id my-custom-session-id") {
-		t.Errorf("expected command to contain custom session ID, got %q", terminal.sendKeysCalls[1].text)
+	if !strings.Contains(terminal.sendKeysCalls[0].text, "--session-id my-custom-session-id") {
+		t.Errorf("expected command to contain custom session ID, got %q", terminal.sendKeysCalls[0].text)
 	}
 }
 
 func TestStartWithOutputCapture(t *testing.T) {
+	ctx := context.Background()
 	terminal := &mockTerminal{
 		getPanePIDReturn: 12345,
 	}
@@ -217,7 +263,7 @@ func TestStartWithOutputCapture(t *testing.T) {
 		WithStartupDelay(0),
 	)
 
-	_, err := runner.Start("session", "window", Config{
+	_, err := runner.Start(ctx, "session", "window", Config{
 		OutputFile: "/tmp/output.log",
 	})
 
@@ -237,6 +283,7 @@ func TestStartWithOutputCapture(t *testing.T) {
 }
 
 func TestStartWithInitialMessage(t *testing.T) {
+	ctx := context.Background()
 	terminal := &mockTerminal{
 		getPanePIDReturn: 12345,
 	}
@@ -247,7 +294,7 @@ func TestStartWithInitialMessage(t *testing.T) {
 		WithMessageDelay(0),
 	)
 
-	_, err := runner.Start("session", "window", Config{
+	_, err := runner.Start(ctx, "session", "window", Config{
 		InitialMessage: "Hello, Claude!",
 	})
 
@@ -255,25 +302,21 @@ func TestStartWithInitialMessage(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	// Verify SendKeysLiteral was called for the initial message
-	if len(terminal.sendKeysLiteralCalls) != 1 {
-		t.Fatalf("expected 1 SendKeysLiteral call, got %d", len(terminal.sendKeysLiteralCalls))
+	// Verify SendKeysLiteralWithEnter was called for the initial message
+	if len(terminal.sendKeysLiteralWithEnterCalls) != 1 {
+		t.Fatalf("expected 1 SendKeysLiteralWithEnter call, got %d", len(terminal.sendKeysLiteralWithEnterCalls))
 	}
 
-	if terminal.sendKeysLiteralCalls[0].text != "Hello, Claude!" {
-		t.Errorf("expected initial message 'Hello, Claude!', got %q", terminal.sendKeysLiteralCalls[0].text)
-	}
-
-	// Verify SendEnter was called
-	if len(terminal.sendEnterCalls) != 1 {
-		t.Fatalf("expected 1 SendEnter call, got %d", len(terminal.sendEnterCalls))
+	if terminal.sendKeysLiteralWithEnterCalls[0].text != "Hello, Claude!" {
+		t.Errorf("expected initial message 'Hello, Claude!', got %q", terminal.sendKeysLiteralWithEnterCalls[0].text)
 	}
 }
 
 func TestStartNoTerminal(t *testing.T) {
+	ctx := context.Background()
 	runner := NewRunner()
 
-	_, err := runner.Start("session", "window", Config{})
+	_, err := runner.Start(ctx, "session", "window", Config{})
 	if err == nil {
 		t.Error("expected error when terminal not configured")
 	}
@@ -283,6 +326,7 @@ func TestStartNoTerminal(t *testing.T) {
 }
 
 func TestStartSendKeysError(t *testing.T) {
+	ctx := context.Background()
 	terminal := &mockTerminal{
 		sendKeysError: errors.New("send keys failed"),
 	}
@@ -292,7 +336,7 @@ func TestStartSendKeysError(t *testing.T) {
 		WithStartupDelay(0),
 	)
 
-	_, err := runner.Start("session", "window", Config{})
+	_, err := runner.Start(ctx, "session", "window", Config{})
 	if err == nil {
 		t.Error("expected error when SendKeys fails")
 	}
@@ -302,6 +346,7 @@ func TestStartSendKeysError(t *testing.T) {
 }
 
 func TestStartGetPIDError(t *testing.T) {
+	ctx := context.Background()
 	terminal := &mockTerminal{
 		getPanePIDError: errors.New("get PID failed"),
 	}
@@ -311,7 +356,7 @@ func TestStartGetPIDError(t *testing.T) {
 		WithStartupDelay(0),
 	)
 
-	_, err := runner.Start("session", "window", Config{})
+	_, err := runner.Start(ctx, "session", "window", Config{})
 	if err == nil {
 		t.Error("expected error when GetPanePID fails")
 	}
@@ -320,53 +365,74 @@ func TestStartGetPIDError(t *testing.T) {
 	}
 }
 
+func TestStartContextCancellation(t *testing.T) {
+	terminal := &mockTerminal{
+		getPanePIDReturn: 12345,
+	}
+
+	runner := NewRunner(
+		WithTerminal(terminal),
+		WithStartupDelay(100 * time.Millisecond),
+	)
+
+	// Create a context that will be cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := runner.Start(ctx, "session", "window", Config{})
+	if err == nil {
+		t.Error("expected error when context is cancelled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled error, got %v", err)
+	}
+}
+
 func TestSendMessage(t *testing.T) {
+	ctx := context.Background()
 	terminal := &mockTerminal{}
 
 	runner := NewRunner(WithTerminal(terminal))
 
-	err := runner.SendMessage("session", "window", "Hello, Claude!")
+	err := runner.SendMessage(ctx, "session", "window", "Hello, Claude!")
 	if err != nil {
 		t.Fatalf("SendMessage() failed: %v", err)
 	}
 
-	// Verify SendKeysLiteral was called
-	if len(terminal.sendKeysLiteralCalls) != 1 {
-		t.Fatalf("expected 1 SendKeysLiteral call, got %d", len(terminal.sendKeysLiteralCalls))
+	// Verify SendKeysLiteralWithEnter was called (atomic send)
+	if len(terminal.sendKeysLiteralWithEnterCalls) != 1 {
+		t.Fatalf("expected 1 SendKeysLiteralWithEnter call, got %d", len(terminal.sendKeysLiteralWithEnterCalls))
 	}
 
-	call := terminal.sendKeysLiteralCalls[0]
+	call := terminal.sendKeysLiteralWithEnterCalls[0]
 	if call.text != "Hello, Claude!" {
 		t.Errorf("expected message 'Hello, Claude!', got %q", call.text)
-	}
-
-	// Verify SendEnter was called
-	if len(terminal.sendEnterCalls) != 1 {
-		t.Fatalf("expected 1 SendEnter call, got %d", len(terminal.sendEnterCalls))
 	}
 }
 
 func TestSendMessageMultiline(t *testing.T) {
+	ctx := context.Background()
 	terminal := &mockTerminal{}
 
 	runner := NewRunner(WithTerminal(terminal))
 
 	multilineMsg := "Line 1\nLine 2\nLine 3"
-	err := runner.SendMessage("session", "window", multilineMsg)
+	err := runner.SendMessage(ctx, "session", "window", multilineMsg)
 	if err != nil {
 		t.Fatalf("SendMessage() failed: %v", err)
 	}
 
-	// Verify the full multiline message was sent
-	if terminal.sendKeysLiteralCalls[0].text != multilineMsg {
-		t.Errorf("expected multiline message preserved, got %q", terminal.sendKeysLiteralCalls[0].text)
+	// Verify the full multiline message was sent via atomic send
+	if terminal.sendKeysLiteralWithEnterCalls[0].text != multilineMsg {
+		t.Errorf("expected multiline message preserved, got %q", terminal.sendKeysLiteralWithEnterCalls[0].text)
 	}
 }
 
 func TestSendMessageNoTerminal(t *testing.T) {
+	ctx := context.Background()
 	runner := NewRunner()
 
-	err := runner.SendMessage("session", "window", "Hello")
+	err := runner.SendMessage(ctx, "session", "window", "Hello")
 	if err == nil {
 		t.Error("expected error when terminal not configured")
 	}
@@ -449,6 +515,30 @@ func TestBuildCommand(t *testing.T) {
 				"CLAUDE_CONFIG_DIR",
 			},
 		},
+		{
+			name: "with workdir",
+			config: Config{
+				SessionID: "test-session",
+				WorkDir:   "/path/to/workdir",
+			},
+			contains: []string{
+				"cd \"/path/to/workdir\" &&",
+				"/path/to/claude",
+			},
+		},
+		{
+			name: "with workdir and claude config dir",
+			config: Config{
+				SessionID:       "test-session",
+				WorkDir:         "/path/to/workdir",
+				ClaudeConfigDir: "/path/to/config",
+			},
+			contains: []string{
+				"cd \"/path/to/workdir\" &&",
+				"CLAUDE_CONFIG_DIR=/path/to/config",
+				"/path/to/claude",
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -509,6 +599,7 @@ func TestBuildCommandClaudeConfigDirPrepended(t *testing.T) {
 }
 
 func TestStartWithClaudeConfigDir(t *testing.T) {
+	ctx := context.Background()
 	terminal := &mockTerminal{
 		getPanePIDReturn: 12345,
 	}
@@ -519,7 +610,7 @@ func TestStartWithClaudeConfigDir(t *testing.T) {
 		WithStartupDelay(0),
 	)
 
-	result, err := runner.Start("my-session", "my-window", Config{
+	result, err := runner.Start(ctx, "my-session", "my-window", Config{
 		ClaudeConfigDir: "/home/user/.multiclaude/claude-config/repo/agent",
 	})
 
@@ -531,13 +622,13 @@ func TestStartWithClaudeConfigDir(t *testing.T) {
 		t.Error("expected SessionID to be generated")
 	}
 
-	// Verify SendKeys was called (MOTD + command = 2 calls)
-	if len(terminal.sendKeysCalls) < 2 {
-		t.Fatalf("expected at least 2 SendKeys calls, got %d", len(terminal.sendKeysCalls))
+	// Verify SendKeys was called
+	if len(terminal.sendKeysCalls) < 1 {
+		t.Fatalf("expected at least 1 SendKeys call, got %d", len(terminal.sendKeysCalls))
 	}
 
-	// Second call is the actual command
-	call := terminal.sendKeysCalls[1]
+	// First call is the actual command (no MOTD)
+	call := terminal.sendKeysCalls[0]
 
 	// Verify CLAUDE_CONFIG_DIR is included in command
 	if !strings.Contains(call.text, "CLAUDE_CONFIG_DIR=/home/user/.multiclaude/claude-config/repo/agent") {
