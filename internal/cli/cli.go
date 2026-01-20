@@ -311,7 +311,7 @@ func (c *CLI) registerCommands() {
 	workCmd := &Command{
 		Name:        "work",
 		Description: "Manage worker agents",
-		Usage:       "multiclaude work [<task>] [--repo <repo>]",
+		Usage:       "multiclaude work [<task>] [--repo <repo>] [--branch <branch>] [--push-to <branch>]",
 		Subcommands: make(map[string]*Command),
 	}
 
@@ -1498,20 +1498,29 @@ func (c *CLI) createWorker(args []string) error {
 		workerName = name
 	}
 
+	// Check for --push-to flag (for iterating on existing PRs)
+	pushTo, hasPushTo := flags["push-to"]
+	if hasPushTo {
+		// --push-to requires --branch to specify the remote branch to start from
+		if _, hasBranch := flags["branch"]; !hasBranch {
+			return errors.InvalidUsage("--push-to requires --branch to specify the remote branch (e.g., --branch origin/work/jolly-hawk --push-to work/jolly-hawk)")
+		}
+	}
+
 	// Get repository path
 	repoPath := c.paths.RepoDir(repoName)
 
-	// Fetch latest main from origin before creating worktree
+	// Fetch latest from origin before creating worktree
 	// This ensures workers start from the latest code, not stale local refs
 	// Note: We use "git fetch origin main" (not "main:main") because the latter
 	// fails when main is checked out in the bare repo with:
 	// "fatal: refusing to fetch into branch 'refs/heads/main' checked out at ..."
 	fmt.Println("Fetching latest from origin...")
-	fetchCmd := exec.Command("git", "fetch", "origin", "main")
+	fetchCmd := exec.Command("git", "fetch", "origin")
 	fetchCmd.Dir = repoPath
 	if err := fetchCmd.Run(); err != nil {
 		// Best effort - don't fail if offline or fetch fails
-		fmt.Printf("Warning: failed to fetch origin/main: %v (continuing with local refs)\n", err)
+		fmt.Printf("Warning: failed to fetch from origin: %v (continuing with local refs)\n", err)
 	}
 
 	// Determine branch to start from
@@ -1525,7 +1534,11 @@ func (c *CLI) createWorker(args []string) error {
 	}
 	if branch, ok := flags["branch"]; ok {
 		startBranch = branch
-		fmt.Printf("Creating worker '%s' in repo '%s' from branch '%s'\n", workerName, repoName, branch)
+		if hasPushTo {
+			fmt.Printf("Creating worker '%s' in repo '%s' to iterate on branch '%s'\n", workerName, repoName, pushTo)
+		} else {
+			fmt.Printf("Creating worker '%s' in repo '%s' from branch '%s'\n", workerName, repoName, branch)
+		}
 	} else {
 		fmt.Printf("Creating worker '%s' in repo '%s'\n", workerName, repoName)
 	}
@@ -1534,11 +1547,24 @@ func (c *CLI) createWorker(args []string) error {
 	// Create worktree
 	wt := worktree.NewManager(repoPath)
 	wtPath := c.paths.AgentWorktree(repoName, workerName)
-	branchName := fmt.Sprintf("work/%s", workerName)
 
-	fmt.Printf("Creating worktree at: %s\n", wtPath)
-	if err := wt.CreateNewBranch(wtPath, branchName, startBranch); err != nil {
-		return errors.WorktreeCreationFailed(err)
+	var branchName string
+	if hasPushTo {
+		// When --push-to is specified, we're iterating on an existing PR branch
+		// Create a worktree that checks out the remote branch into a local branch
+		branchName = pushTo
+		fmt.Printf("Creating worktree at: %s (checking out %s)\n", wtPath, startBranch)
+		// Use git worktree add with -b to create local branch tracking the remote
+		if err := wt.CreateNewBranch(wtPath, branchName, startBranch); err != nil {
+			return errors.WorktreeCreationFailed(err)
+		}
+	} else {
+		// Normal case: create a new branch for this worker
+		branchName = fmt.Sprintf("work/%s", workerName)
+		fmt.Printf("Creating worktree at: %s\n", wtPath)
+		if err := wt.CreateNewBranch(wtPath, branchName, startBranch); err != nil {
+			return errors.WorktreeCreationFailed(err)
+		}
 	}
 
 	// Get repository info to determine tmux session
@@ -1586,8 +1612,12 @@ func (c *CLI) createWorker(args []string) error {
 		return fmt.Errorf("failed to generate worker session ID: %w", err)
 	}
 
-	// Write prompt file for worker
-	workerPromptFile, err := c.writePromptFile(repoPath, prompts.TypeWorker, workerName)
+	// Write prompt file for worker (with push-to config if specified)
+	workerConfig := WorkerConfig{}
+	if hasPushTo {
+		workerConfig.PushToBranch = pushTo
+	}
+	workerPromptFile, err := c.writeWorkerPromptFile(repoPath, workerName, workerConfig)
 	if err != nil {
 		return fmt.Errorf("failed to write worker prompt: %w", err)
 	}
@@ -1646,6 +1676,9 @@ func (c *CLI) createWorker(args []string) error {
 	fmt.Printf("  Name: %s\n", workerName)
 	fmt.Printf("  Branch: %s\n", branchName)
 	fmt.Printf("  Worktree: %s\n", wtPath)
+	if hasPushTo {
+		fmt.Printf("  Mode: Push to existing PR branch (%s)\n", pushTo)
+	}
 	fmt.Printf("\nAttach to worker: tmux select-window -t %s:%s\n", tmuxSession, workerName)
 	fmt.Printf("Or use: multiclaude attach %s\n", workerName)
 
@@ -4379,6 +4412,54 @@ gh pr list --label multiclaude
 
 Monitor and process all multiclaude-labeled PRs regardless of author or assignee.`
 	}
+}
+
+// WorkerConfig holds configuration for creating worker prompts
+type WorkerConfig struct {
+	PushToBranch string // Branch to push to instead of creating a new PR (for iterating on existing PRs)
+}
+
+// writeWorkerPromptFile writes a worker prompt file with optional configuration
+func (c *CLI) writeWorkerPromptFile(repoPath string, agentName string, config WorkerConfig) (string, error) {
+	// Get the complete prompt (default + custom + CLI docs)
+	promptText, err := prompts.GetPrompt(repoPath, prompts.TypeWorker, c.documentation)
+	if err != nil {
+		return "", fmt.Errorf("failed to get prompt: %w", err)
+	}
+
+	// Add push-to configuration if specified
+	if config.PushToBranch != "" {
+		pushToConfig := fmt.Sprintf(`## PR Iteration Mode
+
+**IMPORTANT: You are iterating on an existing PR, not creating a new one.**
+
+Instead of creating a new PR, push your changes to the existing branch: %s
+
+When your work is ready:
+1. Commit your changes
+2. Push to origin: git push origin %s
+3. Signal completion with: multiclaude agent complete
+
+Do NOT create a new PR. The existing PR will be updated automatically when you push.
+
+---
+
+`, config.PushToBranch, config.PushToBranch)
+		promptText = pushToConfig + promptText
+	}
+
+	// Create a prompt file in the prompts directory
+	promptDir := filepath.Join(c.paths.Root, "prompts")
+	if err := os.MkdirAll(promptDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create prompt directory: %w", err)
+	}
+
+	promptPath := filepath.Join(promptDir, fmt.Sprintf("%s.md", agentName))
+	if err := os.WriteFile(promptPath, []byte(promptText), 0644); err != nil {
+		return "", fmt.Errorf("failed to write prompt file: %w", err)
+	}
+
+	return promptPath, nil
 }
 
 // copyHooksConfig copies hooks configuration from repo to worktree if it exists
