@@ -195,6 +195,56 @@ func TestLoadCustomPrompt(t *testing.T) {
 	})
 }
 
+func TestGenerateTrackingModePrompt(t *testing.T) {
+	tests := []struct {
+		name       string
+		trackMode  string
+		wantPrefix string
+		wantCmd    string
+	}{
+		{
+			name:       "author mode",
+			trackMode:  "author",
+			wantPrefix: "## PR Tracking Mode: Author Only",
+			wantCmd:    "--author @me",
+		},
+		{
+			name:       "assigned mode",
+			trackMode:  "assigned",
+			wantPrefix: "## PR Tracking Mode: Assigned Only",
+			wantCmd:    "--assignee @me",
+		},
+		{
+			name:       "all mode",
+			trackMode:  "all",
+			wantPrefix: "## PR Tracking Mode: All PRs",
+			wantCmd:    "--label multiclaude",
+		},
+		{
+			name:       "default (empty)",
+			trackMode:  "",
+			wantPrefix: "## PR Tracking Mode: All PRs",
+			wantCmd:    "--label multiclaude",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GenerateTrackingModePrompt(tt.trackMode)
+
+			if !strings.HasPrefix(result, tt.wantPrefix) {
+				t.Errorf("GenerateTrackingModePrompt(%q) should start with %q, got %q",
+					tt.trackMode, tt.wantPrefix, result[:min(len(result), 50)])
+			}
+
+			if !strings.Contains(result, tt.wantCmd) {
+				t.Errorf("GenerateTrackingModePrompt(%q) should contain %q",
+					tt.trackMode, tt.wantCmd)
+			}
+		})
+	}
+}
+
 func TestGetPrompt(t *testing.T) {
 	// Create temporary repo directory
 	tmpDir, err := os.MkdirTemp("", "multiclaude-prompts-test-*")

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dlorenc/multiclaude/internal/hooks"
 	"github.com/dlorenc/multiclaude/internal/logging"
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/prompts"
@@ -1420,7 +1421,7 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 
 	// Copy hooks config if needed
 	repoPath := d.paths.RepoDir(repoName)
-	if err := d.copyHooksConfig(repoPath, workDir); err != nil {
+	if err := hooks.CopyConfig(repoPath, workDir); err != nil {
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
@@ -1484,7 +1485,7 @@ func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, w
 
 	// Copy hooks config if needed
 	repoPath := d.paths.RepoDir(repoName)
-	if err := d.copyHooksConfig(repoPath, workDir); err != nil {
+	if err := hooks.CopyConfig(repoPath, workDir); err != nil {
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
@@ -1537,7 +1538,7 @@ func (d *Daemon) writeMergeQueuePromptFile(repoName string, agentName string, mq
 	}
 
 	// Add tracking mode configuration to the prompt
-	trackingConfig := d.generateTrackingModePrompt(mqConfig.TrackMode)
+	trackingConfig := prompts.GenerateTrackingModePrompt(string(mqConfig.TrackMode))
 	promptText = trackingConfig + "\n\n" + promptText
 
 	// Create prompt file in prompts directory
@@ -1552,47 +1553,6 @@ func (d *Daemon) writeMergeQueuePromptFile(repoName string, agentName string, mq
 	}
 
 	return promptPath, nil
-}
-
-// generateTrackingModePrompt generates prompt text explaining which PRs to track based on tracking mode
-func (d *Daemon) generateTrackingModePrompt(trackMode state.TrackMode) string {
-	switch trackMode {
-	case state.TrackModeAuthor:
-		return `## PR Tracking Mode: Author Only
-
-**IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are the author.
-
-When listing and monitoring PRs, use:
-` + "```bash" + `
-gh pr list --author @me --label multiclaude
-` + "```" + `
-
-Do NOT process or attempt to merge PRs authored by others. Focus only on PRs created by multiclaude workers.`
-
-	case state.TrackModeAssigned:
-		return `## PR Tracking Mode: Assigned Only
-
-**IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are assigned.
-
-When listing and monitoring PRs, use:
-` + "```bash" + `
-gh pr list --assignee @me --label multiclaude
-` + "```" + `
-
-Do NOT process or attempt to merge PRs unless they are assigned to you. Focus only on PRs explicitly assigned to multiclaude.`
-
-	default: // TrackModeAll
-		return `## PR Tracking Mode: All PRs
-
-This repository is configured to track all PRs with the multiclaude label.
-
-When listing and monitoring PRs, use:
-` + "```bash" + `
-gh pr list --label multiclaude
-` + "```" + `
-
-Monitor and process all multiclaude-labeled PRs regardless of author or assignee.`
-	}
 }
 
 // restartManagedAgent restarts a managed agent (supervisor, merge-queue) that has exited.
@@ -1664,37 +1624,6 @@ func (d *Daemon) writePromptFile(repoName string, agentType prompts.AgentType, a
 	}
 
 	return promptPath, nil
-}
-
-// copyHooksConfig copies hooks configuration from repo to workdir if it exists
-func (d *Daemon) copyHooksConfig(repoPath, workDir string) error {
-	hooksPath := filepath.Join(repoPath, ".multiclaude", "hooks.json")
-
-	// Check if hooks.json exists
-	if _, err := os.Stat(hooksPath); os.IsNotExist(err) {
-		return nil // No hooks config
-	} else if err != nil {
-		return fmt.Errorf("failed to check hooks config: %w", err)
-	}
-
-	// Create .claude directory in workdir
-	claudeDir := filepath.Join(workDir, ".claude")
-	if err := os.MkdirAll(claudeDir, 0755); err != nil {
-		return fmt.Errorf("failed to create .claude directory: %w", err)
-	}
-
-	// Copy hooks.json to .claude/settings.json
-	hooksData, err := os.ReadFile(hooksPath)
-	if err != nil {
-		return fmt.Errorf("failed to read hooks config: %w", err)
-	}
-
-	settingsPath := filepath.Join(claudeDir, "settings.json")
-	if err := os.WriteFile(settingsPath, hooksData, 0644); err != nil {
-		return fmt.Errorf("failed to write settings.json: %w", err)
-	}
-
-	return nil
 }
 
 // isProcessAlive checks if a process is running

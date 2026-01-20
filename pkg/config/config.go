@@ -117,3 +117,20 @@ func (p *Paths) AgentClaudeConfigDir(repoName, agentName string) string {
 func (p *Paths) AgentCommandsDir(repoName, agentName string) string {
 	return filepath.Join(p.AgentClaudeConfigDir(repoName, agentName), "commands")
 }
+
+// NewTestPaths creates a Paths instance for testing with all paths under tmpDir.
+// This eliminates duplicate test setup code and ensures consistent path configuration.
+func NewTestPaths(tmpDir string) *Paths {
+	return &Paths{
+		Root:            tmpDir,
+		DaemonPID:       filepath.Join(tmpDir, "daemon.pid"),
+		DaemonSock:      filepath.Join(tmpDir, "daemon.sock"),
+		DaemonLog:       filepath.Join(tmpDir, "daemon.log"),
+		StateFile:       filepath.Join(tmpDir, "state.json"),
+		ReposDir:        filepath.Join(tmpDir, "repos"),
+		WorktreesDir:    filepath.Join(tmpDir, "wts"),
+		MessagesDir:     filepath.Join(tmpDir, "messages"),
+		OutputDir:       filepath.Join(tmpDir, "output"),
+		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
+	}
+}

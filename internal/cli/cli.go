@@ -14,6 +14,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/daemon"
 	"github.com/dlorenc/multiclaude/internal/errors"
 	"github.com/dlorenc/multiclaude/internal/format"
+	"github.com/dlorenc/multiclaude/internal/hooks"
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/names"
 	"github.com/dlorenc/multiclaude/internal/prompts"
@@ -849,7 +850,7 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	// Copy hooks configuration if it exists (for supervisor and merge-queue)
-	if err := c.copyHooksConfig(repoPath, repoPath); err != nil {
+	if err := hooks.CopyConfig(repoPath, repoPath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
 	}
 
@@ -994,7 +995,7 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	// Copy hooks configuration if it exists
-	if err := c.copyHooksConfig(repoPath, workspacePath); err != nil {
+	if err := hooks.CopyConfig(repoPath, workspacePath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config to default workspace: %v\n", err)
 	}
 
@@ -1624,7 +1625,7 @@ func (c *CLI) createWorker(args []string) error {
 	}
 
 	// Copy hooks configuration if it exists
-	if err := c.copyHooksConfig(repoPath, wtPath); err != nil {
+	if err := hooks.CopyConfig(repoPath, wtPath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
 	}
 
@@ -2228,7 +2229,7 @@ func (c *CLI) addWorkspace(args []string) error {
 	}
 
 	// Copy hooks configuration if it exists
-	if err := c.copyHooksConfig(repoPath, wtPath); err != nil {
+	if err := hooks.CopyConfig(repoPath, wtPath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
 	}
 
@@ -3101,7 +3102,7 @@ func (c *CLI) reviewPR(args []string) error {
 	}
 
 	// Copy hooks configuration if it exists
-	if err := c.copyHooksConfig(repoPath, wtPath); err != nil {
+	if err := hooks.CopyConfig(repoPath, wtPath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
 	}
 
@@ -4357,7 +4358,7 @@ func (c *CLI) writeMergeQueuePromptFile(repoPath string, agentName string, mqCon
 	}
 
 	// Add tracking mode configuration to the prompt
-	trackingConfig := c.generateTrackingModePrompt(mqConfig.TrackMode)
+	trackingConfig := prompts.GenerateTrackingModePrompt(string(mqConfig.TrackMode))
 	promptText = trackingConfig + "\n\n" + promptText
 
 	// Create a prompt file in the prompts directory
@@ -4372,47 +4373,6 @@ func (c *CLI) writeMergeQueuePromptFile(repoPath string, agentName string, mqCon
 	}
 
 	return promptPath, nil
-}
-
-// generateTrackingModePrompt generates prompt text explaining which PRs to track based on tracking mode
-func (c *CLI) generateTrackingModePrompt(trackMode state.TrackMode) string {
-	switch trackMode {
-	case state.TrackModeAuthor:
-		return `## PR Tracking Mode: Author Only
-
-**IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are the author.
-
-When listing and monitoring PRs, use:
-` + "```bash" + `
-gh pr list --author @me --label multiclaude
-` + "```" + `
-
-Do NOT process or attempt to merge PRs authored by others. Focus only on PRs created by multiclaude workers.`
-
-	case state.TrackModeAssigned:
-		return `## PR Tracking Mode: Assigned Only
-
-**IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are assigned.
-
-When listing and monitoring PRs, use:
-` + "```bash" + `
-gh pr list --assignee @me --label multiclaude
-` + "```" + `
-
-Do NOT process or attempt to merge PRs unless they are assigned to you. Focus only on PRs explicitly assigned to multiclaude.`
-
-	default: // TrackModeAll
-		return `## PR Tracking Mode: All PRs
-
-This repository is configured to track all PRs with the multiclaude label.
-
-When listing and monitoring PRs, use:
-` + "```bash" + `
-gh pr list --label multiclaude
-` + "```" + `
-
-Monitor and process all multiclaude-labeled PRs regardless of author or assignee.`
-	}
 }
 
 // WorkerConfig holds configuration for creating worker prompts
@@ -4461,38 +4421,6 @@ Do NOT create a new PR. The existing PR will be updated automatically when you p
 	}
 
 	return promptPath, nil
-}
-
-// copyHooksConfig copies hooks configuration from repo to worktree if it exists
-func (c *CLI) copyHooksConfig(repoPath, worktreePath string) error {
-	hooksPath := filepath.Join(repoPath, ".multiclaude", "hooks.json")
-
-	// Check if hooks.json exists
-	if _, err := os.Stat(hooksPath); os.IsNotExist(err) {
-		// No hooks config, that's fine
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("failed to check hooks config: %w", err)
-	}
-
-	// Create .claude directory in worktree
-	claudeDir := filepath.Join(worktreePath, ".claude")
-	if err := os.MkdirAll(claudeDir, 0755); err != nil {
-		return fmt.Errorf("failed to create .claude directory: %w", err)
-	}
-
-	// Copy hooks.json to .claude/settings.json
-	hooksData, err := os.ReadFile(hooksPath)
-	if err != nil {
-		return fmt.Errorf("failed to read hooks config: %w", err)
-	}
-
-	settingsPath := filepath.Join(claudeDir, "settings.json")
-	if err := os.WriteFile(settingsPath, hooksData, 0644); err != nil {
-		return fmt.Errorf("failed to write settings.json: %w", err)
-	}
-
-	return nil
 }
 
 // setupOutputCapture sets up tmux pipe-pane to capture agent output to a log file.

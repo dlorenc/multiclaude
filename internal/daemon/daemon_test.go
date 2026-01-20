@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dlorenc/multiclaude/internal/hooks"
 	"github.com/dlorenc/multiclaude/internal/messages"
+	"github.com/dlorenc/multiclaude/internal/prompts"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/pkg/config"
@@ -1635,8 +1637,8 @@ func TestCopyHooksConfig(t *testing.T) {
 	}
 
 	// Copy hooks config
-	if err := d.copyHooksConfig(repoPath, workDir); err != nil {
-		t.Fatalf("copyHooksConfig() failed: %v", err)
+	if err := hooks.CopyConfig(repoPath, workDir); err != nil {
+		t.Fatalf("CopyConfig() failed: %v", err)
 	}
 
 	// Verify settings.json was created
@@ -1668,8 +1670,8 @@ func TestCopyHooksConfigNoHooksFile(t *testing.T) {
 	}
 
 	// Should not error when hooks.json doesn't exist
-	if err := d.copyHooksConfig(repoPath, workDir); err != nil {
-		t.Errorf("copyHooksConfig() should not error for missing hooks.json: %v", err)
+	if err := hooks.CopyConfig(repoPath, workDir); err != nil {
+		t.Errorf("CopyConfig() should not error for missing hooks.json: %v", err)
 	}
 
 	// .claude directory should not be created
@@ -1679,21 +1681,18 @@ func TestCopyHooksConfigNoHooksFile(t *testing.T) {
 	}
 }
 
-// Tests for tracking mode prompt generation
+// Tests for tracking mode prompt generation (uses shared prompts.GenerateTrackingModePrompt)
 
 func TestGenerateTrackingModePrompt(t *testing.T) {
-	d, cleanup := setupTestDaemon(t)
-	defer cleanup()
-
 	tests := []struct {
 		name           string
-		trackMode      state.TrackMode
+		trackMode      string
 		wantContains   []string
 		wantNotContain []string
 	}{
 		{
 			name:      "all mode",
-			trackMode: state.TrackModeAll,
+			trackMode: string(state.TrackModeAll),
 			wantContains: []string{
 				"All PRs",
 				"gh pr list --label multiclaude",
@@ -1706,7 +1705,7 @@ func TestGenerateTrackingModePrompt(t *testing.T) {
 		},
 		{
 			name:      "author mode",
-			trackMode: state.TrackModeAuthor,
+			trackMode: string(state.TrackModeAuthor),
 			wantContains: []string{
 				"Author Only",
 				"gh pr list --author @me --label multiclaude",
@@ -1718,7 +1717,7 @@ func TestGenerateTrackingModePrompt(t *testing.T) {
 		},
 		{
 			name:      "assigned mode",
-			trackMode: state.TrackModeAssigned,
+			trackMode: string(state.TrackModeAssigned),
 			wantContains: []string{
 				"Assigned Only",
 				"gh pr list --assignee @me --label multiclaude",
@@ -1732,17 +1731,17 @@ func TestGenerateTrackingModePrompt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := d.generateTrackingModePrompt(tt.trackMode)
+			result := prompts.GenerateTrackingModePrompt(tt.trackMode)
 
 			for _, want := range tt.wantContains {
 				if !contains(result, want) {
-					t.Errorf("generateTrackingModePrompt(%s) should contain %q", tt.trackMode, want)
+					t.Errorf("GenerateTrackingModePrompt(%s) should contain %q", tt.trackMode, want)
 				}
 			}
 
 			for _, notWant := range tt.wantNotContain {
 				if contains(result, notWant) {
-					t.Errorf("generateTrackingModePrompt(%s) should NOT contain %q", tt.trackMode, notWant)
+					t.Errorf("GenerateTrackingModePrompt(%s) should NOT contain %q", tt.trackMode, notWant)
 				}
 			}
 		})

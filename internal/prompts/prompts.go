@@ -113,3 +113,45 @@ func GetPrompt(repoPath string, agentType AgentType, cliDocs string) (string, er
 
 	return result, nil
 }
+
+// GenerateTrackingModePrompt generates prompt text explaining which PRs to track
+// based on the tracking mode. The trackMode parameter should be "all", "author", or "assigned".
+func GenerateTrackingModePrompt(trackMode string) string {
+	switch trackMode {
+	case "author":
+		return `## PR Tracking Mode: Author Only
+
+**IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are the author.
+
+When listing and monitoring PRs, use:
+` + "```bash" + `
+gh pr list --author @me --label multiclaude
+` + "```" + `
+
+Do NOT process or attempt to merge PRs authored by others. Focus only on PRs created by multiclaude workers.`
+
+	case "assigned":
+		return `## PR Tracking Mode: Assigned Only
+
+**IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are assigned.
+
+When listing and monitoring PRs, use:
+` + "```bash" + `
+gh pr list --assignee @me --label multiclaude
+` + "```" + `
+
+Do NOT process or attempt to merge PRs unless they are assigned to you. Focus only on PRs explicitly assigned to multiclaude.`
+
+	default: // "all"
+		return `## PR Tracking Mode: All PRs
+
+This repository is configured to track all PRs with the multiclaude label.
+
+When listing and monitoring PRs, use:
+` + "```bash" + `
+gh pr list --label multiclaude
+` + "```" + `
+
+Monitor and process all multiclaude-labeled PRs regardless of author or assignee.`
+	}
+}
