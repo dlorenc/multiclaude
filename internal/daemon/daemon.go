@@ -1071,6 +1071,9 @@ func (d *Daemon) handleSetCurrentRepo(req socket.Request) socket.Response {
 // handleGetCurrentRepo returns the current/default repository
 func (d *Daemon) handleGetCurrentRepo(req socket.Request) socket.Response {
 	currentRepo := d.state.GetCurrentRepo()
+	if currentRepo == "" {
+		return socket.Response{Success: false, Error: "no current repository set"}
+	}
 	return socket.Response{Success: true, Data: currentRepo}
 }
 
