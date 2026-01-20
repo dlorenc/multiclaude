@@ -129,6 +129,28 @@ func (c *CLI) getProviderForRepo(repoName string) (*provider.Info, error) {
 	return info, nil
 }
 
+// tmuxSanitizer replaces problematic characters with hyphens for tmux session names.
+// tmux has issues with dots, colons, spaces, and forward slashes in session names.
+var tmuxSanitizer = strings.NewReplacer(
+	".", "-",
+	":", "-",
+	" ", "-",
+	"/", "-",
+)
+
+// sanitizeTmuxSessionName creates a tmux-safe session name from a repo name.
+// tmux has issues with certain characters like dots, so we replace them.
+func sanitizeTmuxSessionName(repoName string) string {
+	// Strip control characters (ASCII 0-31) for safety
+	sanitized := strings.Map(func(r rune) rune {
+		if r < 32 {
+			return -1 // drop the character
+		}
+		return r
+	}, repoName)
+	return fmt.Sprintf("mc-%s", tmuxSanitizer.Replace(sanitized))
+}
+
 // Execute executes the CLI with the given arguments
 func (c *CLI) Execute(args []string) error {
 	if len(args) == 0 {
@@ -772,7 +794,7 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	// Create tmux session
-	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxSession := sanitizeTmuxSessionName(repoName)
 	if tmuxSession == "mc-" {
 		return fmt.Errorf("invalid tmux session name: repository name cannot be empty")
 	}
@@ -1183,7 +1205,7 @@ func (c *CLI) removeRepo(args []string) error {
 	}
 
 	// Kill tmux session
-	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxSession := sanitizeTmuxSessionName(repoName)
 	tmuxClient := tmux.NewClient()
 	if exists, err := tmuxClient.HasSession(tmuxSession); err == nil && exists {
 		fmt.Printf("Killing tmux session: %s\n", tmuxSession)
@@ -1562,7 +1584,7 @@ func (c *CLI) createWorker(args []string) error {
 	}
 
 	// Get tmux session name (it's mc-<reponame>)
-	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxSession := sanitizeTmuxSessionName(repoName)
 
 	// Ensure tmux session exists before creating window
 	// This handles cases where the session was killed or daemon didn't restore it
@@ -1889,7 +1911,7 @@ func (c *CLI) removeWorker(args []string) error {
 	}
 
 	// Kill tmux window
-	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxSession := sanitizeTmuxSessionName(repoName)
 	tmuxWindow := workerInfo["tmux_window"].(string)
 	fmt.Printf("Killing tmux window: %s\n", tmuxWindow)
 	cmd := exec.Command("tmux", "kill-window", "-t", fmt.Sprintf("%s:%s", tmuxSession, tmuxWindow))
@@ -2020,7 +2042,7 @@ func (c *CLI) addWorkspace(args []string) error {
 	}
 
 	// Get tmux session name
-	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxSession := sanitizeTmuxSessionName(repoName)
 
 	// Create tmux window for workspace (detached so it doesn't switch focus)
 	fmt.Printf("Creating tmux window: %s\n", workspaceName)
@@ -2209,7 +2231,7 @@ func (c *CLI) removeWorkspace(args []string) error {
 	}
 
 	// Kill tmux window
-	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxSession := sanitizeTmuxSessionName(repoName)
 	tmuxWindow := workspaceInfo["tmux_window"].(string)
 	fmt.Printf("Killing tmux window: %s\n", tmuxWindow)
 	cmd := exec.Command("tmux", "kill-window", "-t", fmt.Sprintf("%s:%s", tmuxSession, tmuxWindow))
@@ -2398,7 +2420,7 @@ func (c *CLI) connectWorkspace(args []string) error {
 	}
 
 	// Get tmux session and window
-	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxSession := sanitizeTmuxSessionName(repoName)
 	tmuxWindow := workspaceInfo["tmux_window"].(string)
 
 	// Attach to tmux
@@ -2893,7 +2915,7 @@ func (c *CLI) reviewPR(args []string) error {
 	}
 
 	// Get tmux session name
-	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxSession := sanitizeTmuxSessionName(repoName)
 
 	// Create tmux window for reviewer (detached so it doesn't switch focus)
 	fmt.Printf("Creating tmux window: %s\n", reviewerName)
@@ -3313,7 +3335,7 @@ func (c *CLI) attachAgent(args []string) error {
 	}
 
 	// Get tmux session and window
-	tmuxSession := fmt.Sprintf("mc-%s", repoName)
+	tmuxSession := sanitizeTmuxSessionName(repoName)
 	tmuxWindow := agentInfo["tmux_window"].(string)
 
 	// Attach to tmux

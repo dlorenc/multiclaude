@@ -2170,3 +2170,29 @@ func TestInitRepoNameParsing(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeTmuxSessionName(t *testing.T) {
+	tests := []struct {
+		repoName string
+		want     string
+	}{
+		{"my-repo", "mc-my-repo"},
+		{"demos.expanso.io", "mc-demos-expanso-io"},
+		{"repo.with.many.dots", "mc-repo-with-many-dots"},
+		{"repo:with:colons", "mc-repo-with-colons"},
+		{"repo with spaces", "mc-repo-with-spaces"},
+		{"simple", "mc-simple"},
+		{"repo/with/slashes", "mc-repo-with-slashes"},
+		{"path/to/repo.git", "mc-path-to-repo-git"},
+		{"repo\x00with\x1fnull", "mc-repowithnull"}, // control characters stripped
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.repoName, func(t *testing.T) {
+			got := sanitizeTmuxSessionName(tt.repoName)
+			if got != tt.want {
+				t.Errorf("sanitizeTmuxSessionName(%q) = %q, want %q", tt.repoName, got, tt.want)
+			}
+		})
+	}
+}
