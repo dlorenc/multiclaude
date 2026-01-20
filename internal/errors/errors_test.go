@@ -284,3 +284,99 @@ func TestTmuxOperationFailed_SpecificSuggestions(t *testing.T) {
 		})
 	}
 }
+
+func TestWorktreeCreationFailed_SpecificSuggestions(t *testing.T) {
+	tests := []struct {
+		name            string
+		causeMsg        string
+		wantContains    []string
+		wantNotContains []string
+	}{
+		{
+			name:         "branch already exists with name",
+			causeMsg:     "failed to create worktree: exit status 128\nOutput: fatal: a branch named 'work/nice-owl' already exists",
+			wantContains: []string{"work/nice-owl", "multiclaude cleanup", "git branch -D work/nice-owl"},
+		},
+		{
+			name:         "generic branch already exists",
+			causeMsg:     "branch already exists",
+			wantContains: []string{"multiclaude cleanup", "previous run"},
+		},
+		{
+			name:         "worktree path exists",
+			causeMsg:     "path already exists",
+			wantContains: []string{"multiclaude cleanup", "worktree directory"},
+		},
+		{
+			name:         "is a worktree error",
+			causeMsg:     "is a worktree",
+			wantContains: []string{"multiclaude cleanup"},
+		},
+		{
+			name:         "not a valid reference",
+			causeMsg:     "not a valid reference: invalid-branch",
+			wantContains: []string{"start branch does not exist", "git branch -a"},
+		},
+		{
+			name:         "branch already checked out",
+			causeMsg:     "already checked out at",
+			wantContains: []string{"multiclaude cleanup", "another worktree"},
+		},
+		{
+			name:            "generic error falls back to default",
+			causeMsg:        "some random error",
+			wantContains:    []string{"disk space", "repository state"},
+			wantNotContains: []string{"multiclaude cleanup", "git branch"},
+		},
+		{
+			name:         "nil cause uses default suggestion",
+			causeMsg:     "",
+			wantContains: []string{"disk space", "repository state"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cause error
+			if tt.causeMsg != "" {
+				cause = errors.New(tt.causeMsg)
+			}
+
+			err := WorktreeCreationFailed(cause)
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(err.Suggestion, want) {
+					t.Errorf("suggestion should contain %q, got: %q", want, err.Suggestion)
+				}
+			}
+			for _, notWant := range tt.wantNotContains {
+				if strings.Contains(err.Suggestion, notWant) {
+					t.Errorf("suggestion should NOT contain %q, got: %q", notWant, err.Suggestion)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractQuotedValue(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"fatal: a branch named 'work/nice-owl' already exists", "work/nice-owl"},
+		{"some error 'value' here", "value"},
+		{"no quotes here", ""},
+		{"'only-one-quote", ""},
+		{"''", ""},
+		{"'test'", "test"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := extractQuotedValue(tt.input)
+			if got != tt.want {
+				t.Errorf("extractQuotedValue(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
