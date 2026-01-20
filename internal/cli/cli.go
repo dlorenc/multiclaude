@@ -2848,22 +2848,109 @@ func (c *CLI) inferRepoFromCwd() (string, error) {
 	return "", fmt.Errorf("not in a multiclaude directory")
 }
 
+// normalizeGitHubURL normalizes GitHub URLs to a common format for comparison.
+// It handles both SSH (git@github.com:user/repo.git) and HTTPS (https://github.com/user/repo) formats.
+// Returns lowercase "github.com/user/repo" format for comparison.
+func normalizeGitHubURL(url string) string {
+	url = strings.TrimSpace(url)
+	lowerURL := strings.ToLower(url)
+
+	// Handle SSH format: git@github.com:user/repo.git
+	if strings.HasPrefix(lowerURL, "git@github.com:") {
+		path := url[len("git@github.com:"):]
+		path = strings.TrimSuffix(path, ".git")
+		return strings.ToLower("github.com/" + path)
+	}
+
+	// Handle HTTPS format: https://github.com/user/repo or https://github.com/user/repo.git
+	if strings.HasPrefix(lowerURL, "https://github.com/") {
+		path := url[len("https://"):]
+		path = strings.TrimSuffix(path, ".git")
+		return strings.ToLower(path)
+	}
+
+	// Handle HTTP format: http://github.com/user/repo
+	if strings.HasPrefix(lowerURL, "http://github.com/") {
+		path := url[len("http://"):]
+		path = strings.TrimSuffix(path, ".git")
+		return strings.ToLower(path)
+	}
+
+	// Handle git:// protocol: git://github.com/user/repo.git
+	if strings.HasPrefix(lowerURL, "git://github.com/") {
+		path := url[len("git://"):]
+		path = strings.TrimSuffix(path, ".git")
+		return strings.ToLower(path)
+	}
+
+	// Return empty string for non-GitHub URLs
+	return ""
+}
+
+// findRepoFromGitRemote looks for a git remote in the current directory
+// and tries to match it against known repositories in state.
+func (c *CLI) findRepoFromGitRemote() (string, error) {
+	// Run git remote get-url origin
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get git remote: %w", err)
+	}
+
+	remoteURL := strings.TrimSpace(string(output))
+	if remoteURL == "" {
+		return "", fmt.Errorf("git remote URL is empty")
+	}
+
+	normalizedRemote := normalizeGitHubURL(remoteURL)
+	if normalizedRemote == "" {
+		return "", fmt.Errorf("not a GitHub URL: %s", remoteURL)
+	}
+
+	// Load state to check against known repositories
+	st, err := state.Load(c.paths.StateFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to load state: %w", err)
+	}
+
+	// Iterate through repos and find a match
+	for _, repoName := range st.ListRepos() {
+		repo, exists := st.GetRepo(repoName)
+		if !exists {
+			continue
+		}
+
+		normalizedStateURL := normalizeGitHubURL(repo.GithubURL)
+		if normalizedStateURL != "" && normalizedStateURL == normalizedRemote {
+			return repoName, nil
+		}
+	}
+
+	return "", fmt.Errorf("no matching repository found for remote: %s", remoteURL)
+}
+
 // resolveRepo determines the repository to use based on:
 // 1. Explicit --repo flag (highest priority)
-// 2. Current working directory (if in a multiclaude directory)
-// 3. Current repo set via 'multiclaude repo use' (lowest priority)
+// 2. Git remote URL matching (if in a git repo with origin pointing to a tracked repo)
+// 3. Current working directory (if in a multiclaude directory)
+// 4. Current repo set via 'multiclaude repo use' (lowest priority)
 func (c *CLI) resolveRepo(flags map[string]string) (string, error) {
 	// 1. Check explicit --repo flag
 	if r, ok := flags["repo"]; ok {
 		return r, nil
 	}
 
-	// 2. Try to infer from current working directory
+	// 2. Try to infer from git remote URL
+	if repoName, err := c.findRepoFromGitRemote(); err == nil {
+		return repoName, nil
+	}
+
+	// 3. Try to infer from current working directory
 	if inferred, err := c.inferRepoFromCwd(); err == nil {
 		return inferred, nil
 	}
 
-	// 3. Check current repo from daemon
+	// 4. Check current repo from daemon
 	client := socket.NewClient(c.paths.DaemonSock)
 	resp, err := client.Send(socket.Request{
 		Command: "get_current_repo",
