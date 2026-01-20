@@ -69,27 +69,27 @@ multiclaude daemon status
 - State still shows supervisor as active
 
 **Automatic recovery:**
-- Health check detects window exists but process may be dead
-- Currently: Warning logged but no automatic restart (by design)
-- Window is preserved so user can manually restart
+- Health check detects the process is dead (every 2 minutes)
+- Daemon automatically restarts supervisor using `--resume` to preserve session context
+- PID is updated in state
 
-**Manual recovery:**
+**Manual recovery (if auto-restart fails):**
 ```bash
 # Check supervisor window
 multiclaude attach supervisor
 
-# Restart Claude manually in the window
-claude --session-id <session-id> --dangerously-skip-permissions \
-  --append-system-prompt-file ~/.multiclaude/prompts/supervisor.md
+# Use the multiclaude claude command to restart (auto-detects context)
+multiclaude claude
 
-# Or force repair to reset state
-multiclaude repair
+# Or manually restart Claude
+claude --resume <session-id> --dangerously-skip-permissions \
+  --append-system-prompt-file ~/.multiclaude/prompts/supervisor.md
 ```
 
 **Impact:**
-- New workers won't be supervised
-- Existing workers continue but may complete without feedback
-- Merge-queue continues independently
+- Brief interruption until health check runs (up to 2 minutes)
+- Session context is preserved via --resume
+- New workers won't be supervised during the gap
 
 ---
 
@@ -104,13 +104,13 @@ multiclaude repair
 - tmux window remains (empty shell prompt)
 - State still shows merge-queue as active
 
-**Automatic/Manual recovery:**
-- Same as supervisor - window preserved for manual restart
+**Automatic recovery:**
+- Same as supervisor - health check auto-restarts with --resume
 
 **Impact:**
-- PRs won't be automatically merged
-- CI status won't be monitored
-- Workers complete but their PRs wait
+- Brief interruption until health check runs (up to 2 minutes)
+- PRs won't be processed during the gap
+- Session context is preserved
 
 ---
 
@@ -171,8 +171,17 @@ multiclaude work rm <worker-name>
 - Similar to worker but typically has more user interaction
 
 **Recovery:**
-- Manual restart in tmux window
-- Workspace worktree and branch preserved
+```bash
+# Attach to the workspace window
+multiclaude attach workspace
+
+# Use multiclaude claude to restart (preserves session context)
+multiclaude claude
+```
+
+- Workspace worktree and branch are preserved
+- Session context is resumed via --resume flag
+- MOTD in terminal reminds you of this command
 
 ---
 

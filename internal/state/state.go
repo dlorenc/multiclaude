@@ -300,6 +300,26 @@ func (s *State) UpdateAgent(repoName, agentName string, agent Agent) error {
 	return s.saveUnlocked()
 }
 
+// UpdateAgentPID updates just the PID of an agent
+func (s *State) UpdateAgentPID(repoName, agentName string, pid int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return fmt.Errorf("repository %q not found", repoName)
+	}
+
+	agent, exists := repo.Agents[agentName]
+	if !exists {
+		return fmt.Errorf("agent %q not found in repository %q", agentName, repoName)
+	}
+
+	agent.PID = pid
+	repo.Agents[agentName] = agent
+	return s.saveUnlocked()
+}
+
 // RemoveAgent removes an agent from a repository
 func (s *State) RemoveAgent(repoName, agentName string) error {
 	s.mu.Lock()

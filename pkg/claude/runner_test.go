@@ -141,12 +141,19 @@ func TestStart(t *testing.T) {
 		t.Errorf("expected PID to be 12345, got %d", result.PID)
 	}
 
-	// Verify SendKeys was called
-	if len(terminal.sendKeysCalls) != 1 {
-		t.Fatalf("expected 1 SendKeys call, got %d", len(terminal.sendKeysCalls))
+	// Verify SendKeys was called (MOTD + command = 2 calls)
+	if len(terminal.sendKeysCalls) != 2 {
+		t.Fatalf("expected 2 SendKeys calls (MOTD + command), got %d", len(terminal.sendKeysCalls))
 	}
 
-	call := terminal.sendKeysCalls[0]
+	// First call is MOTD
+	motdCall := terminal.sendKeysCalls[0]
+	if !strings.Contains(motdCall.text, "multiclaude claude") {
+		t.Errorf("expected MOTD to contain restart hint, got %q", motdCall.text)
+	}
+
+	// Second call is the actual command
+	call := terminal.sendKeysCalls[1]
 	if call.session != "my-session" {
 		t.Errorf("expected session 'my-session', got %q", call.session)
 	}
@@ -191,9 +198,12 @@ func TestStartWithCustomSessionID(t *testing.T) {
 		t.Errorf("expected SessionID to be 'my-custom-session-id', got %q", result.SessionID)
 	}
 
-	// Verify command contains custom session ID
-	if !strings.Contains(terminal.sendKeysCalls[0].text, "--session-id my-custom-session-id") {
-		t.Errorf("expected command to contain custom session ID, got %q", terminal.sendKeysCalls[0].text)
+	// Verify command contains custom session ID (second call, after MOTD)
+	if len(terminal.sendKeysCalls) < 2 {
+		t.Fatalf("expected at least 2 SendKeys calls, got %d", len(terminal.sendKeysCalls))
+	}
+	if !strings.Contains(terminal.sendKeysCalls[1].text, "--session-id my-custom-session-id") {
+		t.Errorf("expected command to contain custom session ID, got %q", terminal.sendKeysCalls[1].text)
 	}
 }
 

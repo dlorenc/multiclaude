@@ -146,6 +146,10 @@ type Config struct {
 	// If empty, a new UUID will be generated.
 	SessionID string
 
+	// Resume indicates this is resuming an existing session.
+	// When true, uses --resume instead of --session-id.
+	Resume bool
+
 	// WorkDir is the working directory for Claude.
 	// If empty, uses the current directory.
 	WorkDir string
@@ -201,6 +205,20 @@ func (r *Runner) Start(session, window string, cfg Config) (*StartResult, error)
 		}
 	}
 
+	// Print MOTD before starting Claude - this will be visible when Claude exits
+	motd := fmt.Sprintf(`echo "
+================================================================================
+  multiclaude agent: %s
+  session: %s
+--------------------------------------------------------------------------------
+  If Claude exits, run:  multiclaude claude
+  To restart with the same session and context.
+================================================================================
+"`, window, sessionID)
+	if err := r.Terminal.SendKeys(session, window, motd); err != nil {
+		// Non-fatal - just log and continue
+	}
+
 	// Send the command to start Claude
 	if err := r.Terminal.SendKeys(session, window, cmd); err != nil {
 		return nil, fmt.Errorf("failed to send claude command: %w", err)
@@ -237,8 +255,12 @@ func (r *Runner) Start(session, window string, cfg Config) (*StartResult, error)
 func (r *Runner) buildCommand(sessionID string, cfg Config) string {
 	cmd := r.BinaryPath
 
-	// Add session ID
-	cmd += fmt.Sprintf(" --session-id %s", sessionID)
+	// Add session ID or resume
+	if cfg.Resume {
+		cmd += fmt.Sprintf(" --resume %s", sessionID)
+	} else {
+		cmd += fmt.Sprintf(" --session-id %s", sessionID)
+	}
 
 	// Add skip permissions flag
 	if r.SkipPermissions {

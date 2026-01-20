@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -25,12 +26,13 @@ import (
 
 // Daemon represents the main daemon process
 type Daemon struct {
-	paths   *config.Paths
-	state   *state.State
-	tmux    *tmux.Client
-	logger  *logging.Logger
-	server  *socket.Server
-	pidFile *PIDFile
+	paths        *config.Paths
+	state        *state.State
+	tmux         *tmux.Client
+	logger       *logging.Logger
+	server       *socket.Server
+	pidFile      *PIDFile
+	claudeRunner *claude.Runner
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -58,14 +60,16 @@ func New(paths *config.Paths) (*Daemon, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	tmuxClient := tmux.NewClient()
 	d := &Daemon{
-		paths:   paths,
-		state:   st,
-		tmux:    tmux.NewClient(),
-		logger:  logger,
-		pidFile: NewPIDFile(paths.DaemonPID),
-		ctx:     ctx,
-		cancel:  cancel,
+		paths:        paths,
+		state:        st,
+		tmux:         tmuxClient,
+		logger:       logger,
+		pidFile:      NewPIDFile(paths.DaemonPID),
+		claudeRunner: claude.NewRunner(claude.WithTerminal(tmuxClient)),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 
 	// Create socket server
@@ -270,8 +274,17 @@ func (d *Daemon) checkAgentHealth() {
 			if agent.PID > 0 {
 				if !isProcessAlive(agent.PID) {
 					d.logger.Warn("Agent %s process (PID %d) not running", agentName, agent.PID)
-					// Don't clean up just because process died - window might still be active
-					// User might have restarted Claude manually
+
+					// For managed agents (supervisor, merge-queue), attempt auto-restart
+					if agent.Type == state.AgentTypeSupervisor || agent.Type == state.AgentTypeMergeQueue {
+						d.logger.Info("Attempting to auto-restart managed agent %s", agentName)
+						if err := d.restartManagedAgent(repoName, agentName, agent, repo); err != nil {
+							d.logger.Error("Failed to restart agent %s: %v", agentName, err)
+						} else {
+							d.logger.Info("Successfully restarted agent %s", agentName)
+						}
+					}
+					// For other agents (workers, workspaces), don't clean up - user might restart manually
 				}
 			}
 		}
@@ -1498,6 +1511,53 @@ gh pr list --label multiclaude
 
 Monitor and process all multiclaude-labeled PRs regardless of author or assignee.`
 	}
+}
+
+// restartManagedAgent restarts a managed agent (supervisor, merge-queue) that has exited.
+// It uses --resume to continue the existing session if history exists.
+func (d *Daemon) restartManagedAgent(repoName, agentName string, agent state.Agent, repo *state.Repository) error {
+	// Check if the session has history
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	claudeProjectsDir := filepath.Join(home, ".claude", "projects")
+	encodedPath := strings.ReplaceAll(agent.WorktreePath, "/", "-")
+	sessionFile := filepath.Join(claudeProjectsDir, encodedPath, agent.SessionID+".jsonl")
+
+	hasHistory := false
+	if info, err := os.Stat(sessionFile); err == nil && info.Size() > 0 {
+		hasHistory = true
+	}
+
+	// Get the existing prompt file path
+	promptFile := filepath.Join(d.paths.Root, "prompts", agentName+".md")
+	if _, err := os.Stat(promptFile); os.IsNotExist(err) {
+		// Regenerate the prompt file if it doesn't exist
+		promptFile, err = d.writePromptFile(repoName, prompts.AgentType(agent.Type), agentName)
+		if err != nil {
+			return fmt.Errorf("failed to regenerate prompt file: %w", err)
+		}
+	}
+
+	// Restart Claude using the runner
+	result, err := d.claudeRunner.Start(repo.TmuxSession, agentName, claude.Config{
+		SessionID:        agent.SessionID,
+		Resume:           hasHistory,
+		SystemPromptFile: promptFile,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to restart Claude: %w", err)
+	}
+
+	// Update the agent's PID in state
+	if err := d.state.UpdateAgentPID(repoName, agentName, result.PID); err != nil {
+		d.logger.Warn("Failed to update agent PID: %v", err)
+	}
+
+	d.logger.Info("Restarted agent %s with PID %d (resumed=%v)", agentName, result.PID, hasHistory)
+	return nil
 }
 
 // writePromptFile writes the agent prompt to a file and returns the path

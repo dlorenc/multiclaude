@@ -455,6 +455,14 @@ func (c *CLI) registerCommands() {
 		Run:         c.repair,
 	}
 
+	// Claude restart command - for resuming Claude after exit
+	c.rootCmd.Subcommands["claude"] = &Command{
+		Name:        "claude",
+		Description: "Restart Claude in current agent context",
+		Usage:       "multiclaude claude",
+		Run:         c.restartClaude,
+	}
+
 	// Debug command
 	c.rootCmd.Subcommands["docs"] = &Command{
 		Name:        "docs",
@@ -3819,6 +3827,83 @@ func (c *CLI) localRepair(verbose bool) error {
 	}
 
 	return nil
+}
+
+// restartClaude restarts Claude in the current agent context.
+// It auto-detects whether to use --resume or --session-id based on session history.
+func (c *CLI) restartClaude(args []string) error {
+	// Infer agent context from cwd
+	repoName, agentName, err := c.inferAgentContext()
+	if err != nil {
+		return fmt.Errorf("cannot determine agent context: %w\n\nRun this command from within a multiclaude agent tmux window", err)
+	}
+
+	// Load state to get session ID
+	st, err := state.Load(c.paths.StateFile)
+	if err != nil {
+		return fmt.Errorf("failed to load state: %w", err)
+	}
+
+	agent, exists := st.GetAgent(repoName, agentName)
+	if !exists {
+		return fmt.Errorf("agent '%s' not found in state for repo '%s'", agentName, repoName)
+	}
+
+	if agent.SessionID == "" {
+		return fmt.Errorf("agent has no session ID - try removing and recreating the agent")
+	}
+
+	// Get the prompt file path (stored as ~/.multiclaude/prompts/<agent-name>.md)
+	promptFile := filepath.Join(c.paths.Root, "prompts", agentName+".md")
+
+	// Check if the session has history by looking for the .jsonl file
+	// Claude stores sessions in ~/.claude/projects/<encoded-path>/<session-id>.jsonl
+	claudeProjectsDir := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
+	hasHistory := false
+
+	// The path encoding replaces / with - and prefixes with -
+	// e.g., /Users/foo/bar becomes -Users-foo-bar
+	encodedPath := strings.ReplaceAll(agent.WorktreePath, "/", "-")
+	sessionFile := filepath.Join(claudeProjectsDir, encodedPath, agent.SessionID+".jsonl")
+
+	if info, err := os.Stat(sessionFile); err == nil {
+		// Check if file has content (not just empty)
+		if info.Size() > 0 {
+			hasHistory = true
+		}
+	}
+
+	// Build the command
+	var cmdArgs []string
+	if hasHistory {
+		// Session has history - use --resume to continue
+		cmdArgs = []string{"--resume", agent.SessionID}
+		fmt.Printf("Resuming Claude session %s...\n", agent.SessionID)
+	} else {
+		// New session - use --session-id
+		cmdArgs = []string{"--session-id", agent.SessionID}
+		fmt.Printf("Starting new Claude session %s...\n", agent.SessionID)
+	}
+
+	// Add common flags
+	cmdArgs = append(cmdArgs, "--dangerously-skip-permissions")
+	if _, err := os.Stat(promptFile); err == nil {
+		cmdArgs = append(cmdArgs, "--append-system-prompt-file", promptFile)
+	}
+
+	// Exec claude
+	claudePath := "claude"
+
+	fmt.Printf("Running: %s %s\n\n", claudePath, strings.Join(cmdArgs, " "))
+
+	// Run claude interactively
+	cmd := exec.Command(claudePath, cmdArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Dir = agent.WorktreePath
+
+	return cmd.Run()
 }
 
 func (c *CLI) showDocs(args []string) error {
