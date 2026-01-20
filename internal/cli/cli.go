@@ -2813,17 +2813,67 @@ func (c *CLI) inferRepoFromCwd() (string, error) {
 	return "", fmt.Errorf("not in a multiclaude directory")
 }
 
+// findRepoFromConfigFile looks for a .multiclaude file in the current directory
+// or any parent directory, and returns the repo name if found.
+// The file should contain the repo name on the first line.
+func (c *CLI) findRepoFromConfigFile() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Walk up the directory tree looking for .multiclaude file
+	dir := cwd
+	for {
+		configPath := filepath.Join(dir, ".multiclaude")
+
+		// Check if .multiclaude exists and is a file (not a directory)
+		info, err := os.Stat(configPath)
+		if err == nil && !info.IsDir() {
+			// Read the file and get the repo name
+			content, err := os.ReadFile(configPath)
+			if err != nil {
+				return "", fmt.Errorf("failed to read .multiclaude file: %w", err)
+			}
+
+			// Get the first line and trim whitespace
+			repoName := strings.TrimSpace(strings.Split(string(content), "\n")[0])
+			if repoName == "" {
+				return "", fmt.Errorf(".multiclaude file is empty")
+			}
+
+			return repoName, nil
+		}
+
+		// Move to parent directory
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			// Reached the root, no .multiclaude file found
+			break
+		}
+		dir = parent
+	}
+
+	return "", fmt.Errorf("no .multiclaude file found")
+}
+
 // resolveRepo determines the repository to use based on:
 // 1. Explicit --repo flag (highest priority)
-// 2. Current working directory (if in a multiclaude directory)
-// 3. Current repo set via 'multiclaude repo use' (lowest priority)
+// 2. .multiclaude file in current or parent directory
+// 3. Current working directory (if in a multiclaude directory)
+// 4. Current repo set via 'multiclaude repo use' (lowest priority)
 func (c *CLI) resolveRepo(flags map[string]string) (string, error) {
 	// 1. Check explicit --repo flag
 	if r, ok := flags["repo"]; ok {
 		return r, nil
 	}
 
-	// 2. Try to infer from current working directory
+	// 2. Try to find repo from .multiclaude config file
+	if repoName, err := c.findRepoFromConfigFile(); err == nil {
+		return repoName, nil
+	}
+
+	// 3. Try to infer from current working directory
 	if inferred, err := c.inferRepoFromCwd(); err == nil {
 		return inferred, nil
 	}
@@ -2839,7 +2889,7 @@ func (c *CLI) resolveRepo(flags map[string]string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("could not determine repository; use --repo flag or run 'multiclaude repo use <name>'")
+	return "", fmt.Errorf("could not determine repository; use --repo flag, create a .multiclaude file, or run 'multiclaude repo use <name>'")
 }
 
 // inferAgentContext infers the current agent and repo from working directory

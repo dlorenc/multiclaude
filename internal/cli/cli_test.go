@@ -1172,6 +1172,163 @@ func TestInferRepoFromCwd(t *testing.T) {
 	}
 }
 
+func TestFindRepoFromConfigFile(t *testing.T) {
+	// Save original working directory
+	origWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get original working directory: %v", err)
+	}
+	defer os.Chdir(origWd)
+
+	cli := &CLI{
+		paths: &config.Paths{},
+	}
+
+	t.Run("finds .multiclaude file in current directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create .multiclaude file with repo name
+		configPath := filepath.Join(tmpDir, ".multiclaude")
+		if err := os.WriteFile(configPath, []byte("my-repo\n"), 0644); err != nil {
+			t.Fatalf("failed to create .multiclaude file: %v", err)
+		}
+
+		if err := os.Chdir(tmpDir); err != nil {
+			t.Fatalf("failed to chdir to tmpDir: %v", err)
+		}
+
+		repoName, err := cli.findRepoFromConfigFile()
+		if err != nil {
+			t.Fatalf("findRepoFromConfigFile() unexpected error: %v", err)
+		}
+		if repoName != "my-repo" {
+			t.Errorf("findRepoFromConfigFile() = %q, want %q", repoName, "my-repo")
+		}
+	})
+
+	t.Run("finds .multiclaude file in parent directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create .multiclaude file in parent
+		configPath := filepath.Join(tmpDir, ".multiclaude")
+		if err := os.WriteFile(configPath, []byte("parent-repo"), 0644); err != nil {
+			t.Fatalf("failed to create .multiclaude file: %v", err)
+		}
+
+		// Create and cd into a subdirectory
+		subDir := filepath.Join(tmpDir, "subdir", "deep")
+		if err := os.MkdirAll(subDir, 0755); err != nil {
+			t.Fatalf("failed to create subdirectory: %v", err)
+		}
+		if err := os.Chdir(subDir); err != nil {
+			t.Fatalf("failed to chdir to subDir: %v", err)
+		}
+
+		repoName, err := cli.findRepoFromConfigFile()
+		if err != nil {
+			t.Fatalf("findRepoFromConfigFile() unexpected error: %v", err)
+		}
+		if repoName != "parent-repo" {
+			t.Errorf("findRepoFromConfigFile() = %q, want %q", repoName, "parent-repo")
+		}
+	})
+
+	t.Run("ignores .multiclaude directory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create .multiclaude as a directory (like repos use for custom prompts)
+		configDir := filepath.Join(tmpDir, ".multiclaude")
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			t.Fatalf("failed to create .multiclaude directory: %v", err)
+		}
+
+		if err := os.Chdir(tmpDir); err != nil {
+			t.Fatalf("failed to chdir to tmpDir: %v", err)
+		}
+
+		_, err := cli.findRepoFromConfigFile()
+		if err == nil {
+			t.Error("findRepoFromConfigFile() expected error when .multiclaude is a directory")
+		}
+	})
+
+	t.Run("returns error for empty file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create empty .multiclaude file
+		configPath := filepath.Join(tmpDir, ".multiclaude")
+		if err := os.WriteFile(configPath, []byte(""), 0644); err != nil {
+			t.Fatalf("failed to create .multiclaude file: %v", err)
+		}
+
+		if err := os.Chdir(tmpDir); err != nil {
+			t.Fatalf("failed to chdir to tmpDir: %v", err)
+		}
+
+		_, err := cli.findRepoFromConfigFile()
+		if err == nil {
+			t.Error("findRepoFromConfigFile() expected error for empty file")
+		}
+	})
+
+	t.Run("returns error when no file exists", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		if err := os.Chdir(tmpDir); err != nil {
+			t.Fatalf("failed to chdir to tmpDir: %v", err)
+		}
+
+		_, err := cli.findRepoFromConfigFile()
+		if err == nil {
+			t.Error("findRepoFromConfigFile() expected error when no .multiclaude file exists")
+		}
+	})
+
+	t.Run("trims whitespace from repo name", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create .multiclaude file with extra whitespace
+		configPath := filepath.Join(tmpDir, ".multiclaude")
+		if err := os.WriteFile(configPath, []byte("  spaced-repo  \n"), 0644); err != nil {
+			t.Fatalf("failed to create .multiclaude file: %v", err)
+		}
+
+		if err := os.Chdir(tmpDir); err != nil {
+			t.Fatalf("failed to chdir to tmpDir: %v", err)
+		}
+
+		repoName, err := cli.findRepoFromConfigFile()
+		if err != nil {
+			t.Fatalf("findRepoFromConfigFile() unexpected error: %v", err)
+		}
+		if repoName != "spaced-repo" {
+			t.Errorf("findRepoFromConfigFile() = %q, want %q", repoName, "spaced-repo")
+		}
+	})
+
+	t.Run("only reads first line", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// Create .multiclaude file with multiple lines
+		configPath := filepath.Join(tmpDir, ".multiclaude")
+		if err := os.WriteFile(configPath, []byte("first-repo\nsecond-repo\nthird-repo"), 0644); err != nil {
+			t.Fatalf("failed to create .multiclaude file: %v", err)
+		}
+
+		if err := os.Chdir(tmpDir); err != nil {
+			t.Fatalf("failed to chdir to tmpDir: %v", err)
+		}
+
+		repoName, err := cli.findRepoFromConfigFile()
+		if err != nil {
+			t.Fatalf("findRepoFromConfigFile() unexpected error: %v", err)
+		}
+		if repoName != "first-repo" {
+			t.Errorf("findRepoFromConfigFile() = %q, want %q", repoName, "first-repo")
+		}
+	})
+}
+
 func TestHasPathPrefix(t *testing.T) {
 	tests := []struct {
 		name   string
