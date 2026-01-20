@@ -2194,3 +2194,258 @@ func TestSanitizeTmuxSessionName(t *testing.T) {
 		})
 	}
 }
+
+func TestLinkGlobalCredentials(t *testing.T) {
+	// Create temp directories for test
+	tmpDir := t.TempDir()
+	home := filepath.Join(tmpDir, "home")
+	configDir := filepath.Join(tmpDir, "claude-config")
+
+	// Create directory structure
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatalf("Failed to create home .claude dir: %v", err)
+	}
+
+	// Create mock global credentials
+	globalCred := filepath.Join(home, ".claude", ".credentials.json")
+	if err := os.WriteFile(globalCred, []byte(`{"token":"test123"}`), 0600); err != nil {
+		t.Fatalf("Failed to create global credentials: %v", err)
+	}
+
+	// Mock UserHomeDir to return our test home
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", originalHome)
+
+	cli := &CLI{}
+
+	// Test 1: Create symlink successfully (also creates the config directory)
+	if err := cli.linkGlobalCredentials(configDir); err != nil {
+		t.Fatalf("linkGlobalCredentials failed: %v", err)
+	}
+
+	// Verify symlink exists and points to right place
+	localCred := filepath.Join(configDir, ".credentials.json")
+	target, err := os.Readlink(localCred)
+	if err != nil {
+		t.Fatalf("Symlink not created: %v", err)
+	}
+
+	if target != globalCred {
+		t.Errorf("Symlink points to %s, expected %s", target, globalCred)
+	}
+
+	// Test 2: Running again should not error (idempotent)
+	if err := cli.linkGlobalCredentials(configDir); err != nil {
+		t.Errorf("linkGlobalCredentials should be idempotent: %v", err)
+	}
+
+	// Test 3: If file exists instead of symlink, it should be replaced
+	os.Remove(localCred)
+	if err := os.WriteFile(localCred, []byte("bad content"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	if err := cli.linkGlobalCredentials(configDir); err != nil {
+		t.Errorf("linkGlobalCredentials should replace file with symlink: %v", err)
+	}
+
+	// Verify it's now a symlink
+	target, err = os.Readlink(localCred)
+	if err != nil {
+		t.Errorf("Should have created symlink: %v", err)
+	}
+	if target != globalCred {
+		t.Errorf("Symlink points to %s, expected %s", target, globalCred)
+	}
+
+	// Test 4: No global credentials should not error
+	configDir2 := filepath.Join(tmpDir, "claude-config2")
+
+	os.Remove(globalCred)
+	if err := cli.linkGlobalCredentials(configDir2); err != nil {
+		t.Errorf("linkGlobalCredentials should not error when no global credentials: %v", err)
+	}
+
+	// Verify no symlink was created
+	localCred2 := filepath.Join(configDir2, ".credentials.json")
+	if _, err := os.Lstat(localCred2); !os.IsNotExist(err) {
+		t.Error("Should not have created symlink when no global credentials")
+	}
+}
+
+func TestRepairCredentials(t *testing.T) {
+	tmpDir := t.TempDir()
+	home := filepath.Join(tmpDir, "home")
+	claudeConfigDir := filepath.Join(tmpDir, "claude-config")
+
+	// Create global credentials
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatalf("Failed to create home .claude dir: %v", err)
+	}
+	globalCred := filepath.Join(home, ".claude", ".credentials.json")
+	if err := os.WriteFile(globalCred, []byte(`{"token":"test"}`), 0600); err != nil {
+		t.Fatalf("Failed to create global credentials: %v", err)
+	}
+
+	// Mock UserHomeDir
+	originalHome := os.Getenv("HOME")
+	os.Setenv("HOME", home)
+	defer os.Setenv("HOME", originalHome)
+
+	// Setup paths
+	paths := &config.Paths{
+		Root:            tmpDir,
+		StateFile:       filepath.Join(tmpDir, "state.json"),
+		WorktreesDir:    filepath.Join(tmpDir, "wts"),
+		ClaudeConfigDir: claudeConfigDir,
+	}
+
+	if err := os.MkdirAll(paths.WorktreesDir, 0755); err != nil {
+		t.Fatalf("Failed to create worktrees dir: %v", err)
+	}
+
+	// Create state with a repo
+	st := state.New(paths.StateFile)
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := st.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Create CLAUDE_CONFIG_DIR directories for agents
+	agents := []string{"worker1", "worker2", "worker3"}
+	for _, agent := range agents {
+		agentConfigDir := filepath.Join(claudeConfigDir, "test-repo", agent)
+		if err := os.MkdirAll(agentConfigDir, 0755); err != nil {
+			t.Fatalf("Failed to create agent config dir: %v", err)
+		}
+	}
+
+	// worker1: No credentials (needs repair)
+	// worker2: Has valid symlink (should be skipped)
+	// worker3: Has file instead of symlink (needs repair)
+
+	worker2Cred := filepath.Join(claudeConfigDir, "test-repo", "worker2", ".credentials.json")
+	if err := os.Symlink(globalCred, worker2Cred); err != nil {
+		t.Fatalf("Failed to create worker2 symlink: %v", err)
+	}
+
+	worker3Cred := filepath.Join(claudeConfigDir, "test-repo", "worker3", ".credentials.json")
+	if err := os.WriteFile(worker3Cred, []byte("wrong"), 0644); err != nil {
+		t.Fatalf("Failed to create worker3 file: %v", err)
+	}
+
+	// Create CLI and run repair
+	cli := &CLI{paths: paths}
+	fixed, err := cli.repairCredentials(false)
+	if err != nil {
+		t.Fatalf("repairCredentials failed: %v", err)
+	}
+
+	// Should have fixed 2 agents (worker1 and worker3)
+	if fixed != 2 {
+		t.Errorf("Expected 2 agents fixed, got %d", fixed)
+	}
+
+	// Verify all three now have valid symlinks
+	for _, agent := range agents {
+		credPath := filepath.Join(claudeConfigDir, "test-repo", agent, ".credentials.json")
+		target, err := os.Readlink(credPath)
+		if err != nil {
+			t.Errorf("Agent %s should have symlink: %v", agent, err)
+			continue
+		}
+		if target != globalCred {
+			t.Errorf("Agent %s symlink points to %s, expected %s", agent, target, globalCred)
+		}
+	}
+}
+
+func TestGetVersion(t *testing.T) {
+	// Save original version
+	originalVersion := Version
+	defer func() { Version = originalVersion }()
+
+	tests := []struct {
+		name        string
+		version     string
+		wantPrefix  string
+		wantSuffix  string
+		wantContain string
+	}{
+		{
+			name:       "release version unchanged",
+			version:    "v1.2.3",
+			wantPrefix: "v1.2.3",
+		},
+		{
+			name:       "semver without v prefix unchanged",
+			version:    "1.0.0",
+			wantPrefix: "1.0.0",
+		},
+		{
+			name:        "dev version gets semver format",
+			version:     "dev",
+			wantPrefix:  "0.0.0",
+			wantContain: "dev",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			Version = tt.version
+			got := GetVersion()
+
+			if tt.wantPrefix != "" && !strings.HasPrefix(got, tt.wantPrefix) {
+				t.Errorf("GetVersion() = %q, want prefix %q", got, tt.wantPrefix)
+			}
+			if tt.wantSuffix != "" && !strings.HasSuffix(got, tt.wantSuffix) {
+				t.Errorf("GetVersion() = %q, want suffix %q", got, tt.wantSuffix)
+			}
+			if tt.wantContain != "" && !strings.Contains(got, tt.wantContain) {
+				t.Errorf("GetVersion() = %q, want to contain %q", got, tt.wantContain)
+			}
+		})
+	}
+}
+
+func TestIsDevVersion(t *testing.T) {
+	// Save original version
+	originalVersion := Version
+	defer func() { Version = originalVersion }()
+
+	tests := []struct {
+		name    string
+		version string
+		want    bool
+	}{
+		{
+			name:    "dev is dev version",
+			version: "dev",
+			want:    true,
+		},
+		{
+			name:    "release version is not dev",
+			version: "v1.2.3",
+			want:    false,
+		},
+		{
+			name:    "semver is not dev",
+			version: "1.0.0",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			Version = tt.version
+			if got := IsDevVersion(); got != tt.want {
+				t.Errorf("IsDevVersion() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
