@@ -1699,6 +1699,12 @@ func (c *CLI) createWorker(args []string) error {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
 	}
 
+	// Link global credentials to CLAUDE_CONFIG_DIR (where Claude actually looks for them)
+	workerConfigDir := c.paths.AgentClaudeConfigDir(repoName, workerName)
+	if err := c.linkGlobalCredentials(workerConfigDir); err != nil {
+		fmt.Printf("Warning: failed to link credentials: %v\n", err)
+	}
+
 	// Start Claude in worker window with initial task (skip in test mode)
 	var workerPID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
@@ -2301,6 +2307,12 @@ func (c *CLI) addWorkspace(args []string) error {
 	// Copy hooks configuration if it exists
 	if err := hooks.CopyConfig(repoPath, wtPath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
+	}
+
+	// Link global credentials to CLAUDE_CONFIG_DIR (where Claude actually looks for them)
+	workspaceConfigDir := c.paths.AgentClaudeConfigDir(repoName, workspaceName)
+	if err := c.linkGlobalCredentials(workspaceConfigDir); err != nil {
+		fmt.Printf("Warning: failed to link credentials: %v\n", err)
 	}
 
 	// Start Claude in workspace window (skip in test mode)
@@ -3174,6 +3186,12 @@ func (c *CLI) reviewPR(args []string) error {
 	// Copy hooks configuration if it exists
 	if err := hooks.CopyConfig(repoPath, wtPath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
+	}
+
+	// Link global credentials to CLAUDE_CONFIG_DIR (where Claude actually looks for them)
+	reviewerConfigDir := c.paths.AgentClaudeConfigDir(repoName, reviewerName)
+	if err := c.linkGlobalCredentials(reviewerConfigDir); err != nil {
+		fmt.Printf("Warning: failed to link credentials: %v\n", err)
 	}
 
 	// Start Claude in reviewer window with initial task (skip in test mode)
@@ -4607,23 +4625,30 @@ func (c *CLI) bugReport(args []string) error {
 	return nil
 }
 
-// linkGlobalCredentials creates a symlink from the worktree's .claude/.credentials.json
+// linkGlobalCredentials creates a symlink from the Claude config directory's .credentials.json
 // to the global ~/.claude/.credentials.json. This ensures workers can access OAuth
 // credentials without duplicating sensitive files.
-func (c *CLI) linkGlobalCredentials(worktreePath string) error {
+//
+// When CLAUDE_CONFIG_DIR is set, Claude looks for credentials there, not in the
+// project's .claude directory or the global ~/.claude directory.
+func (c *CLI) linkGlobalCredentials(claudeConfigDir string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
 	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
-	localClaudeDir := filepath.Join(worktreePath, ".claude")
-	localCredFile := filepath.Join(localClaudeDir, ".credentials.json")
+	localCredFile := filepath.Join(claudeConfigDir, ".credentials.json")
 
 	// Check if global credentials exist
 	if _, err := os.Stat(globalCredFile); os.IsNotExist(err) {
 		// No global credentials - user might be using API key
 		return nil
+	}
+
+	// Ensure the config directory exists
+	if err := os.MkdirAll(claudeConfigDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	// Check if symlink already exists and is valid
@@ -4647,7 +4672,7 @@ func (c *CLI) linkGlobalCredentials(worktreePath string) error {
 	return nil
 }
 
-// repairCredentials fixes worktrees that are missing credential symlinks
+// repairCredentials fixes CLAUDE_CONFIG_DIR directories that are missing credential symlinks
 func (c *CLI) repairCredentials(verbose bool) (int, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -4672,18 +4697,18 @@ func (c *CLI) repairCredentials(verbose bool) (int, error) {
 
 	fixed := 0
 	for _, repoName := range st.ListRepos() {
-		wtRootDir := c.paths.WorktreeDir(repoName)
+		// Walk CLAUDE_CONFIG_DIR directories for this repo
+		repoConfigDir := filepath.Join(c.paths.ClaudeConfigDir, repoName)
 
-		// Skip if worktree directory doesn't exist
-		if _, err := os.Stat(wtRootDir); os.IsNotExist(err) {
+		// Skip if config directory doesn't exist
+		if _, err := os.Stat(repoConfigDir); os.IsNotExist(err) {
 			continue
 		}
 
-		// Walk all worktrees
-		entries, err := os.ReadDir(wtRootDir)
+		entries, err := os.ReadDir(repoConfigDir)
 		if err != nil {
 			if verbose {
-				fmt.Printf("  Warning: failed to read worktree dir for %s: %v\n", repoName, err)
+				fmt.Printf("  Warning: failed to read config dir for %s: %v\n", repoName, err)
 			}
 			continue
 		}
@@ -4693,15 +4718,8 @@ func (c *CLI) repairCredentials(verbose bool) (int, error) {
 				continue
 			}
 
-			worktreePath := filepath.Join(wtRootDir, entry.Name())
-			claudeDir := filepath.Join(worktreePath, ".claude")
-
-			// Skip if .claude doesn't exist
-			if _, err := os.Stat(claudeDir); os.IsNotExist(err) {
-				continue
-			}
-
-			localCredFile := filepath.Join(claudeDir, ".credentials.json")
+			agentConfigDir := filepath.Join(repoConfigDir, entry.Name())
+			localCredFile := filepath.Join(agentConfigDir, ".credentials.json")
 
 			// Check if credentials already exist and are a valid symlink
 			if linkTarget, err := os.Readlink(localCredFile); err == nil {
@@ -4710,6 +4728,7 @@ func (c *CLI) repairCredentials(verbose bool) (int, error) {
 					continue
 				}
 				// Invalid symlink, will be recreated below
+				os.Remove(localCredFile)
 			} else if _, err := os.Stat(localCredFile); err == nil {
 				// File exists but is not a symlink, remove it
 				if verbose {
