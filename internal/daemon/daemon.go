@@ -18,6 +18,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/provider"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
+	"github.com/dlorenc/multiclaude/internal/update"
 	"github.com/dlorenc/multiclaude/internal/worktree"
 	"github.com/dlorenc/multiclaude/pkg/claude"
 	"github.com/dlorenc/multiclaude/pkg/config"
@@ -33,6 +34,7 @@ type Daemon struct {
 	server       *socket.Server
 	pidFile      *PIDFile
 	claudeRunner *claude.Runner
+	version      string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -40,7 +42,7 @@ type Daemon struct {
 }
 
 // New creates a new daemon instance
-func New(paths *config.Paths) (*Daemon, error) {
+func New(paths *config.Paths, version string) (*Daemon, error) {
 	// Ensure directories exist
 	if err := paths.EnsureDirectories(); err != nil {
 		return nil, fmt.Errorf("failed to create directories: %w", err)
@@ -68,6 +70,7 @@ func New(paths *config.Paths) (*Daemon, error) {
 		logger:       logger,
 		pidFile:      NewPIDFile(paths.DaemonPID),
 		claudeRunner: claude.NewRunner(claude.WithTerminal(tmuxClient)),
+		version:      version,
 		ctx:          ctx,
 		cancel:       cancel,
 	}
@@ -101,11 +104,12 @@ func (d *Daemon) Start() error {
 	d.restoreTrackedRepos()
 
 	// Start core loops after restore completes
-	d.wg.Add(4)
+	d.wg.Add(5)
 	go d.healthCheckLoop()
 	go d.messageRouterLoop()
 	go d.wakeLoop()
 	go d.serverLoop()
+	go d.updateCheckLoop()
 
 	return nil
 }
@@ -449,6 +453,70 @@ func (d *Daemon) wakeAgents() {
 	}
 }
 
+// updateCheckLoop periodically checks for available updates (every 30 minutes)
+func (d *Daemon) updateCheckLoop() {
+	defer d.wg.Done()
+	d.logger.Info("Starting update check loop")
+
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	// Run once immediately on startup (with a small delay to let daemon stabilize)
+	time.Sleep(10 * time.Second)
+	d.checkForUpdates()
+
+	for {
+		select {
+		case <-ticker.C:
+			d.checkForUpdates()
+		case <-d.ctx.Done():
+			d.logger.Info("Update check loop stopped")
+			return
+		}
+	}
+}
+
+// checkForUpdates checks for available updates and logs/stores the result
+func (d *Daemon) checkForUpdates() {
+	d.logger.Debug("Checking for updates")
+
+	checker := update.NewChecker(d.version)
+
+	ctx, cancel := context.WithTimeout(d.ctx, 30*time.Second)
+	defer cancel()
+
+	result, err := checker.CheckWithFallback(ctx)
+
+	status := state.UpdateStatus{
+		LastChecked:    time.Now(),
+		CurrentVersion: d.version,
+	}
+
+	if err != nil {
+		d.logger.Debug("Update check failed: %v", err)
+		status.LastError = err.Error()
+	} else {
+		status.LatestVersion = result.LatestVersion
+		status.UpdateAvailable = result.UpdateAvailable
+
+		if result.UpdateAvailable {
+			d.logger.Info("Update available: %s -> %s (run 'multiclaude update' to upgrade)", d.version, result.LatestVersion)
+		} else {
+			d.logger.Debug("No update available (current: %s, latest: %s)", d.version, result.LatestVersion)
+		}
+	}
+
+	// Save update status to state
+	if err := d.state.SetUpdateStatus(status); err != nil {
+		d.logger.Error("Failed to save update status: %v", err)
+	}
+}
+
+// TriggerUpdateCheck triggers an immediate update check (for testing)
+func (d *Daemon) TriggerUpdateCheck() {
+	d.checkForUpdates()
+}
+
 // handleRequest handles incoming socket requests
 func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	d.logger.Debug("Handling request: %s", req.Command)
@@ -512,6 +580,13 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	case "route_messages":
 		go d.routeMessages()
 		return socket.Response{Success: true, Data: "Message routing triggered"}
+
+	case "get_update_status":
+		return d.handleGetUpdateStatus(req)
+
+	case "check_updates":
+		go d.checkForUpdates()
+		return socket.Response{Success: true, Data: "Update check triggered"}
 
 	default:
 		return socket.Response{
@@ -1102,6 +1177,21 @@ func (d *Daemon) handleClearCurrentRepo(req socket.Request) socket.Response {
 	return socket.Response{Success: true}
 }
 
+// handleGetUpdateStatus returns the current update status
+func (d *Daemon) handleGetUpdateStatus(req socket.Request) socket.Response {
+	status := d.state.GetUpdateStatus()
+	return socket.Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"current_version":  status.CurrentVersion,
+			"latest_version":   status.LatestVersion,
+			"update_available": status.UpdateAvailable,
+			"last_checked":     status.LastChecked,
+			"last_error":       status.LastError,
+		},
+	}
+}
+
 // cleanupDeadAgents removes dead agents from state
 func (d *Daemon) cleanupDeadAgents(deadAgents map[string][]string) {
 	for repoName, agentNames := range deadAgents {
@@ -1663,13 +1753,13 @@ func isProcessAlive(pid int) bool {
 }
 
 // Run runs the daemon in the foreground
-func Run() error {
+func Run(version string) error {
 	paths, err := config.DefaultPaths()
 	if err != nil {
 		return fmt.Errorf("failed to get paths: %w", err)
 	}
 
-	d, err := New(paths)
+	d, err := New(paths, version)
 	if err != nil {
 		return fmt.Errorf("failed to create daemon: %w", err)
 	}
