@@ -380,3 +380,169 @@ func TestExtractQuotedValue(t *testing.T) {
 		})
 	}
 }
+
+func TestInvalidUsage(t *testing.T) {
+	err := InvalidUsage("command requires an argument")
+
+	if err.Category != CategoryUsage {
+		t.Errorf("expected CategoryUsage, got %v", err.Category)
+	}
+	if err.Message != "command requires an argument" {
+		t.Errorf("expected message to match input, got: %s", err.Message)
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "Usage error:") {
+		t.Errorf("expected 'Usage error:' prefix, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "command requires an argument") {
+		t.Errorf("expected message in output, got: %s", formatted)
+	}
+}
+
+func TestGitOperationFailed(t *testing.T) {
+	cause := errors.New("permission denied")
+	err := GitOperationFailed("push", cause)
+
+	if err.Category != CategoryRuntime {
+		t.Errorf("expected CategoryRuntime, got %v", err.Category)
+	}
+	if err.Cause != cause {
+		t.Error("should wrap cause")
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "git push failed") {
+		t.Errorf("expected operation in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "permission denied") {
+		t.Errorf("expected cause in output, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "git status") {
+		t.Errorf("expected git status suggestion, got: %s", formatted)
+	}
+}
+
+func TestProviderNotFound(t *testing.T) {
+	tests := []struct {
+		name          string
+		provider      string
+		wantContains  string
+	}{
+		{
+			name:         "claude provider",
+			provider:     "claude",
+			wantContains: "anthropic",
+		},
+		{
+			name:         "happy provider",
+			provider:     "happy",
+			wantContains: "happy.engineering",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cause := errors.New("not found in PATH")
+			err := ProviderNotFound(tt.provider, cause)
+
+			if err.Category != CategoryConfig {
+				t.Errorf("expected CategoryConfig, got %v", err.Category)
+			}
+			if err.Cause != cause {
+				t.Error("should wrap cause")
+			}
+
+			formatted := Format(err)
+			if !strings.Contains(formatted, tt.provider) {
+				t.Errorf("expected provider name in message, got: %s", formatted)
+			}
+			if !strings.Contains(formatted, tt.wantContains) {
+				t.Errorf("expected %q in suggestion, got: %s", tt.wantContains, formatted)
+			}
+		})
+	}
+}
+
+func TestProviderAuthNotConfigured(t *testing.T) {
+	err := ProviderAuthNotConfigured("claude")
+
+	if err.Category != CategoryConfig {
+		t.Errorf("expected CategoryConfig, got %v", err.Category)
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "claude") {
+		t.Errorf("expected provider name, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "authentication") {
+		t.Errorf("expected 'authentication' in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "auth login") {
+		t.Errorf("expected auth login suggestion, got: %s", formatted)
+	}
+}
+
+func TestInvalidProvider(t *testing.T) {
+	err := InvalidProvider("unknown-provider")
+
+	if err.Category != CategoryUsage {
+		t.Errorf("expected CategoryUsage, got %v", err.Category)
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "unknown-provider") {
+		t.Errorf("expected invalid value in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "claude") || !strings.Contains(formatted, "happy") {
+		t.Errorf("expected valid providers in suggestion, got: %s", formatted)
+	}
+}
+
+func TestNotInAgentContext(t *testing.T) {
+	err := NotInAgentContext()
+
+	if err.Category != CategoryConfig {
+		t.Errorf("expected CategoryConfig, got %v", err.Category)
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "agent") {
+		t.Errorf("expected 'agent' in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "tmux") {
+		t.Errorf("expected tmux in suggestion, got: %s", formatted)
+	}
+}
+
+func TestMissingArgument_WithoutType(t *testing.T) {
+	err := MissingArgument("filename", "")
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "filename") {
+		t.Errorf("expected argument name, got: %s", formatted)
+	}
+	// Should not contain parentheses when type is empty
+	if strings.Contains(formatted, "()") {
+		t.Errorf("should not show empty type parentheses, got: %s", formatted)
+	}
+}
+
+func TestCategoryPrefix_DefaultCase(t *testing.T) {
+	// Test that unknown category defaults to "Error:"
+	err := &CLIError{
+		Category: Category(999), // Invalid category
+		Message:  "test message",
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "Error:") {
+		t.Errorf("expected default 'Error:' prefix for unknown category, got: %s", formatted)
+	}
+}
