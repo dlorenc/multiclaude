@@ -340,7 +340,7 @@ func setupTestEnvironment(t *testing.T) (*CLI, *daemon.Daemon, func()) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Create CLI with test paths
-	cli := NewWithPaths(paths, "")
+	cli := NewWithPaths(paths)
 
 	cleanup := func() {
 		d.Stop()
@@ -685,7 +685,7 @@ func TestCLISendMessageFallbackWhenDaemonUnavailable(t *testing.T) {
 	}
 
 	// Create CLI
-	cli := NewWithPaths(paths, "")
+	cli := NewWithPaths(paths)
 
 	// Change to worktree directory
 	origDir, _ := os.Getwd()
@@ -1042,14 +1042,8 @@ func TestNewWithPaths(t *testing.T) {
 		OutputDir:    filepath.Join(tmpDir, "output"),
 	}
 
-	// Test CLI creation (second parameter is now ignored, provider resolved at runtime)
-	cli := NewWithPaths(paths, "")
-	if cli == nil {
-		t.Fatal("CLI should not be nil")
-	}
-
-	// Test with custom path (now ignored - provider resolved per-repo at runtime)
-	cli = NewWithPaths(paths, "/custom/path/claude")
+	// Test CLI creation
+	cli := NewWithPaths(paths)
 	if cli == nil {
 		t.Fatal("CLI should not be nil")
 	}

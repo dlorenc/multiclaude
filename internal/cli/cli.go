@@ -69,7 +69,7 @@ func New() (*CLI, error) {
 }
 
 // NewWithPaths creates a CLI with custom paths (for testing)
-func NewWithPaths(paths *config.Paths, _ string) *CLI {
+func NewWithPaths(paths *config.Paths) *CLI {
 	cli := &CLI{
 		paths: paths,
 		rootCmd: &Command{
@@ -91,7 +91,7 @@ func NewWithPaths(paths *config.Paths, _ string) *CLI {
 func (c *CLI) getClaudeBinary() (string, error) {
 	binaryPath, err := exec.LookPath("claude")
 	if err != nil {
-		return "", errors.ProviderNotFound("claude", err)
+		return "", errors.ClaudeNotFound(err)
 	}
 	return binaryPath, nil
 }
@@ -1372,9 +1372,8 @@ func (c *CLI) configRepo(args []string) error {
 	// Check if any config flags are provided
 	hasMqEnabled := flags["mq-enabled"] != ""
 	hasMqTrack := flags["mq-track"] != ""
-	hasProvider := flags["provider"] != ""
 
-	if !hasMqEnabled && !hasMqTrack && !hasProvider {
+	if !hasMqEnabled && !hasMqTrack {
 		// No flags - just show current config
 		return c.showRepoConfig(repoName)
 	}
@@ -1425,17 +1424,9 @@ func (c *CLI) showRepoConfig(repoName string) error {
 		fmt.Printf("  Enabled: false\n")
 	}
 
-	// Show provider config
-	providerStr := "claude"
-	if p, ok := configMap["provider"].(string); ok && p != "" {
-		providerStr = p
-	}
-	fmt.Printf("\nProvider: %s\n", providerStr)
-
 	fmt.Println("\nTo modify:")
 	fmt.Printf("  multiclaude config %s --mq-enabled=true|false\n", repoName)
 	fmt.Printf("  multiclaude config %s --mq-track=all|author|assigned\n", repoName)
-	fmt.Printf("  multiclaude config %s --provider=claude|happy\n", repoName)
 
 	return nil
 }
