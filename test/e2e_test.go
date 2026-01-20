@@ -78,7 +78,7 @@ func TestPhase2Integration(t *testing.T) {
 	}
 
 	// Create daemon
-	d, err := daemon.New(paths)
+	d, err := daemon.New(paths, "test")
 	if err != nil {
 		t.Fatalf("Failed to create daemon: %v", err)
 	}

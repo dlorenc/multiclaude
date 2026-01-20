@@ -39,7 +39,7 @@ func setupTestDaemonWithState(t *testing.T, setupFn func(*state.State)) (*Daemon
 		t.Fatalf("Failed to create directories: %v", err)
 	}
 
-	d, err := New(paths)
+	d, err := New(paths, "test")
 	if err != nil {
 		t.Fatalf("Failed to create daemon: %v", err)
 	}
