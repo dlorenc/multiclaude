@@ -15,7 +15,6 @@ import (
 	"github.com/dlorenc/multiclaude/internal/logging"
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/prompts"
-	"github.com/dlorenc/multiclaude/internal/provider"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/internal/worktree"
@@ -994,18 +993,11 @@ func (d *Daemon) handleGetRepoConfig(req socket.Request) socket.Response {
 		mqConfig = state.DefaultMergeQueueConfig()
 	}
 
-	// Get provider config (use default if not set for backward compatibility)
-	providerConfig := repo.ProviderConfig
-	if providerConfig.Provider == "" {
-		providerConfig = state.DefaultProviderConfig()
-	}
-
 	return socket.Response{
 		Success: true,
 		Data: map[string]interface{}{
 			"mq_enabled":    mqConfig.Enabled,
 			"mq_track_mode": string(mqConfig.TrackMode),
-			"provider":      string(providerConfig.Provider),
 		},
 	}
 }
@@ -1048,24 +1040,6 @@ func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
 			return socket.Response{Success: false, Error: err.Error()}
 		}
 		d.logger.Info("Updated merge queue config for repo %s: enabled=%v, track=%s", name, currentMQConfig.Enabled, currentMQConfig.TrackMode)
-	}
-
-	// Handle provider config update
-	if providerVal, ok := req.Args["provider"].(string); ok {
-		switch providerVal {
-		case "claude", "happy":
-			// Validate the provider is available before setting
-			if _, err := provider.Resolve(state.ProviderType(providerVal)); err != nil {
-				return socket.Response{Success: false, Error: fmt.Sprintf("provider %s not available: %v", providerVal, err)}
-			}
-			providerConfig := state.ProviderConfig{Provider: state.ProviderType(providerVal)}
-			if err := d.state.UpdateProviderConfig(name, providerConfig); err != nil {
-				return socket.Response{Success: false, Error: err.Error()}
-			}
-			d.logger.Info("Updated provider for repo %s: %s", name, providerVal)
-		default:
-			return socket.Response{Success: false, Error: fmt.Sprintf("invalid provider: %s (must be 'claude' or 'happy')", providerVal)}
-		}
 	}
 
 	return socket.Response{Success: true}
@@ -1409,27 +1383,21 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 	return nil
 }
 
-// getProviderBinaryPath resolves the CLI binary path for a repository based on its provider config
-func (d *Daemon) getProviderBinaryPath(repoName string) (string, error) {
-	providerConfig, err := d.state.GetProviderConfig(repoName)
+// getClaudeBinaryPath resolves the claude CLI binary path
+func (d *Daemon) getClaudeBinaryPath() (string, error) {
+	binaryPath, err := exec.LookPath("claude")
 	if err != nil {
-		return "", fmt.Errorf("failed to get provider config: %w", err)
+		return "", fmt.Errorf("claude binary not found in PATH: %w", err)
 	}
-
-	info, err := provider.Resolve(providerConfig.Provider)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve provider: %w", err)
-	}
-
-	return info.BinaryPath, nil
+	return binaryPath, nil
 }
 
 // startAgent starts a Claude agent in a tmux window and registers it with state
 func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName string, agentType prompts.AgentType, workDir string) error {
-	// Resolve provider binary path for this repo
-	binaryPath, err := d.getProviderBinaryPath(repoName)
+	// Resolve claude binary path
+	binaryPath, err := d.getClaudeBinaryPath()
 	if err != nil {
-		return fmt.Errorf("failed to resolve provider: %w", err)
+		return fmt.Errorf("failed to resolve claude binary: %w", err)
 	}
 
 	// Generate session ID
@@ -1490,10 +1458,10 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 
 // startMergeQueueAgent starts a merge-queue agent with tracking mode configuration
 func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, workDir string, mqConfig state.MergeQueueConfig) error {
-	// Resolve provider binary path for this repo
-	binaryPath, err := d.getProviderBinaryPath(repoName)
+	// Resolve claude binary path
+	binaryPath, err := d.getClaudeBinaryPath()
 	if err != nil {
-		return fmt.Errorf("failed to resolve provider: %w", err)
+		return fmt.Errorf("failed to resolve claude binary: %w", err)
 	}
 
 	// Generate session ID

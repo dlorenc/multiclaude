@@ -31,29 +31,6 @@ const (
 	TrackModeAssigned TrackMode = "assigned"
 )
 
-// ProviderType defines which CLI backend to use
-type ProviderType string
-
-const (
-	// ProviderClaude uses the claude CLI (default)
-	ProviderClaude ProviderType = "claude"
-	// ProviderHappy uses the happy CLI from happy.engineering
-	ProviderHappy ProviderType = "happy"
-)
-
-// ProviderConfig holds configuration for the CLI provider
-type ProviderConfig struct {
-	// Provider is the CLI backend to use: "claude" or "happy" (default: "claude")
-	Provider ProviderType `json:"provider"`
-}
-
-// DefaultProviderConfig returns the default provider configuration
-func DefaultProviderConfig() ProviderConfig {
-	return ProviderConfig{
-		Provider: ProviderClaude,
-	}
-}
-
 // MergeQueueConfig holds configuration for the merge queue agent
 type MergeQueueConfig struct {
 	// Enabled determines whether the merge queue agent should run (default: true)
@@ -118,7 +95,6 @@ type Repository struct {
 	Agents           map[string]Agent   `json:"agents"`
 	TaskHistory      []TaskHistoryEntry `json:"task_history,omitempty"`
 	MergeQueueConfig MergeQueueConfig   `json:"merge_queue_config,omitempty"`
-	ProviderConfig   ProviderConfig     `json:"provider_config,omitempty"`
 }
 
 // State represents the entire daemon state
@@ -282,7 +258,6 @@ func (s *State) GetAllRepos() map[string]*Repository {
 			TmuxSession:      repo.TmuxSession,
 			Agents:           make(map[string]Agent, len(repo.Agents)),
 			MergeQueueConfig: repo.MergeQueueConfig,
-			ProviderConfig:   repo.ProviderConfig,
 		}
 		// Copy agents
 		for agentName, agent := range repo.Agents {
@@ -422,37 +397,6 @@ func (s *State) UpdateMergeQueueConfig(repoName string, config MergeQueueConfig)
 	}
 
 	repo.MergeQueueConfig = config
-	return s.saveUnlocked()
-}
-
-// GetProviderConfig returns the provider config for a repository
-func (s *State) GetProviderConfig(repoName string) (ProviderConfig, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	repo, exists := s.Repos[repoName]
-	if !exists {
-		return ProviderConfig{}, fmt.Errorf("repository %q not found", repoName)
-	}
-
-	// Return default config if not set (for backward compatibility)
-	if repo.ProviderConfig.Provider == "" {
-		return DefaultProviderConfig(), nil
-	}
-	return repo.ProviderConfig, nil
-}
-
-// UpdateProviderConfig updates the provider config for a repository
-func (s *State) UpdateProviderConfig(repoName string, config ProviderConfig) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	repo, exists := s.Repos[repoName]
-	if !exists {
-		return fmt.Errorf("repository %q not found", repoName)
-	}
-
-	repo.ProviderConfig = config
 	return s.saveUnlocked()
 }
 

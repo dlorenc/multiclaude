@@ -17,7 +17,6 @@ import (
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/names"
 	"github.com/dlorenc/multiclaude/internal/prompts"
-	"github.com/dlorenc/multiclaude/internal/provider"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/internal/worktree"
@@ -88,46 +87,13 @@ func NewWithPaths(paths *config.Paths, _ string) *CLI {
 	return cli
 }
 
-// getProviderForRepo resolves the provider binary for a repository
-func (c *CLI) getProviderForRepo(repoName string) (*provider.Info, error) {
-	// Get repo config from daemon to determine provider
-	client := socket.NewClient(c.paths.DaemonSock)
-	resp, err := client.Send(socket.Request{
-		Command: "get_repo_config",
-		Args:    map[string]interface{}{"name": repoName},
-	})
+// getClaudeBinary resolves the claude binary path
+func (c *CLI) getClaudeBinary() (string, error) {
+	binaryPath, err := exec.LookPath("claude")
 	if err != nil {
-		return nil, fmt.Errorf("failed to get repo config: %w", err)
+		return "", errors.ProviderNotFound("claude", err)
 	}
-	if resp.Error != "" {
-		return nil, fmt.Errorf("%s", resp.Error)
-	}
-
-	// Extract provider from config
-	var providerType state.ProviderType
-	if configData, ok := resp.Data.(map[string]interface{}); ok {
-		if p, ok := configData["provider"].(string); ok && p != "" {
-			providerType = state.ProviderType(p)
-		}
-	}
-
-	// Resolve the provider binary
-	info, err := provider.Resolve(providerType)
-	if err != nil {
-		// Convert provider errors to CLI errors
-		switch e := err.(type) {
-		case *provider.NotFoundError:
-			return nil, errors.ProviderNotFound(string(e.Provider), e.Cause)
-		case *provider.AuthNotConfiguredError:
-			return nil, errors.ProviderAuthNotConfigured(string(e.Provider))
-		case *provider.InvalidProviderError:
-			return nil, errors.InvalidProvider(e.Provider)
-		default:
-			return nil, err
-		}
-	}
-
-	return info, nil
+	return binaryPath, nil
 }
 
 // tmuxSanitizer replaces problematic characters with hyphens for tmux session names.
@@ -889,14 +855,14 @@ func (c *CLI) initRepo(args []string) error {
 	// Start Claude in supervisor window (skip in test mode)
 	var supervisorPID, mergeQueuePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve provider directly for new repos (can't query daemon - repo not registered yet)
-		providerInfo, err := provider.Resolve(state.ProviderClaude)
+		// Resolve claude binary
+		claudeBinary, err := c.getClaudeBinary()
 		if err != nil {
-			return fmt.Errorf("failed to resolve provider: %w", err)
+			return fmt.Errorf("failed to resolve claude binary: %w", err)
 		}
 
 		fmt.Println("Starting Claude Code in supervisor window...")
-		pid, err := c.startClaudeInTmux(providerInfo.BinaryPath, tmuxSession, "supervisor", repoPath, supervisorSessionID, supervisorPromptFile, "")
+		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, "supervisor", repoPath, supervisorSessionID, supervisorPromptFile, "")
 		if err != nil {
 			return fmt.Errorf("failed to start supervisor Claude: %w", err)
 		}
@@ -910,7 +876,7 @@ func (c *CLI) initRepo(args []string) error {
 		// Start Claude in merge-queue window only if enabled
 		if mqEnabled {
 			fmt.Println("Starting Claude Code in merge-queue window...")
-			pid, err = c.startClaudeInTmux(providerInfo.BinaryPath, tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, "")
+			pid, err = c.startClaudeInTmux(claudeBinary, tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, "")
 			if err != nil {
 				return fmt.Errorf("failed to start merge-queue Claude: %w", err)
 			}
@@ -1034,14 +1000,14 @@ func (c *CLI) initRepo(args []string) error {
 	// Start Claude in default workspace window (skip in test mode)
 	var workspacePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve provider for this repository
-		providerInfo, err := c.getProviderForRepo(repoName)
+		// Resolve claude binary
+		claudeBinary, err := c.getClaudeBinary()
 		if err != nil {
-			return fmt.Errorf("failed to resolve provider: %w", err)
+			return fmt.Errorf("failed to resolve claude binary: %w", err)
 		}
 
 		fmt.Println("Starting Claude Code in default workspace window...")
-		pid, err := c.startClaudeInTmux(providerInfo.BinaryPath, tmuxSession, "default", workspacePath, workspaceSessionID, workspacePromptFile, "")
+		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, "default", workspacePath, workspaceSessionID, workspacePromptFile, "")
 		if err != nil {
 			return fmt.Errorf("failed to start default workspace Claude: %w", err)
 		}
@@ -1501,28 +1467,6 @@ func (c *CLI) updateRepoConfig(repoName string, flags map[string]string) error {
 		}
 	}
 
-	if providerVal, ok := flags["provider"]; ok {
-		switch providerVal {
-		case "claude", "happy":
-			// Validate that the provider binary exists and is configured
-			providerType := state.ProviderType(providerVal)
-			_, err := provider.Resolve(providerType)
-			if err != nil {
-				switch e := err.(type) {
-				case *provider.NotFoundError:
-					return errors.ProviderNotFound(string(e.Provider), e.Cause)
-				case *provider.AuthNotConfiguredError:
-					return errors.ProviderAuthNotConfigured(string(e.Provider))
-				default:
-					return err
-				}
-			}
-			updateArgs["provider"] = providerVal
-		default:
-			return errors.InvalidProvider(providerVal)
-		}
-	}
-
 	client := socket.NewClient(c.paths.DaemonSock)
 	resp, err := client.Send(socket.Request{
 		Command: "update_repo_config",
@@ -1665,15 +1609,15 @@ func (c *CLI) createWorker(args []string) error {
 	// Start Claude in worker window with initial task (skip in test mode)
 	var workerPID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve provider for this repository
-		providerInfo, err := c.getProviderForRepo(repoName)
+		// Resolve claude binary
+		claudeBinary, err := c.getClaudeBinary()
 		if err != nil {
-			return fmt.Errorf("failed to resolve provider: %w", err)
+			return fmt.Errorf("failed to resolve claude binary: %w", err)
 		}
 
 		fmt.Println("Starting Claude Code in worker window...")
 		initialMessage := fmt.Sprintf("Task: %s", task)
-		pid, err := c.startClaudeInTmux(providerInfo.BinaryPath, tmuxSession, workerName, wtPath, workerSessionID, workerPromptFile, initialMessage)
+		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workerName, wtPath, workerSessionID, workerPromptFile, initialMessage)
 		if err != nil {
 			return fmt.Errorf("failed to start worker Claude: %w", err)
 		}
@@ -2266,14 +2210,14 @@ func (c *CLI) addWorkspace(args []string) error {
 	// Start Claude in workspace window (skip in test mode)
 	var workspacePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve provider for this repository
-		providerInfo, err := c.getProviderForRepo(repoName)
+		// Resolve claude binary
+		claudeBinary, err := c.getClaudeBinary()
 		if err != nil {
-			return fmt.Errorf("failed to resolve provider: %w", err)
+			return fmt.Errorf("failed to resolve claude binary: %w", err)
 		}
 
 		fmt.Println("Starting Claude Code in workspace window...")
-		pid, err := c.startClaudeInTmux(providerInfo.BinaryPath, tmuxSession, workspaceName, wtPath, workspaceSessionID, workspacePromptFile, "")
+		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workspaceName, wtPath, workspaceSessionID, workspacePromptFile, "")
 		if err != nil {
 			return fmt.Errorf("failed to start workspace Claude: %w", err)
 		}
@@ -3139,15 +3083,15 @@ func (c *CLI) reviewPR(args []string) error {
 	// Start Claude in reviewer window with initial task (skip in test mode)
 	var reviewerPID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
-		// Resolve provider for this repository
-		providerInfo, err := c.getProviderForRepo(repoName)
+		// Resolve claude binary
+		claudeBinary, err := c.getClaudeBinary()
 		if err != nil {
-			return fmt.Errorf("failed to resolve provider: %w", err)
+			return fmt.Errorf("failed to resolve claude binary: %w", err)
 		}
 
 		fmt.Println("Starting Claude Code in reviewer window...")
 		initialMessage := fmt.Sprintf("Review PR #%s: https://github.com/%s/%s/pull/%s", prNumber, parts[1], parts[2], prNumber)
-		pid, err := c.startClaudeInTmux(providerInfo.BinaryPath, tmuxSession, reviewerName, wtPath, reviewerSessionID, reviewerPromptFile, initialMessage)
+		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, reviewerName, wtPath, reviewerSessionID, reviewerPromptFile, initialMessage)
 		if err != nil {
 			return fmt.Errorf("failed to start reviewer Claude: %w", err)
 		}
