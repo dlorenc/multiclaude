@@ -511,7 +511,7 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["config"] = &Command{
 		Name:        "config",
 		Description: "View or modify repository configuration",
-		Usage:       "multiclaude config [repo] [--mq-enabled=true|false] [--mq-track=all|author|assigned] [--oauth-token=<token>]",
+		Usage:       "multiclaude config [repo] [--mq-enabled=true|false] [--mq-track=all|author|assigned]",
 		Run:         c.configRepo,
 	}
 
@@ -1340,11 +1340,6 @@ func (c *CLI) clearCurrentRepo(args []string) error {
 func (c *CLI) configRepo(args []string) error {
 	flags, posArgs := ParseFlags(args)
 
-	// Handle global --oauth-token flag (doesn't require repo)
-	if oauthToken, hasToken := flags["oauth-token"]; hasToken {
-		return c.setOAuthToken(oauthToken)
-	}
-
 	// Determine repository
 	var repoName string
 	if len(posArgs) >= 1 {
@@ -1482,29 +1477,6 @@ func (c *CLI) updateRepoConfig(repoName string, flags map[string]string) error {
 
 	// Show the updated config
 	return c.showRepoConfig(repoName)
-}
-
-func (c *CLI) setOAuthToken(token string) error {
-	// Load state directly (no daemon needed for this)
-	s, err := state.Load(c.paths.StateFile)
-	if err != nil {
-		return fmt.Errorf("failed to load state: %w", err)
-	}
-
-	if err := s.SetOAuthToken(token); err != nil {
-		return fmt.Errorf("failed to save OAuth token: %w", err)
-	}
-
-	// Mask token for display
-	maskedToken := token
-	if len(token) > 20 {
-		maskedToken = token[:10] + "..." + token[len(token)-10:]
-	}
-
-	fmt.Printf("OAuth token configured: %s\n", maskedToken)
-	fmt.Println("\nNote: Restart the daemon for the token to take effect:")
-	fmt.Println("  multiclaude daemon stop && multiclaude start")
-	return nil
 }
 
 func (c *CLI) createWorker(args []string) error {
