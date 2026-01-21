@@ -19,7 +19,6 @@ import (
 	"github.com/dlorenc/multiclaude/internal/prompts/commands"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
-	"github.com/dlorenc/multiclaude/internal/update"
 	"github.com/dlorenc/multiclaude/internal/worktree"
 	"github.com/dlorenc/multiclaude/pkg/claude"
 	"github.com/dlorenc/multiclaude/pkg/config"
@@ -35,7 +34,6 @@ type Daemon struct {
 	server       *socket.Server
 	pidFile      *PIDFile
 	claudeRunner *claude.Runner
-	version      string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -43,7 +41,7 @@ type Daemon struct {
 }
 
 // New creates a new daemon instance
-func New(paths *config.Paths, version string) (*Daemon, error) {
+func New(paths *config.Paths) (*Daemon, error) {
 	// Ensure directories exist
 	if err := paths.EnsureDirectories(); err != nil {
 		return nil, fmt.Errorf("failed to create directories: %w", err)
@@ -71,7 +69,6 @@ func New(paths *config.Paths, version string) (*Daemon, error) {
 		logger:       logger,
 		pidFile:      NewPIDFile(paths.DaemonPID),
 		claudeRunner: claude.NewRunner(claude.WithTerminal(tmuxClient)),
-		version:      version,
 		ctx:          ctx,
 		cancel:       cancel,
 	}
@@ -105,12 +102,11 @@ func (d *Daemon) Start() error {
 	d.restoreTrackedRepos()
 
 	// Start core loops after restore completes
-	d.wg.Add(6)
+	d.wg.Add(5)
 	go d.healthCheckLoop()
 	go d.messageRouterLoop()
 	go d.wakeLoop()
 	go d.serverLoop()
-	go d.updateCheckLoop()
 	go d.worktreeRefreshLoop()
 
 	return nil
@@ -655,13 +651,6 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	case "task_history":
 		return d.handleTaskHistory(req)
 
-	case "get_update_status":
-		return d.handleGetUpdateStatus(req)
-
-	case "check_updates":
-		go d.checkForUpdates()
-		return socket.Response{Success: true, Data: "Update check triggered"}
-
 	default:
 		return socket.Response{
 			Success: false,
@@ -1182,15 +1171,6 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 		if count, err := msgMgr.CleanupOrphaned(repoName, validAgents); err == nil && count > 0 {
 			issuesFixed += count
 		}
-	}
-
-	// Repair missing credential symlinks
-	credFixed, err := d.repairCredentials()
-	if err != nil {
-		d.logger.Warn("Credential repair failed: %v", err)
-	} else if credFixed > 0 {
-		d.logger.Info("Repaired credentials in %d agent config(s)", credFixed)
-		issuesFixed += credFixed
 	}
 
 	d.logger.Info("State repair completed: %d agents removed, %d issues fixed", agentsRemoved, issuesFixed)
@@ -1724,20 +1704,9 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
-	// Set up per-agent Claude config directory with slash commands
-	agentConfigDir := d.paths.AgentClaudeConfigDir(repoName, agentName)
-	if err := commands.SetupAgentCommands(agentConfigDir); err != nil {
-		d.logger.Warn("Failed to setup agent commands: %v", err)
-	}
-
-	// Link global credentials to CLAUDE_CONFIG_DIR (where Claude actually looks for them)
-	if err := d.linkGlobalCredentials(agentConfigDir); err != nil {
-		d.logger.Warn("Failed to link credentials: %v", err)
-	}
-
-	// Build CLI command with CLAUDE_CONFIG_DIR set
-	claudeCmd := fmt.Sprintf("CLAUDE_CONFIG_DIR=%s %s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
-		agentConfigDir, binaryPath, sessionID, promptFile)
+	// Build CLI command
+	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
+		binaryPath, sessionID, promptFile)
 
 	// Send command to tmux window
 	target := fmt.Sprintf("%s:%s", repo.TmuxSession, agentName)
@@ -1799,20 +1768,9 @@ func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, w
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
-	// Set up per-agent Claude config directory with slash commands
-	agentConfigDir := d.paths.AgentClaudeConfigDir(repoName, "merge-queue")
-	if err := commands.SetupAgentCommands(agentConfigDir); err != nil {
-		d.logger.Warn("Failed to setup agent commands: %v", err)
-	}
-
-	// Link global credentials to CLAUDE_CONFIG_DIR (where Claude actually looks for them)
-	if err := d.linkGlobalCredentials(agentConfigDir); err != nil {
-		d.logger.Warn("Failed to link credentials: %v", err)
-	}
-
-	// Build CLI command with CLAUDE_CONFIG_DIR set
-	claudeCmd := fmt.Sprintf("CLAUDE_CONFIG_DIR=%s %s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
-		agentConfigDir, binaryPath, sessionID, promptFile)
+	// Build CLI command
+	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
+		binaryPath, sessionID, promptFile)
 
 	// Send command to tmux window
 	target := fmt.Sprintf("%s:merge-queue", repo.TmuxSession)
@@ -1969,13 +1927,13 @@ func isProcessAlive(pid int) bool {
 }
 
 // Run runs the daemon in the foreground
-func Run(version string) error {
+func Run() error {
 	paths, err := config.DefaultPaths()
 	if err != nil {
 		return fmt.Errorf("failed to get paths: %w", err)
 	}
 
-	d, err := New(paths, version)
+	d, err := New(paths)
 	if err != nil {
 		return fmt.Errorf("failed to create daemon: %w", err)
 	}
@@ -2219,98 +2177,4 @@ func (d *Daemon) repairCredentials() (int, error) {
 	}
 
 	return fixed, nil
-}
-
-// updateCheckLoop periodically checks for available updates (every 30 minutes)
-func (d *Daemon) updateCheckLoop() {
-	defer d.wg.Done()
-	d.logger.Info("Starting update check loop")
-
-	// Skip update checking for test versions (doesn't make sense to check)
-	if d.version == "test" || d.version == "" {
-		d.logger.Debug("Skipping update check loop for test version")
-		// Wait for context cancellation
-		<-d.ctx.Done()
-		d.logger.Info("Update check loop stopped")
-		return
-	}
-
-	ticker := time.NewTicker(30 * time.Minute)
-	defer ticker.Stop()
-
-	// Run once immediately on startup (with a small delay to let daemon stabilize)
-	// Use select to respect context cancellation during the delay
-	select {
-	case <-time.After(10 * time.Second):
-		d.checkForUpdates()
-	case <-d.ctx.Done():
-		d.logger.Info("Update check loop stopped")
-		return
-	}
-
-	for {
-		select {
-		case <-ticker.C:
-			d.checkForUpdates()
-		case <-d.ctx.Done():
-			d.logger.Info("Update check loop stopped")
-			return
-		}
-	}
-}
-
-// checkForUpdates checks for available updates and logs/stores the result
-func (d *Daemon) checkForUpdates() {
-	d.logger.Debug("Checking for updates")
-
-	checker := update.NewChecker(d.version)
-
-	ctx, cancel := context.WithTimeout(d.ctx, 30*time.Second)
-	defer cancel()
-
-	result, err := checker.CheckWithFallback(ctx)
-
-	status := state.UpdateStatus{
-		LastChecked:    time.Now(),
-		CurrentVersion: d.version,
-	}
-
-	if err != nil {
-		d.logger.Debug("Update check failed: %v", err)
-		status.LastError = err.Error()
-	} else {
-		status.LatestVersion = result.LatestVersion
-		status.UpdateAvailable = result.UpdateAvailable
-
-		if result.UpdateAvailable {
-			d.logger.Info("Update available: %s -> %s (run 'multiclaude update' to upgrade)", d.version, result.LatestVersion)
-		} else {
-			d.logger.Debug("No update available (current: %s, latest: %s)", d.version, result.LatestVersion)
-		}
-	}
-
-	// Save update status to state
-	if err := d.state.SetUpdateStatus(status); err != nil {
-		d.logger.Error("Failed to save update status: %v", err)
-	}
-}
-
-// TriggerUpdateCheck triggers an immediate update check (for testing)
-func (d *Daemon) TriggerUpdateCheck() {
-	d.checkForUpdates()
-}
-
-// handleGetUpdateStatus returns the current update status
-func (d *Daemon) handleGetUpdateStatus(req socket.Request) socket.Response {
-	status := d.state.GetUpdateStatus()
-	return socket.Response{
-		Success: true,
-		Data: map[string]interface{}{
-			"current_version":  status.CurrentVersion,
-			"latest_version":   status.LatestVersion,
-			"update_available": status.UpdateAvailable,
-			"last_checked":     status.LastChecked,
-			"last_error":       status.LastError,
-		},
-	}
 }

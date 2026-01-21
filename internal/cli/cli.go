@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +23,6 @@ import (
 	"github.com/dlorenc/multiclaude/internal/prompts/commands"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
-	"github.com/dlorenc/multiclaude/internal/update"
 	"github.com/dlorenc/multiclaude/internal/worktree"
 	"github.com/dlorenc/multiclaude/pkg/claude"
 	"github.com/dlorenc/multiclaude/pkg/config"
@@ -33,43 +31,6 @@ import (
 
 // Version is the current version of multiclaude (set at build time via ldflags)
 var Version = "dev"
-
-// GetVersion returns a semver-formatted version string.
-// For release builds (Version set via ldflags), returns Version as-is.
-// For dev builds, returns "0.0.0+<commit>-dev" using VCS info from the binary.
-func GetVersion() string {
-	if Version != "dev" {
-		return Version
-	}
-
-	// Try to get VCS info embedded by Go at build time
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "0.0.0-dev"
-	}
-
-	var commit string
-	for _, setting := range info.Settings {
-		if setting.Key == "vcs.revision" {
-			commit = setting.Value
-			if len(commit) > 7 {
-				commit = commit[:7] // Short commit hash
-			}
-			break
-		}
-	}
-
-	if commit == "" {
-		return "0.0.0-dev"
-	}
-
-	return fmt.Sprintf("0.0.0+%s-dev", commit)
-}
-
-// IsDevVersion returns true if running a development build (not set via ldflags)
-func IsDevVersion() bool {
-	return Version == "dev"
-}
 
 // Command represents a CLI command
 type Command struct {
@@ -167,18 +128,7 @@ func (c *CLI) Execute(args []string) error {
 		return c.showHelp()
 	}
 
-	// Check for --version or -v flag at top level
-	if args[0] == "--version" || args[0] == "-v" {
-		return c.showVersion()
-	}
-
 	return c.executeCommand(c.rootCmd, args)
-}
-
-// showVersion displays the version information
-func (c *CLI) showVersion() error {
-	fmt.Printf("multiclaude %s\n", GetVersion())
-	return nil
 }
 
 // executeCommand recursively executes commands and subcommands
@@ -305,16 +255,8 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["stop-all"] = &Command{
 		Name:        "stop-all",
 		Description: "Stop daemon and kill all multiclaude tmux sessions",
-		Usage:       "multiclaude stop-all [--clean]",
+		Usage:       "multiclaude stop-all [--clean] [--yes]",
 		Run:         c.stopAll,
-	}
-
-	// Nuke command (reset to clean state)
-	c.rootCmd.Subcommands["nuke"] = &Command{
-		Name:        "nuke",
-		Description: "Reset multiclaude to a clean state (removes agents, worktrees, messages)",
-		Usage:       "multiclaude nuke [--yes]",
-		Run:         c.nuke,
 	}
 
 	// Repository commands
@@ -435,19 +377,11 @@ func (c *CLI) registerCommands() {
 
 	c.rootCmd.Subcommands["workspace"] = workspaceCmd
 
-	// Refresh command (top-level for convenience)
-	c.rootCmd.Subcommands["refresh"] = &Command{
-		Name:        "refresh",
-		Description: "Sync worktree with main branch",
-		Usage:       "multiclaude refresh [--repo <repo>] [--all]",
-		Run:         c.refreshWorktrees,
-	}
-
 	// History command
 	c.rootCmd.Subcommands["history"] = &Command{
 		Name:        "history",
 		Description: "Show task history for a repository",
-		Usage:       "multiclaude history [--repo <repo>] [-n <count>]",
+		Usage:       "multiclaude history [--repo <repo>] [-n <count>] [--status <status>] [--search <query>] [--full]",
 		Run:         c.showHistory,
 	}
 
@@ -597,24 +531,6 @@ func (c *CLI) registerCommands() {
 		Usage:       "multiclaude bug [--output <file>] [--verbose] [description]",
 		Run:         c.bugReport,
 	}
-
-	// Update command
-	c.rootCmd.Subcommands["update"] = &Command{
-		Name:        "update",
-		Description: "Check for and install updates",
-		Usage:       "multiclaude update [--check] [--yes] [--no-restart] [--force]",
-		Run:         c.updateCommand,
-	}
-
-	// Version command
-	c.rootCmd.Subcommands["version"] = &Command{
-		Name:        "version",
-		Description: "Show version information",
-		Usage:       "multiclaude version",
-		Run: func(args []string) error {
-			return c.showVersion()
-		},
-	}
 }
 
 // Daemon command implementations
@@ -624,7 +540,7 @@ func (c *CLI) startDaemon(args []string) error {
 }
 
 func (c *CLI) runDaemon(args []string) error {
-	return daemon.Run(Version)
+	return daemon.Run()
 }
 
 func (c *CLI) stopDaemon(args []string) error {
@@ -633,11 +549,11 @@ func (c *CLI) stopDaemon(args []string) error {
 		Command: "stop",
 	})
 	if err != nil {
-		return errors.DaemonCommunicationFailed("stopping daemon", err)
+		return fmt.Errorf("failed to send stop command: %w", err)
 	}
 
 	if !resp.Success {
-		return errors.DaemonOperationFailed(resp.Error, nil)
+		return fmt.Errorf("daemon stop failed: %s", resp.Error)
 	}
 
 	fmt.Println("Daemon stopped successfully")
@@ -649,7 +565,7 @@ func (c *CLI) daemonStatus(args []string) error {
 	pidFile := daemon.NewPIDFile(c.paths.DaemonPID)
 	running, pid, err := pidFile.IsRunning()
 	if err != nil {
-		return errors.DaemonOperationFailed("checking daemon status", err)
+		return fmt.Errorf("failed to check daemon status: %w", err)
 	}
 
 	if !running {
@@ -717,8 +633,7 @@ func (c *CLI) daemonLogs(args []string) error {
 func (c *CLI) stopAll(args []string) error {
 	flags, _ := ParseFlags(args)
 	clean := flags["clean"] == "true"
-
-	fmt.Println("Stopping all multiclaude sessions...")
+	skipConfirm := flags["yes"] == "true"
 
 	// Get list of repos (try daemon first, then state file)
 	var repos []string
@@ -740,6 +655,40 @@ func (c *CLI) stopAll(args []string) error {
 			repos = st.ListRepos()
 		}
 	}
+
+	// If --clean is specified, require confirmation
+	if clean {
+		fmt.Println("WARNING: This will permanently delete:")
+		fmt.Println("  - All worktrees (~/.multiclaude/wts/)")
+		fmt.Println("  - All agent state (state.json agents section)")
+		fmt.Println("  - All message queues (~/.multiclaude/messages/)")
+		fmt.Println("  - All output logs (~/.multiclaude/output/)")
+		fmt.Println("  - All agent configs (~/.multiclaude/claude-config/)")
+		fmt.Println("  - All prompts (~/.multiclaude/prompts/)")
+		fmt.Println("  - Local branches (work/*, multiclaude/*)")
+		fmt.Println()
+		fmt.Println("The following will be PRESERVED:")
+		fmt.Println("  - Cloned repositories (~/.multiclaude/repos/)")
+		fmt.Println("  - Git credentials")
+		fmt.Println()
+
+		if !skipConfirm {
+			fmt.Print("Type 'NUKE' to confirm: ")
+			reader := bufio.NewReader(os.Stdin)
+			input, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("failed to read input: %w", err)
+			}
+			input = strings.TrimSpace(input)
+			if input != "NUKE" {
+				fmt.Println("Aborted.")
+				return nil
+			}
+			fmt.Println()
+		}
+	}
+
+	fmt.Println("Stopping all multiclaude sessions...")
 
 	// Kill all multiclaude tmux sessions
 	tmuxClient := tmux.NewClient()
@@ -787,32 +736,122 @@ func (c *CLI) stopAll(args []string) error {
 		fmt.Println("Daemon stopped")
 	}
 
-	// Clean up state if requested
+	// Full cleanup if --clean is specified
 	if clean {
-		fmt.Println("\nCleaning up state and data...")
-
-		// Remove state file
-		if err := os.Remove(c.paths.StateFile); err != nil && !os.IsNotExist(err) {
-			fmt.Printf("Warning: failed to remove state file: %v\n", err)
-		} else {
-			fmt.Println("Removed state file")
+		// Remove worktrees directory
+		fmt.Println("\nRemoving worktrees...")
+		if _, err := os.Stat(c.paths.WorktreesDir); err == nil {
+			if err := os.RemoveAll(c.paths.WorktreesDir); err != nil {
+				fmt.Printf("  Warning: failed to remove worktrees: %v\n", err)
+			} else {
+				fmt.Printf("  Removed %s\n", c.paths.WorktreesDir)
+			}
 		}
 
-		// Remove PID file
-		if err := os.Remove(c.paths.DaemonPID); err != nil && !os.IsNotExist(err) {
-			fmt.Printf("Warning: failed to remove PID file: %v\n", err)
+		// Remove messages directory
+		fmt.Println("Removing messages...")
+		if _, err := os.Stat(c.paths.MessagesDir); err == nil {
+			if err := os.RemoveAll(c.paths.MessagesDir); err != nil {
+				fmt.Printf("  Warning: failed to remove messages: %v\n", err)
+			} else {
+				fmt.Printf("  Removed %s\n", c.paths.MessagesDir)
+			}
 		}
 
-		// Remove socket file
-		if err := os.Remove(c.paths.DaemonSock); err != nil && !os.IsNotExist(err) {
-			fmt.Printf("Warning: failed to remove socket file: %v\n", err)
+		// Remove output logs
+		fmt.Println("Removing output logs...")
+		if _, err := os.Stat(c.paths.OutputDir); err == nil {
+			if err := os.RemoveAll(c.paths.OutputDir); err != nil {
+				fmt.Printf("  Warning: failed to remove output logs: %v\n", err)
+			} else {
+				fmt.Printf("  Removed %s\n", c.paths.OutputDir)
+			}
 		}
 
-		fmt.Println("\nNote: Repositories, worktrees, and messages are preserved.")
-		fmt.Println("To remove everything, manually delete: ~/.multiclaude/")
+		// Remove claude config (per-agent settings)
+		fmt.Println("Removing agent configs...")
+		if _, err := os.Stat(c.paths.ClaudeConfigDir); err == nil {
+			if err := os.RemoveAll(c.paths.ClaudeConfigDir); err != nil {
+				fmt.Printf("  Warning: failed to remove agent configs: %v\n", err)
+			} else {
+				fmt.Printf("  Removed %s\n", c.paths.ClaudeConfigDir)
+			}
+		}
+
+		// Remove prompts directory
+		fmt.Println("Removing prompts...")
+		promptsDir := filepath.Join(c.paths.Root, "prompts")
+		if _, err := os.Stat(promptsDir); err == nil {
+			if err := os.RemoveAll(promptsDir); err != nil {
+				fmt.Printf("  Warning: failed to remove prompts: %v\n", err)
+			} else {
+				fmt.Printf("  Removed %s\n", promptsDir)
+			}
+		}
+
+		// Clean up local branches in each repository
+		fmt.Println("\nCleaning up local branches...")
+		for _, repoName := range repos {
+			repoPath := c.paths.RepoDir(repoName)
+			if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+				continue
+			}
+
+			fmt.Printf("  Repository: %s\n", repoName)
+
+			// Delete work/* and multiclaude/* branches
+			wt := worktree.NewManager(repoPath)
+			for _, prefix := range []string{"work/", "multiclaude/"} {
+				branches, err := c.listBranchesWithPrefix(repoPath, prefix)
+				if err != nil {
+					fmt.Printf("    Warning: failed to list %s branches: %v\n", prefix, err)
+					continue
+				}
+				for _, branch := range branches {
+					// First remove any worktree associated with this branch
+					if err := wt.Remove(branch, true); err != nil {
+						// Ignore errors - worktree may not exist
+					}
+					// Delete the branch
+					if err := c.deleteBranch(repoPath, branch); err != nil {
+						fmt.Printf("    Warning: failed to delete branch %s: %v\n", branch, err)
+					} else {
+						fmt.Printf("    Deleted branch: %s\n", branch)
+					}
+				}
+			}
+
+			// Prune worktrees
+			if err := wt.Prune(); err != nil {
+				fmt.Printf("    Warning: failed to prune worktrees: %v\n", err)
+			}
+		}
+
+		// Clear agent state but preserve repository entries
+		fmt.Println("\nClearing agent state...")
+		st, err := state.Load(c.paths.StateFile)
+		if err == nil {
+			st.ClearAllAgents()
+			if err := st.Save(); err != nil {
+				fmt.Printf("  Warning: failed to save state: %v\n", err)
+			} else {
+				fmt.Println("  Cleared all agents from state")
+			}
+		}
+
+		// Remove daemon files (they'll be recreated on next start)
+		fmt.Println("Cleaning up daemon files...")
+		os.Remove(c.paths.DaemonPID)
+		os.Remove(c.paths.DaemonSock)
+		os.Remove(c.paths.DaemonLog)
+
+		fmt.Println("\n✓ Full cleanup complete! Multiclaude has been reset to a clean state.")
+		fmt.Println("Your repositories are preserved at:", c.paths.ReposDir)
+		fmt.Println("\nRun 'multiclaude start' to begin fresh.")
+	} else {
+		fmt.Println("\n✓ All multiclaude sessions stopped")
 	}
 
-	fmt.Println("\n✓ All multiclaude sessions stopped")
 	return nil
 }
 
@@ -917,46 +956,34 @@ func (c *CLI) initRepo(args []string) error {
 	// Generate session IDs for agents
 	supervisorSessionID, err := claude.GenerateSessionID()
 	if err != nil {
-		return errors.SessionIDGenerationFailed("supervisor", err)
+		return fmt.Errorf("failed to generate supervisor session ID: %w", err)
 	}
 
 	var mergeQueueSessionID string
 	if mqEnabled {
 		mergeQueueSessionID, err = claude.GenerateSessionID()
 		if err != nil {
-			return errors.SessionIDGenerationFailed("merge-queue", err)
+			return fmt.Errorf("failed to generate merge-queue session ID: %w", err)
 		}
 	}
 
 	// Write prompt files
 	supervisorPromptFile, err := c.writePromptFile(repoPath, prompts.TypeSupervisor, "supervisor")
 	if err != nil {
-		return errors.PromptGenerationFailed("supervisor", err)
+		return fmt.Errorf("failed to write supervisor prompt: %w", err)
 	}
 
 	var mergeQueuePromptFile string
 	if mqEnabled {
 		mergeQueuePromptFile, err = c.writeMergeQueuePromptFile(repoPath, "merge-queue", mqConfig)
 		if err != nil {
-			return errors.PromptGenerationFailed("merge-queue", err)
+			return fmt.Errorf("failed to write merge-queue prompt: %w", err)
 		}
 	}
 
 	// Copy hooks configuration if it exists (for supervisor and merge-queue)
 	if err := hooks.CopyConfig(repoPath, repoPath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
-	}
-
-	// Link global credentials to CLAUDE_CONFIG_DIR for supervisor and merge-queue
-	supervisorConfigDir := c.paths.AgentClaudeConfigDir(repoName, "supervisor")
-	if err := c.linkGlobalCredentials(supervisorConfigDir); err != nil {
-		fmt.Printf("Warning: failed to link credentials for supervisor: %v\n", err)
-	}
-	if mqEnabled {
-		mergeQueueConfigDir := c.paths.AgentClaudeConfigDir(repoName, "merge-queue")
-		if err := c.linkGlobalCredentials(mergeQueueConfigDir); err != nil {
-			fmt.Printf("Warning: failed to link credentials for merge-queue: %v\n", err)
-		}
 	}
 
 	// Start Claude in supervisor window (skip in test mode)
@@ -971,7 +998,7 @@ func (c *CLI) initRepo(args []string) error {
 		fmt.Println("Starting Claude Code in supervisor window...")
 		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, "supervisor", repoPath, supervisorSessionID, supervisorPromptFile, repoName, "")
 		if err != nil {
-			return errors.ClaudeStartFailed("supervisor", err)
+			return fmt.Errorf("failed to start supervisor Claude: %w", err)
 		}
 		supervisorPID = pid
 
@@ -985,7 +1012,7 @@ func (c *CLI) initRepo(args []string) error {
 			fmt.Println("Starting Claude Code in merge-queue window...")
 			pid, err = c.startClaudeInTmux(claudeBinary, tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, repoName, "")
 			if err != nil {
-				return errors.ClaudeStartFailed("merge-queue", err)
+				return fmt.Errorf("failed to start merge-queue Claude: %w", err)
 			}
 			mergeQueuePID = pid
 
@@ -1028,10 +1055,10 @@ func (c *CLI) initRepo(args []string) error {
 		},
 	})
 	if err != nil {
-		return errors.RegistrationFailed("supervisor", err)
+		return fmt.Errorf("failed to register supervisor: %w", err)
 	}
 	if !resp.Success {
-		return errors.RegistrationFailed("supervisor", fmt.Errorf("%s", resp.Error))
+		return fmt.Errorf("failed to register supervisor: %s", resp.Error)
 	}
 
 	// Add merge-queue agent only if enabled
@@ -1049,10 +1076,10 @@ func (c *CLI) initRepo(args []string) error {
 			},
 		})
 		if err != nil {
-			return errors.RegistrationFailed("merge-queue", err)
+			return fmt.Errorf("failed to register merge-queue: %w", err)
 		}
 		if !resp.Success {
-			return errors.RegistrationFailed("merge-queue", fmt.Errorf("%s", resp.Error))
+			return fmt.Errorf("failed to register merge-queue: %s", resp.Error)
 		}
 	}
 
@@ -1090,7 +1117,7 @@ func (c *CLI) initRepo(args []string) error {
 	// Generate session ID for workspace
 	workspaceSessionID, err := claude.GenerateSessionID()
 	if err != nil {
-		return errors.SessionIDGenerationFailed("workspace", err)
+		return fmt.Errorf("failed to generate workspace session ID: %w", err)
 	}
 
 	// Write prompt file for default workspace
@@ -1102,12 +1129,6 @@ func (c *CLI) initRepo(args []string) error {
 	// Copy hooks configuration if it exists
 	if err := hooks.CopyConfig(repoPath, workspacePath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config to default workspace: %v\n", err)
-	}
-
-	// Link global credentials to CLAUDE_CONFIG_DIR for default workspace
-	defaultWorkspaceConfigDir := c.paths.AgentClaudeConfigDir(repoName, "default")
-	if err := c.linkGlobalCredentials(defaultWorkspaceConfigDir); err != nil {
-		fmt.Printf("Warning: failed to link credentials for default workspace: %v\n", err)
 	}
 
 	// Start Claude in default workspace window (skip in test mode)
@@ -1261,7 +1282,7 @@ func (c *CLI) removeRepo(args []string) error {
 		repos, _ := resp.Data.([]interface{})
 		items := reposToSelectableItems(repos)
 		if len(items) == 0 {
-			return errors.NoReposFound()
+			return errors.NoRepositoriesFound()
 		}
 		selected, err := SelectFromList("Select repository to remove:", items)
 		if err != nil {
@@ -1459,7 +1480,7 @@ func (c *CLI) configRepo(args []string) error {
 		// Try to infer from current directory
 		cwd, err := os.Getwd()
 		if err != nil {
-			return errors.DirectoryOperationFailed("getting current directory", err)
+			return fmt.Errorf("failed to get current directory: %w", err)
 		}
 
 		// Check if we're in a tracked repo
@@ -1477,8 +1498,7 @@ func (c *CLI) configRepo(args []string) error {
 			if len(repos) == 1 {
 				repoName = repos[0]
 			} else {
-				return errors.Wrap(errors.CategoryUsage, "could not determine repository", nil).
-					WithSuggestion("use --repo flag or run from within a tracked repository")
+				return fmt.Errorf("please specify a repository name or run from within a tracked repository")
 			}
 		}
 	}
@@ -1505,17 +1525,17 @@ func (c *CLI) showRepoConfig(repoName string) error {
 		},
 	})
 	if err != nil {
-		return errors.DaemonCommunicationFailed("getting repo config", err)
+		return fmt.Errorf("failed to get repo config: %w (is daemon running?)", err)
 	}
 
 	if !resp.Success {
-		return errors.DaemonOperationFailed(resp.Error, nil)
+		return fmt.Errorf("failed to get repo config: %s", resp.Error)
 	}
 
 	// Parse response
 	configMap, ok := resp.Data.(map[string]interface{})
 	if !ok {
-		return errors.Wrap(errors.CategoryRuntime, "unexpected response format from daemon", nil)
+		return fmt.Errorf("unexpected response format")
 	}
 
 	fmt.Printf("Configuration for repository: %s\n\n", repoName)
@@ -1578,11 +1598,11 @@ func (c *CLI) updateRepoConfig(repoName string, flags map[string]string) error {
 		Args:    updateArgs,
 	})
 	if err != nil {
-		return errors.DaemonCommunicationFailed("updating repo config", err)
+		return fmt.Errorf("failed to update repo config: %w (is daemon running?)", err)
 	}
 
 	if !resp.Success {
-		return errors.DaemonOperationFailed(resp.Error, nil)
+		return fmt.Errorf("failed to update repo config: %s", resp.Error)
 	}
 
 	fmt.Printf("Configuration updated for repository: %s\n", repoName)
@@ -1723,7 +1743,7 @@ func (c *CLI) createWorker(args []string) error {
 	// Generate session ID for worker
 	workerSessionID, err := claude.GenerateSessionID()
 	if err != nil {
-		return errors.SessionIDGenerationFailed("worker", err)
+		return fmt.Errorf("failed to generate worker session ID: %w", err)
 	}
 
 	// Write prompt file for worker (with push-to config if specified)
@@ -1733,18 +1753,12 @@ func (c *CLI) createWorker(args []string) error {
 	}
 	workerPromptFile, err := c.writeWorkerPromptFile(repoPath, workerName, workerConfig)
 	if err != nil {
-		return errors.PromptGenerationFailed("worker", err)
+		return fmt.Errorf("failed to write worker prompt: %w", err)
 	}
 
 	// Copy hooks configuration if it exists
 	if err := hooks.CopyConfig(repoPath, wtPath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
-	}
-
-	// Link global credentials to CLAUDE_CONFIG_DIR (where Claude actually looks for them)
-	workerConfigDir := c.paths.AgentClaudeConfigDir(repoName, workerName)
-	if err := c.linkGlobalCredentials(workerConfigDir); err != nil {
-		fmt.Printf("Warning: failed to link credentials: %v\n", err)
 	}
 
 	// Start Claude in worker window with initial task (skip in test mode)
@@ -1760,7 +1774,7 @@ func (c *CLI) createWorker(args []string) error {
 		initialMessage := fmt.Sprintf("Task: %s", task)
 		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workerName, wtPath, workerSessionID, workerPromptFile, repoName, initialMessage)
 		if err != nil {
-			return errors.ClaudeStartFailed("worker", err)
+			return fmt.Errorf("failed to start worker Claude: %w", err)
 		}
 		workerPID = pid
 
@@ -1785,10 +1799,10 @@ func (c *CLI) createWorker(args []string) error {
 		},
 	})
 	if err != nil {
-		return errors.RegistrationFailed("worker", err)
+		return fmt.Errorf("failed to register worker: %w", err)
 	}
 	if !resp.Success {
-		return errors.RegistrationFailed("worker", fmt.Errorf("%s", resp.Error))
+		return fmt.Errorf("failed to register worker: %s", resp.Error)
 	}
 
 	fmt.Println()
@@ -1947,13 +1961,35 @@ func (c *CLI) showHistory(args []string) error {
 		}
 	}
 
+	// Get filter options
+	statusFilter := flags["status"]   // Filter by status (merged, open, closed, failed, no-pr)
+	searchQuery := flags["search"]    // Search in task descriptions
+	showFull := flags["full"] == "true"
+
+	// Validate status filter if provided
+	validStatuses := map[string]bool{
+		"merged": true, "open": true, "closed": true, "failed": true, "no-pr": true,
+	}
+	if statusFilter != "" && !validStatuses[statusFilter] {
+		return errors.InvalidUsage(fmt.Sprintf("invalid status filter: %s (valid values: merged, open, closed, failed, no-pr)", statusFilter))
+	}
+
+	// When filtering, fetch more history to ensure we get enough results
+	fetchLimit := limit
+	if statusFilter != "" || searchQuery != "" {
+		fetchLimit = limit * 10 // Fetch more to allow for filtering
+		if fetchLimit > 100 {
+			fetchLimit = 100
+		}
+	}
+
 	// Get task history from daemon
 	client := socket.NewClient(c.paths.DaemonSock)
 	resp, err := client.Send(socket.Request{
 		Command: "task_history",
 		Args: map[string]interface{}{
 			"repo":  repoName,
-			"limit": limit,
+			"limit": fetchLimit,
 		},
 	})
 	if err != nil {
@@ -1970,30 +2006,18 @@ func (c *CLI) showHistory(args []string) error {
 		return nil
 	}
 
-	// Collect branches and existing PR URLs to batch-fetch PR statuses
+	// Query GitHub for PR status for each task with a branch
 	repoPath := c.paths.RepoDir(repoName)
-	var branches []string
-	existingPRURLs := make(map[string]string) // branch -> existing PR URL
 
-	for _, item := range history {
-		entry, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		branch, _ := entry["branch"].(string)
-		prURL, _ := entry["pr_url"].(string)
-		if branch != "" {
-			branches = append(branches, branch)
-			if prURL != "" {
-				existingPRURLs[branch] = prURL
-			}
-		}
+	// Build filtered header
+	headerParts := []string{fmt.Sprintf("Task History for '%s'", repoName)}
+	if statusFilter != "" {
+		headerParts = append(headerParts, fmt.Sprintf("status=%s", statusFilter))
 	}
-
-	// Batch fetch all PR statuses with a single GitHub API call
-	prStatuses := c.batchFetchPRStatuses(repoPath, branches, existingPRURLs)
-
-	format.Header("Task History for '%s' (last %d):", repoName, len(history))
+	if searchQuery != "" {
+		headerParts = append(headerParts, fmt.Sprintf("search=%q", searchQuery))
+	}
+	format.Header("%s:", strings.Join(headerParts, ", "))
 	fmt.Println()
 
 	// First pass: collect entries with details to show after table
@@ -2005,7 +2029,13 @@ func (c *CLI) showHistory(args []string) error {
 	var detailsToShow []entryDetails
 
 	table := format.NewColoredTable("NAME", "STATUS", "PR", "COMPLETED", "TASK")
+	displayedCount := 0
 	for _, item := range history {
+		// Stop once we've displayed enough
+		if displayedCount >= limit {
+			break
+		}
+
 		entry, ok := item.(map[string]interface{})
 		if !ok {
 			continue
@@ -2014,10 +2044,42 @@ func (c *CLI) showHistory(args []string) error {
 		name, _ := entry["name"].(string)
 		task, _ := entry["task"].(string)
 		branch, _ := entry["branch"].(string)
+		prURL, _ := entry["pr_url"].(string)
 		completedAt, _ := entry["completed_at"].(string)
 		summary, _ := entry["summary"].(string)
 		failureReason, _ := entry["failure_reason"].(string)
 		storedStatus, _ := entry["status"].(string)
+
+		// Try to get PR status from GitHub if we have a branch
+		prStatus, prLink := c.getPRStatusForBranch(repoPath, branch, prURL)
+
+		// Use stored status if it indicates failure
+		if storedStatus == "failed" {
+			prStatus = "failed"
+		}
+
+		// Apply status filter
+		if statusFilter != "" {
+			effectiveStatus := prStatus
+			if effectiveStatus == "" {
+				effectiveStatus = "no-pr"
+			}
+			if effectiveStatus != statusFilter {
+				continue
+			}
+		}
+
+		// Apply search filter (case-insensitive)
+		if searchQuery != "" {
+			lowerQuery := strings.ToLower(searchQuery)
+			lowerTask := strings.ToLower(task)
+			lowerName := strings.ToLower(name)
+			if !strings.Contains(lowerTask, lowerQuery) && !strings.Contains(lowerName, lowerQuery) {
+				continue
+			}
+		}
+
+		displayedCount++
 
 		// Collect entries with summary or failure for detailed display
 		if summary != "" || failureReason != "" {
@@ -2026,17 +2088,6 @@ func (c *CLI) showHistory(args []string) error {
 				summary:       summary,
 				failureReason: failureReason,
 			})
-		}
-
-		// Look up PR status from batch-fetched results
-		prStatus, prLink := "no-pr", ""
-		if info, ok := prStatuses[branch]; ok {
-			prStatus, prLink = info.status, info.link
-		}
-
-		// Use stored status if it indicates failure
-		if storedStatus == "failed" {
-			prStatus = "failed"
 		}
 
 		// Format status with color
@@ -2069,17 +2120,29 @@ func (c *CLI) showHistory(args []string) error {
 			}
 		}
 
-		// Truncate task (increased width from 35 to 50)
-		truncTask := format.Truncate(task, 50)
+		// Format task - show full or truncate
+		displayTask := task
+		if !showFull {
+			displayTask = format.Truncate(task, 50)
+		}
 
 		table.AddRow(
 			format.Cell(name),
 			statusCell,
 			prCell,
 			completedCell,
-			format.Cell(truncTask),
+			format.Cell(displayTask),
 		)
 	}
+
+	// Show message if no results after filtering
+	if displayedCount == 0 {
+		if statusFilter != "" || searchQuery != "" {
+			fmt.Printf("No tasks match the filter criteria\n")
+		}
+		return nil
+	}
+
 	table.Print()
 
 	// Print detailed summary/failure section if any entries have them
@@ -2100,85 +2163,55 @@ func (c *CLI) showHistory(args []string) error {
 	return nil
 }
 
-// prStatusInfo holds PR status information for a branch
-type prStatusInfo struct {
-	status string
-	link   string
-}
-
-// batchFetchPRStatuses fetches PR statuses for multiple branches in a single GitHub API call
-func (c *CLI) batchFetchPRStatuses(repoPath string, branches []string, existingPRURLs map[string]string) map[string]prStatusInfo {
-	result := make(map[string]prStatusInfo)
-
-	if len(branches) == 0 {
-		return result
-	}
-
-	// Handle branches that already have existing PR URLs
-	branchesNeedingLookup := make([]string, 0, len(branches))
-	for _, branch := range branches {
-		if existingURL, ok := existingPRURLs[branch]; ok {
-			// Extract PR number from URL for shorter display
-			parts := strings.Split(existingURL, "/")
-			if len(parts) > 0 {
-				prNum := parts[len(parts)-1]
-				result[branch] = prStatusInfo{status: "unknown", link: "#" + prNum}
-			} else {
-				result[branch] = prStatusInfo{status: "unknown", link: existingURL}
-			}
-		} else {
-			branchesNeedingLookup = append(branchesNeedingLookup, branch)
+// getPRStatusForBranch queries GitHub for the PR status of a branch
+func (c *CLI) getPRStatusForBranch(repoPath, branch, existingPRURL string) (status, prLink string) {
+	// If we already have a PR URL, just return it formatted
+	if existingPRURL != "" {
+		// Extract PR number from URL for shorter display
+		parts := strings.Split(existingPRURL, "/")
+		if len(parts) > 0 {
+			prNum := parts[len(parts)-1]
+			return "unknown", "#" + prNum
 		}
+		return "unknown", existingPRURL
 	}
 
-	if len(branchesNeedingLookup) == 0 {
-		return result
+	// If no branch, nothing to query
+	if branch == "" {
+		return "no-pr", ""
 	}
 
-	// Build a set of branches we're looking for (for fast lookup)
-	branchSet := make(map[string]bool)
-	for _, b := range branchesNeedingLookup {
-		branchSet[b] = true
-	}
-
-	// Fetch all PRs in a single call - include headRefName to match by branch
-	cmd := exec.Command("gh", "pr", "list", "--state", "all", "--json", "number,state,headRefName", "--limit", "100")
+	// Query GitHub for PR associated with this branch using gh CLI
+	cmd := exec.Command("gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,state,url", "--limit", "1")
 	cmd.Dir = repoPath
 	output, err := cmd.Output()
 	if err != nil {
-		return result
+		return "no-pr", ""
 	}
 
 	// Parse JSON output
 	var prs []struct {
-		Number      int    `json:"number"`
-		State       string `json:"state"`
-		HeadRefName string `json:"headRefName"`
+		Number int    `json:"number"`
+		State  string `json:"state"`
+		URL    string `json:"url"`
 	}
-	if err := json.Unmarshal(output, &prs); err != nil {
-		return result
-	}
-
-	// Build map of branch -> PR info
-	for _, pr := range prs {
-		if branchSet[pr.HeadRefName] {
-			link := fmt.Sprintf("#%d", pr.Number)
-			var status string
-			switch strings.ToLower(pr.State) {
-			case "merged":
-				status = "merged"
-			case "open":
-				status = "open"
-			case "closed":
-				status = "closed"
-			default:
-				status = "unknown"
-			}
-			result[pr.HeadRefName] = prStatusInfo{status: status, link: link}
-		}
+	if err := json.Unmarshal(output, &prs); err != nil || len(prs) == 0 {
+		return "no-pr", ""
 	}
 
-	return result
+	pr := prs[0]
+	prLink = fmt.Sprintf("#%d", pr.Number)
+
+	switch strings.ToLower(pr.State) {
+	case "merged":
+		return "merged", prLink
+	case "open":
+		return "open", prLink
+	case "closed":
+		return "closed", prLink
+	default:
+		return "unknown", prLink
+	}
 }
 
 func (c *CLI) removeWorker(args []string) error {
@@ -2400,7 +2433,7 @@ func (c *CLI) addWorkspace(args []string) error {
 			agentType, _ := agentMap["type"].(string)
 			name, _ := agentMap["name"].(string)
 			if agentType == "workspace" && name == workspaceName {
-				return errors.WorkspaceAlreadyExists(workspaceName, repoName)
+				return fmt.Errorf("workspace '%s' already exists in repo '%s'", workspaceName, repoName)
 			}
 		}
 	}
@@ -2431,24 +2464,18 @@ func (c *CLI) addWorkspace(args []string) error {
 	// Generate session ID for workspace
 	workspaceSessionID, err := claude.GenerateSessionID()
 	if err != nil {
-		return errors.SessionIDGenerationFailed("workspace", err)
+		return fmt.Errorf("failed to generate workspace session ID: %w", err)
 	}
 
 	// Write prompt file for workspace
 	workspacePromptFile, err := c.writePromptFile(repoPath, prompts.TypeWorkspace, workspaceName)
 	if err != nil {
-		return errors.PromptGenerationFailed("workspace", err)
+		return fmt.Errorf("failed to write workspace prompt: %w", err)
 	}
 
 	// Copy hooks configuration if it exists
 	if err := hooks.CopyConfig(repoPath, wtPath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
-	}
-
-	// Link global credentials to CLAUDE_CONFIG_DIR (where Claude actually looks for them)
-	workspaceConfigDir := c.paths.AgentClaudeConfigDir(repoName, workspaceName)
-	if err := c.linkGlobalCredentials(workspaceConfigDir); err != nil {
-		fmt.Printf("Warning: failed to link credentials: %v\n", err)
 	}
 
 	// Start Claude in workspace window (skip in test mode)
@@ -2463,7 +2490,7 @@ func (c *CLI) addWorkspace(args []string) error {
 		fmt.Println("Starting Claude Code in workspace window...")
 		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workspaceName, wtPath, workspaceSessionID, workspacePromptFile, repoName, "")
 		if err != nil {
-			return errors.ClaudeStartFailed("workspace", err)
+			return fmt.Errorf("failed to start workspace Claude: %w", err)
 		}
 		workspacePID = pid
 
@@ -2487,10 +2514,10 @@ func (c *CLI) addWorkspace(args []string) error {
 		},
 	})
 	if err != nil {
-		return errors.RegistrationFailed("workspace", err)
+		return fmt.Errorf("failed to register workspace: %w", err)
 	}
 	if !resp.Success {
-		return errors.RegistrationFailed("workspace", fmt.Errorf("%s", resp.Error))
+		return fmt.Errorf("failed to register workspace: %s", resp.Error)
 	}
 
 	fmt.Println()
@@ -2826,7 +2853,7 @@ func (c *CLI) connectWorkspace(args []string) error {
 // validateWorkspaceName validates that a workspace name follows branch name restrictions
 func validateWorkspaceName(name string) error {
 	if name == "" {
-		return errors.InvalidWorkspaceName("cannot be empty")
+		return fmt.Errorf("workspace name cannot be empty")
 	}
 
 	// Git branch name restrictions
@@ -2837,170 +2864,26 @@ func validateWorkspaceName(name string) error {
 	// - Cannot be "." or ".."
 
 	if name == "." || name == ".." {
-		return errors.InvalidWorkspaceName("cannot be '.' or '..'")
+		return fmt.Errorf("workspace name cannot be '.' or '..'")
 	}
 
 	if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "-") {
-		return errors.InvalidWorkspaceName("cannot start with '.' or '-'")
+		return fmt.Errorf("workspace name cannot start with '.' or '-'")
 	}
 
 	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, "/") {
-		return errors.InvalidWorkspaceName("cannot end with '.' or '/'")
+		return fmt.Errorf("workspace name cannot end with '.' or '/'")
 	}
 
 	if strings.Contains(name, "..") {
-		return errors.InvalidWorkspaceName("cannot contain '..'")
+		return fmt.Errorf("workspace name cannot contain '..'")
 	}
 
 	invalidChars := []string{"\\", "~", "^", ":", "?", "*", "[", "@", "{", "}", " ", "\t", "\n"}
 	for _, char := range invalidChars {
 		if strings.Contains(name, char) {
-			return errors.InvalidWorkspaceName(fmt.Sprintf("cannot contain '%s'", char))
+			return fmt.Errorf("workspace name cannot contain '%s'", char)
 		}
-	}
-
-	return nil
-}
-
-// refreshWorktrees syncs worktrees with the main branch
-func (c *CLI) refreshWorktrees(args []string) error {
-	flags, _ := ParseFlags(args)
-
-	// Determine repository
-	repoName, ok := flags["repo"]
-	if !ok {
-		// Try to infer from cwd
-		inferred, err := c.inferRepoFromCwd()
-		if err != nil {
-			return errors.InvalidUsage("could not determine repository. Use --repo or run from within a multiclaude workspace")
-		}
-		repoName = inferred
-	}
-
-	// Check if daemon is running
-	client := socket.NewClient(c.paths.DaemonSock)
-	_, err := client.Send(socket.Request{Command: "ping"})
-	if err != nil {
-		return errors.DaemonNotRunning()
-	}
-
-	// Get the repository path
-	repoPath := c.paths.RepoDir(repoName)
-	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
-		return fmt.Errorf("repository '%s' not found at %s", repoName, repoPath)
-	}
-
-	// Get list of agents to refresh
-	resp, err := client.Send(socket.Request{
-		Command: "list_agents",
-		Args: map[string]interface{}{
-			"repo": repoName,
-		},
-	})
-	if err != nil {
-		return errors.DaemonCommunicationFailed("listing agents", err)
-	}
-	if !resp.Success {
-		return fmt.Errorf("failed to list agents: %s", resp.Error)
-	}
-
-	agents, _ := resp.Data.([]interface{})
-
-	// Filter for agents with worktrees (workers and workspaces)
-	refreshAll := flags["all"] == "true"
-
-	// Create worktree manager
-	wt := worktree.NewManager(repoPath)
-
-	// Get remote and main branch info once
-	remote, err := wt.GetUpstreamRemote()
-	if err != nil {
-		return fmt.Errorf("failed to get remote: %w", err)
-	}
-
-	mainBranch, err := wt.GetDefaultBranch(remote)
-	if err != nil {
-		return fmt.Errorf("failed to get default branch: %w", err)
-	}
-
-	fmt.Printf("Refreshing worktrees in '%s' from %s/%s\n\n", repoName, remote, mainBranch)
-
-	// Fetch once for all worktrees
-	fmt.Printf("Fetching from %s...\n", remote)
-	if err := wt.FetchRemote(remote); err != nil {
-		return fmt.Errorf("failed to fetch: %w", err)
-	}
-
-	var refreshed, skipped, failed int
-
-	for _, agent := range agents {
-		agentMap, ok := agent.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		agentType, _ := agentMap["type"].(string)
-		agentName, _ := agentMap["name"].(string)
-		wtPath, _ := agentMap["worktree_path"].(string)
-
-		// Skip agents without worktrees (supervisor, merge-queue)
-		if wtPath == "" {
-			continue
-		}
-
-		// If not --all, only refresh the current worktree (if we're in one)
-		if !refreshAll {
-			cwd, _ := os.Getwd()
-			// Check if cwd is within this worktree
-			if !strings.HasPrefix(cwd, wtPath) {
-				continue
-			}
-		}
-
-		fmt.Printf("  %s (%s): ", agentName, agentType)
-
-		result := worktree.RefreshWorktree(wtPath, remote, mainBranch)
-
-		if result.Skipped {
-			fmt.Printf("skipped (%s)\n", result.SkipReason)
-			skipped++
-			continue
-		}
-
-		if result.Error != nil {
-			if result.HasConflicts {
-				fmt.Printf("conflicts in %d files (rebase aborted)\n", len(result.ConflictFiles))
-			} else {
-				fmt.Printf("error: %v\n", result.Error)
-			}
-			failed++
-			continue
-		}
-
-		status := "up to date"
-		if result.CommitsRebased > 0 {
-			status = fmt.Sprintf("rebased %d commits", result.CommitsRebased)
-		}
-		if result.WasStashed {
-			if result.StashRestored {
-				status += " (changes restored)"
-			} else {
-				status += " (changes stashed)"
-			}
-		}
-		fmt.Printf("%s\n", status)
-		refreshed++
-	}
-
-	fmt.Println()
-	if refreshAll {
-		fmt.Printf("Refreshed: %d, Skipped: %d, Failed: %d\n", refreshed, skipped, failed)
-	} else if refreshed == 0 && failed == 0 {
-		fmt.Println("No worktrees refreshed. Use --all to refresh all agent worktrees.")
-	}
-
-	if failed > 0 {
-		return fmt.Errorf("%d worktree(s) failed to refresh", failed)
 	}
 
 	return nil
@@ -3053,7 +2936,7 @@ func (c *CLI) sendMessage(args []string) error {
 	// Send message
 	msg, err := msgMgr.Send(repoName, agentName, to, body)
 	if err != nil {
-		return errors.MessageOperationFailed("sending message", err)
+		return fmt.Errorf("failed to send message: %w", err)
 	}
 
 	// Trigger immediate routing (best-effort, polling is fallback)
@@ -3077,7 +2960,7 @@ func (c *CLI) listMessages(args []string) error {
 	// List messages
 	msgs, err := msgMgr.List(repoName, agentName)
 	if err != nil {
-		return errors.MessageOperationFailed("listing messages", err)
+		return fmt.Errorf("failed to list messages: %w", err)
 	}
 
 	if len(msgs) == 0 {
@@ -3120,7 +3003,7 @@ func (c *CLI) readMessage(args []string) error {
 	// Get message
 	msg, err := msgMgr.Get(repoName, agentName, messageID)
 	if err != nil {
-		return errors.MessageOperationFailed("reading message", err)
+		return fmt.Errorf("failed to read message: %w", err)
 	}
 
 	// Update status to read
@@ -3162,7 +3045,7 @@ func (c *CLI) ackMessage(args []string) error {
 
 	// Ack message
 	if err := msgMgr.Ack(repoName, agentName, messageID); err != nil {
-		return errors.MessageOperationFailed("acknowledging message", err)
+		return fmt.Errorf("failed to acknowledge message: %w", err)
 	}
 
 	fmt.Printf("Message %s acknowledged\n", messageID)
@@ -3466,7 +3349,7 @@ func (c *CLI) reviewPR(args []string) error {
 		// Try to infer from current directory
 		cwd, err := os.Getwd()
 		if err != nil {
-			return errors.DirectoryOperationFailed("getting current directory", err)
+			return fmt.Errorf("failed to get current directory: %w", err)
 		}
 
 		// Check if we're in a tracked repo
@@ -3527,24 +3410,18 @@ func (c *CLI) reviewPR(args []string) error {
 	// Generate session ID for reviewer
 	reviewerSessionID, err := claude.GenerateSessionID()
 	if err != nil {
-		return errors.SessionIDGenerationFailed("reviewer", err)
+		return fmt.Errorf("failed to generate reviewer session ID: %w", err)
 	}
 
 	// Write prompt file for reviewer
 	reviewerPromptFile, err := c.writePromptFile(repoPath, prompts.TypeReview, reviewerName)
 	if err != nil {
-		return errors.PromptGenerationFailed("reviewer", err)
+		return fmt.Errorf("failed to write reviewer prompt: %w", err)
 	}
 
 	// Copy hooks configuration if it exists
 	if err := hooks.CopyConfig(repoPath, wtPath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
-	}
-
-	// Link global credentials to CLAUDE_CONFIG_DIR (where Claude actually looks for them)
-	reviewerConfigDir := c.paths.AgentClaudeConfigDir(repoName, reviewerName)
-	if err := c.linkGlobalCredentials(reviewerConfigDir); err != nil {
-		fmt.Printf("Warning: failed to link credentials: %v\n", err)
 	}
 
 	// Start Claude in reviewer window with initial task (skip in test mode)
@@ -3560,7 +3437,7 @@ func (c *CLI) reviewPR(args []string) error {
 		initialMessage := fmt.Sprintf("Review PR #%s: https://github.com/%s/%s/pull/%s", prNumber, parts[1], parts[2], prNumber)
 		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, reviewerName, wtPath, reviewerSessionID, reviewerPromptFile, repoName, initialMessage)
 		if err != nil {
-			return errors.ClaudeStartFailed("reviewer", err)
+			return fmt.Errorf("failed to start reviewer Claude: %w", err)
 		}
 		reviewerPID = pid
 
@@ -3912,7 +3789,7 @@ func (c *CLI) attachAgent(args []string) error {
 		// Interactive selection - all agent types
 		items := agentsToSelectableItems(agents, nil)
 		if len(items) == 0 {
-			return fmt.Errorf("no agents found in repo '%s'", repoName)
+			return errors.NoAgentsFound(repoName)
 		}
 		selected, err := SelectFromList("Select agent to attach:", items)
 		if err != nil {
@@ -3937,7 +3814,7 @@ func (c *CLI) attachAgent(args []string) error {
 	}
 
 	if agentInfo == nil {
-		return fmt.Errorf("agent '%s' not found in repo '%s'", agentName, repoName)
+		return errors.AgentNotFound("agent", agentName, repoName)
 	}
 
 	// Get tmux session and window
@@ -4571,18 +4448,6 @@ func (c *CLI) localRepair(verbose bool) error {
 		}
 	}
 
-	// Repair missing credential symlinks
-	if credFixed, err := c.repairCredentials(verbose); err != nil {
-		if verbose {
-			fmt.Printf("  Warning: credential repair failed: %v\n", err)
-		}
-	} else if credFixed > 0 {
-		if verbose {
-			fmt.Printf("  Repaired credentials in %d worktree(s)\n", credFixed)
-		}
-		issuesFixed += credFixed
-	}
-
 	// Report orphaned tmux sessions
 	if len(orphanedSessions) > 0 {
 		fmt.Printf("\nFound %d orphaned tmux session(s) not in state:\n", len(orphanedSessions))
@@ -4677,10 +4542,7 @@ func (c *CLI) restartClaude(args []string) error {
 	// Exec claude
 	claudePath := "claude"
 
-	// Set CLAUDE_CONFIG_DIR so Claude finds credentials and commands
-	agentConfigDir := filepath.Join(c.paths.ClaudeConfigDir, repoName, agentName)
-
-	fmt.Printf("Running: CLAUDE_CONFIG_DIR=%s %s %s\n\n", agentConfigDir, claudePath, strings.Join(cmdArgs, " "))
+	fmt.Printf("Running: %s %s\n\n", claudePath, strings.Join(cmdArgs, " "))
 
 	// Run claude interactively
 	cmd := exec.Command(claudePath, cmdArgs...)
@@ -4688,7 +4550,6 @@ func (c *CLI) restartClaude(args []string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Dir = agent.WorktreePath
-	cmd.Env = append(os.Environ(), fmt.Sprintf("CLAUDE_CONFIG_DIR=%s", agentConfigDir))
 
 	return cmd.Run()
 }
@@ -4971,7 +4832,7 @@ func (c *CLI) bugReport(args []string) error {
 	}
 
 	// Create collector and generate report
-	collector := bugreport.NewCollector(c.paths, GetVersion())
+	collector := bugreport.NewCollector(c.paths, Version)
 	report, err := collector.Collect(description, verbose)
 	if err != nil {
 		return fmt.Errorf("failed to collect diagnostic information: %w", err)
@@ -4991,495 +4852,6 @@ func (c *CLI) bugReport(args []string) error {
 
 	// Print to stdout
 	fmt.Print(markdown)
-	return nil
-}
-
-// linkGlobalCredentials copies credentials from ~/.claude/.credentials.json
-// to the Claude config directory. We copy instead of symlink because Claude Code
-// cannot read symlinked credentials on startup.
-//
-// When CLAUDE_CONFIG_DIR is set, Claude looks for credentials there, not in the
-// project's .claude directory or the global ~/.claude directory.
-func (c *CLI) linkGlobalCredentials(claudeConfigDir string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	// Ensure the config directory exists
-	if err := os.MkdirAll(claudeConfigDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	// Copy credentials if they exist
-	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
-	if _, err := os.Stat(globalCredFile); err == nil {
-		credData, err := os.ReadFile(globalCredFile)
-		if err != nil {
-			return fmt.Errorf("failed to read global credentials: %w", err)
-		}
-		localCredFile := filepath.Join(claudeConfigDir, ".credentials.json")
-		os.Remove(localCredFile)
-		// Copy credentials file instead of symlinking
-		// Claude Code cannot read symlinked credentials on startup, so we must copy the file
-		if err := os.WriteFile(localCredFile, credData, 0600); err != nil {
-			return fmt.Errorf("failed to write credentials file: %w", err)
-		}
-	}
-
-	// Copy settings.json if it exists (contains hooks and other user preferences)
-	// This ensures workers inherit user's global hooks configuration
-	globalSettingsFile := filepath.Join(home, ".claude", "settings.json")
-	if _, err := os.Stat(globalSettingsFile); err == nil {
-		settingsData, err := os.ReadFile(globalSettingsFile)
-		if err != nil {
-			return fmt.Errorf("failed to read global settings: %w", err)
-		}
-		localSettingsFile := filepath.Join(claudeConfigDir, "settings.json")
-		os.Remove(localSettingsFile)
-		if err := os.WriteFile(localSettingsFile, settingsData, 0644); err != nil {
-			return fmt.Errorf("failed to write settings file: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// repairCredentials copies credentials and settings to CLAUDE_CONFIG_DIR directories that are missing them
-func (c *CLI) repairCredentials(verbose bool) (int, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get home directory: %w", err)
-	}
-
-	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
-	globalSettingsFile := filepath.Join(home, ".claude", "settings.json")
-
-	// Check if any global config exists
-	hasCredentials := false
-	hasSettings := false
-	if _, err := os.Stat(globalCredFile); err == nil {
-		hasCredentials = true
-	}
-	if _, err := os.Stat(globalSettingsFile); err == nil {
-		hasSettings = true
-	}
-
-	if !hasCredentials && !hasSettings {
-		if verbose {
-			fmt.Println("  No global credentials or settings found - skipping config repair")
-		}
-		return 0, nil
-	}
-
-	// Load state to get all repos
-	st, err := state.Load(c.paths.StateFile)
-	if err != nil {
-		return 0, fmt.Errorf("failed to load state: %w", err)
-	}
-
-	fixed := 0
-	for _, repoName := range st.ListRepos() {
-		// Walk CLAUDE_CONFIG_DIR directories for this repo
-		repoConfigDir := filepath.Join(c.paths.ClaudeConfigDir, repoName)
-
-		// Skip if config directory doesn't exist
-		if _, err := os.Stat(repoConfigDir); os.IsNotExist(err) {
-			continue
-		}
-
-		entries, err := os.ReadDir(repoConfigDir)
-		if err != nil {
-			if verbose {
-				fmt.Printf("  Warning: failed to read config dir for %s: %v\n", repoName, err)
-			}
-			continue
-		}
-
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-
-			agentConfigDir := filepath.Join(repoConfigDir, entry.Name())
-			repaired := false
-
-			// Copy credentials if they exist
-			if hasCredentials {
-				localCredFile := filepath.Join(agentConfigDir, ".credentials.json")
-				// Remove any existing symlinks (from old behavior) or outdated files
-				if _, err := os.Lstat(localCredFile); err == nil {
-					os.Remove(localCredFile)
-				}
-
-				// Copy credentials instead of symlinking
-				// Claude Code cannot read symlinked credentials on startup
-				credData, err := os.ReadFile(globalCredFile)
-				if err != nil {
-					if verbose {
-						fmt.Printf("  Warning: failed to read global credentials: %v\n", err)
-					}
-				} else if err := os.WriteFile(localCredFile, credData, 0600); err != nil {
-					if verbose {
-						fmt.Printf("  Warning: failed to copy credentials in %s/%s: %v\n", repoName, entry.Name(), err)
-					}
-				} else {
-					repaired = true
-					if verbose {
-						fmt.Printf("  Copied credentials in %s/%s\n", repoName, entry.Name())
-					}
-				}
-			}
-
-			// Copy settings if they exist
-			if hasSettings {
-				localSettingsFile := filepath.Join(agentConfigDir, "settings.json")
-				// Remove any existing file
-				if _, err := os.Lstat(localSettingsFile); err == nil {
-					os.Remove(localSettingsFile)
-				}
-
-				settingsData, err := os.ReadFile(globalSettingsFile)
-				if err != nil {
-					if verbose {
-						fmt.Printf("  Warning: failed to read global settings: %v\n", err)
-					}
-				} else if err := os.WriteFile(localSettingsFile, settingsData, 0644); err != nil {
-					if verbose {
-						fmt.Printf("  Warning: failed to copy settings in %s/%s: %v\n", repoName, entry.Name(), err)
-					}
-				} else {
-					repaired = true
-					if verbose {
-						fmt.Printf("  Copied settings in %s/%s\n", repoName, entry.Name())
-					}
-				}
-			}
-
-			if repaired {
-				fixed++
-			}
-		}
-	}
-
-	return fixed, nil
-}
-// updateCommand handles the 'multiclaude update' command
-func (c *CLI) updateCommand(args []string) error {
-	flags, _ := ParseFlags(args)
-
-	// Check for check-only mode
-	checkOnly := flags["check"] == "true"
-	skipConfirm := flags["yes"] == "true" || flags["y"] == "true"
-	noRestart := flags["no-restart"] == "true"
-	force := flags["force"] == "true"
-
-	fmt.Println("Checking for updates...")
-
-	// Check for updates
-	checker := update.NewChecker(Version)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	result, err := checker.CheckWithFallback(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to check for updates: %w", err)
-	}
-
-	fmt.Printf("Current version: %s\n", GetVersion())
-	if result.LatestVersion != "" {
-		fmt.Printf("Latest version:  %s\n", result.LatestVersion)
-	}
-
-	if !result.UpdateAvailable && !force {
-		if IsDevVersion() {
-			fmt.Println("\nYou are running a development version.")
-			if result.LatestVersion != "" {
-				fmt.Printf("Latest release is %s\n", result.LatestVersion)
-			}
-		} else {
-			fmt.Println("\nYou are already running the latest version.")
-		}
-		return nil
-	}
-
-	if checkOnly {
-		if result.UpdateAvailable {
-			fmt.Printf("\nAn update is available: %s -> %s\n", GetVersion(), result.LatestVersion)
-			fmt.Println("Run 'multiclaude update' to install it.")
-		}
-		return nil
-	}
-
-	// Check if we can update
-	updater := update.NewUpdater()
-	canUpdate, reason := updater.CanUpdate()
-	if !canUpdate {
-		return fmt.Errorf("cannot update: %s\n\nPlease update using your installation method (e.g., 'go install github.com/dlorenc/multiclaude/cmd/multiclaude@latest')", reason)
-	}
-
-	// Confirm update
-	if !skipConfirm {
-		fmt.Printf("\nAn update is available (%s -> %s). Proceed? [Y/n] ", GetVersion(), result.LatestVersion)
-		reader := bufio.NewReader(os.Stdin)
-		response, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read response: %w", err)
-		}
-		response = strings.TrimSpace(strings.ToLower(response))
-		if response != "" && response != "y" && response != "yes" {
-			fmt.Println("Update cancelled.")
-			return nil
-		}
-	}
-
-	// Check if daemon is running
-	daemonWasRunning := false
-	pidFile := daemon.NewPIDFile(c.paths.DaemonPID)
-	if running, _, _ := pidFile.IsRunning(); running {
-		daemonWasRunning = true
-		fmt.Println("\nStopping daemon...")
-
-		client := socket.NewClient(c.paths.DaemonSock)
-		resp, err := client.Send(socket.Request{Command: "stop"})
-		if err != nil {
-			return fmt.Errorf("failed to stop daemon: %w", err)
-		}
-		if !resp.Success {
-			return fmt.Errorf("failed to stop daemon: %s", resp.Error)
-		}
-
-		// Wait for daemon to stop
-		for i := 0; i < 30; i++ {
-			if running, _, _ := pidFile.IsRunning(); !running {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		fmt.Println("Daemon stopped.")
-	}
-
-	// Install the update
-	fmt.Printf("\nInstalling multiclaude %s...\n", result.LatestVersion)
-
-	updateResult, err := updater.Update(context.Background())
-	if err != nil {
-		// If update fails and daemon was running, try to restart it
-		if daemonWasRunning {
-			fmt.Println("\nUpdate failed, attempting to restart daemon with current version...")
-			daemon.RunDetached()
-		}
-		return fmt.Errorf("failed to install update: %w", err)
-	}
-
-	if !updateResult.Success {
-		return fmt.Errorf("update failed: %v", updateResult.Error)
-	}
-
-	fmt.Printf("Successfully installed new version at %s\n", updateResult.BinaryPath)
-
-	// Restart daemon if it was running (unless --no-restart)
-	if daemonWasRunning && !noRestart {
-		fmt.Println("\nRestarting daemon...")
-		if err := daemon.RunDetached(); err != nil {
-			return fmt.Errorf("failed to restart daemon: %w\n\nYou can manually start it with: multiclaude start", err)
-		}
-		fmt.Println("Daemon started successfully.")
-	} else if daemonWasRunning && noRestart {
-		fmt.Println("\nDaemon was stopped for update. Run 'multiclaude start' to restart it.")
-	}
-
-	fmt.Printf("\nUpdate complete! You are now running multiclaude %s\n", result.LatestVersion)
-	return nil
-}
-
-// nuke resets multiclaude to a clean state by removing agents, worktrees, and messages
-// while preserving cloned repositories
-func (c *CLI) nuke(args []string) error {
-	flags, _ := ParseFlags(args)
-	skipConfirm := flags["yes"] == "true"
-
-	// Show warning about what will be deleted
-	fmt.Println("WARNING: This will permanently delete:")
-	fmt.Println("  - All worktrees (~/.multiclaude/wts/)")
-	fmt.Println("  - All agent state (state.json agents section)")
-	fmt.Println("  - All message queues (~/.multiclaude/messages/)")
-	fmt.Println("  - Local branches (work/*, multiclaude/*)")
-	fmt.Println()
-	fmt.Println("The following will be PRESERVED:")
-	fmt.Println("  - Cloned repositories (~/.multiclaude/repos/)")
-	fmt.Println("  - Git credentials")
-	fmt.Println()
-
-	// Get confirmation
-	if !skipConfirm {
-		fmt.Print("Type 'NUKE' to confirm: ")
-		reader := bufio.NewReader(os.Stdin)
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read input: %w", err)
-		}
-		input = strings.TrimSpace(input)
-		if input != "NUKE" {
-			fmt.Println("Aborted.")
-			return nil
-		}
-		fmt.Println()
-	}
-
-	// Step 1: Stop daemon and kill all tmux sessions
-	fmt.Println("Stopping all multiclaude sessions...")
-
-	// Get list of repos
-	var repos []string
-	client := socket.NewClient(c.paths.DaemonSock)
-	resp, err := client.Send(socket.Request{Command: "list_repos"})
-	if err == nil && resp.Success {
-		if repoList, ok := resp.Data.([]interface{}); ok {
-			for _, repo := range repoList {
-				if repoStr, ok := repo.(string); ok {
-					repos = append(repos, repoStr)
-				}
-			}
-		}
-	} else {
-		// Daemon not running, try to load from state file
-		st, err := state.Load(c.paths.StateFile)
-		if err == nil {
-			repos = st.ListRepos()
-		}
-	}
-
-	// Kill all multiclaude tmux sessions
-	tmuxClient := tmux.NewClient()
-	if tmuxClient.IsTmuxAvailable() {
-		sessions, err := tmuxClient.ListSessions(context.Background())
-		if err == nil {
-			for _, session := range sessions {
-				if strings.HasPrefix(session, "mc-") {
-					fmt.Printf("  Killing tmux session: %s\n", session)
-					tmuxClient.KillSession(context.Background(), session)
-				}
-			}
-		}
-	}
-
-	// Stop the daemon
-	fmt.Println("Stopping daemon...")
-	resp, err = client.Send(socket.Request{Command: "stop"})
-	if err != nil {
-		fmt.Println("  Daemon already stopped or not responding")
-	} else if resp.Success {
-		fmt.Println("  Daemon stopped")
-	}
-
-	// Step 2: Remove worktrees directory
-	fmt.Println("\nRemoving worktrees...")
-	if _, err := os.Stat(c.paths.WorktreesDir); err == nil {
-		if err := os.RemoveAll(c.paths.WorktreesDir); err != nil {
-			fmt.Printf("  Warning: failed to remove worktrees: %v\n", err)
-		} else {
-			fmt.Printf("  Removed %s\n", c.paths.WorktreesDir)
-		}
-	}
-
-	// Step 3: Remove messages directory
-	fmt.Println("Removing messages...")
-	if _, err := os.Stat(c.paths.MessagesDir); err == nil {
-		if err := os.RemoveAll(c.paths.MessagesDir); err != nil {
-			fmt.Printf("  Warning: failed to remove messages: %v\n", err)
-		} else {
-			fmt.Printf("  Removed %s\n", c.paths.MessagesDir)
-		}
-	}
-
-	// Step 4: Remove output logs
-	fmt.Println("Removing output logs...")
-	if _, err := os.Stat(c.paths.OutputDir); err == nil {
-		if err := os.RemoveAll(c.paths.OutputDir); err != nil {
-			fmt.Printf("  Warning: failed to remove output logs: %v\n", err)
-		} else {
-			fmt.Printf("  Removed %s\n", c.paths.OutputDir)
-		}
-	}
-
-	// Step 5: Remove claude config (per-agent settings)
-	fmt.Println("Removing agent configs...")
-	if _, err := os.Stat(c.paths.ClaudeConfigDir); err == nil {
-		if err := os.RemoveAll(c.paths.ClaudeConfigDir); err != nil {
-			fmt.Printf("  Warning: failed to remove agent configs: %v\n", err)
-		} else {
-			fmt.Printf("  Removed %s\n", c.paths.ClaudeConfigDir)
-		}
-	}
-
-	// Step 6: Remove prompts directory
-	promptsDir := filepath.Join(c.paths.Root, "prompts")
-	if _, err := os.Stat(promptsDir); err == nil {
-		if err := os.RemoveAll(promptsDir); err != nil {
-			fmt.Printf("  Warning: failed to remove prompts: %v\n", err)
-		}
-	}
-
-	// Step 7: Clean up local branches in each repository
-	fmt.Println("\nCleaning up local branches...")
-	for _, repoName := range repos {
-		repoPath := c.paths.RepoDir(repoName)
-		if _, err := os.Stat(repoPath); os.IsNotExist(err) {
-			continue
-		}
-
-		fmt.Printf("  Repository: %s\n", repoName)
-
-		// Delete work/* and multiclaude/* branches
-		wt := worktree.NewManager(repoPath)
-		for _, prefix := range []string{"work/", "multiclaude/"} {
-			branches, err := c.listBranchesWithPrefix(repoPath, prefix)
-			if err != nil {
-				fmt.Printf("    Warning: failed to list %s branches: %v\n", prefix, err)
-				continue
-			}
-			for _, branch := range branches {
-				// First remove any worktree associated with this branch
-				if err := wt.Remove(branch, true); err != nil {
-					// Ignore errors - worktree may not exist
-				}
-				// Delete the branch
-				if err := c.deleteBranch(repoPath, branch); err != nil {
-					fmt.Printf("    Warning: failed to delete branch %s: %v\n", branch, err)
-				} else {
-					fmt.Printf("    Deleted branch: %s\n", branch)
-				}
-			}
-		}
-
-		// Prune worktrees
-		if err := wt.Prune(); err != nil {
-			fmt.Printf("    Warning: failed to prune worktrees: %v\n", err)
-		}
-	}
-
-	// Step 8: Clear agent state but preserve repository entries
-	fmt.Println("\nClearing agent state...")
-	st, err := state.Load(c.paths.StateFile)
-	if err == nil {
-		st.ClearAllAgents()
-		if err := st.Save(); err != nil {
-			fmt.Printf("  Warning: failed to save state: %v\n", err)
-		} else {
-			fmt.Println("  Cleared all agents from state")
-		}
-	}
-
-	// Step 9: Remove daemon files (they'll be recreated on next start)
-	fmt.Println("Cleaning up daemon files...")
-	os.Remove(c.paths.DaemonPID)
-	os.Remove(c.paths.DaemonSock)
-	os.Remove(c.paths.DaemonLog)
-
-	fmt.Println("\nNuke complete! Multiclaude has been reset to a clean state.")
-	fmt.Println("Your repositories are preserved at:", c.paths.ReposDir)
-	fmt.Println("\nRun 'multiclaude start' to begin fresh.")
 	return nil
 }
 

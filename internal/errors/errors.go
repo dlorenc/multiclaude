@@ -338,53 +338,8 @@ func UnknownCommand(cmd string) *CLIError {
 	}
 }
 
-// WorkspaceNotFound creates an error for when a workspace is not found
-func WorkspaceNotFound(workspaceName, repoName string) *CLIError {
-	return &CLIError{
-		Category:   CategoryNotFound,
-		Message:    fmt.Sprintf("workspace '%s' not found in repository '%s'", workspaceName, repoName),
-		Suggestion: fmt.Sprintf("multiclaude workspace list --repo %s", repoName),
-	}
-}
-
-// WorkspaceAlreadyExists creates an error for when a workspace already exists
-func WorkspaceAlreadyExists(workspaceName, repoName string) *CLIError {
-	return &CLIError{
-		Category:   CategoryConfig,
-		Message:    fmt.Sprintf("workspace '%s' already exists in repository '%s'", workspaceName, repoName),
-		Suggestion: fmt.Sprintf("use 'multiclaude workspace connect %s' to attach to existing workspace", workspaceName),
-	}
-}
-
-// InvalidWorkspaceName creates an error for invalid workspace names
-func InvalidWorkspaceName(reason string) *CLIError {
-	return &CLIError{
-		Category:   CategoryUsage,
-		Message:    fmt.Sprintf("invalid workspace name: %s", reason),
-		Suggestion: "workspace names must be alphanumeric with hyphens/underscores only",
-	}
-}
-
-// NoWorkspacesFound creates an error for when no workspaces exist
-func NoWorkspacesFound(repoName string) *CLIError {
-	return &CLIError{
-		Category:   CategoryNotFound,
-		Message:    fmt.Sprintf("no workspaces found in repository '%s'", repoName),
-		Suggestion: fmt.Sprintf("multiclaude workspace add <name> --repo %s", repoName),
-	}
-}
-
-// NoWorkersFound creates an error for when no workers exist
-func NoWorkersFound(repoName string) *CLIError {
-	return &CLIError{
-		Category:   CategoryNotFound,
-		Message:    fmt.Sprintf("no workers found in repository '%s'", repoName),
-		Suggestion: fmt.Sprintf("multiclaude work \"<task description>\" --repo %s", repoName),
-	}
-}
-
-// NoReposFound creates an error for when no repositories are tracked
-func NoReposFound() *CLIError {
+// NoRepositoriesFound creates an error for when no repositories are tracked
+func NoRepositoriesFound() *CLIError {
 	return &CLIError{
 		Category:   CategoryNotFound,
 		Message:    "no repositories found",
@@ -392,89 +347,38 @@ func NoReposFound() *CLIError {
 	}
 }
 
-// RepositoryNotFound creates an error for when a repository is not found
-func RepositoryNotFound(repoName string) *CLIError {
+// NoWorkersFound creates an error for when no workers exist in a repository
+func NoWorkersFound(repo string) *CLIError {
 	return &CLIError{
 		Category:   CategoryNotFound,
-		Message:    fmt.Sprintf("repository '%s' not found", repoName),
-		Suggestion: "multiclaude list",
+		Message:    fmt.Sprintf("no workers found in repo '%s'", repo),
+		Suggestion: fmt.Sprintf("multiclaude work \"<task>\" --repo %s", repo),
 	}
 }
 
-// DaemonOperationFailed creates an error for generic daemon operation failures
-func DaemonOperationFailed(operation string, cause error) *CLIError {
+// NoWorkspacesFound creates an error for when no workspaces exist in a repository
+func NoWorkspacesFound(repo string) *CLIError {
 	return &CLIError{
-		Category:   CategoryConnection,
-		Message:    fmt.Sprintf("daemon operation failed: %s", operation),
-		Cause:      cause,
-		Suggestion: "multiclaude daemon status",
+		Category:   CategoryNotFound,
+		Message:    fmt.Sprintf("no workspaces found in repo '%s'", repo),
+		Suggestion: fmt.Sprintf("multiclaude workspace add <name> --repo %s", repo),
 	}
 }
 
-// StateOperationFailed creates an error for state manipulation failures
-func StateOperationFailed(operation string, cause error) *CLIError {
+// NoAgentsFound creates an error for when no agents exist in a repository
+func NoAgentsFound(repo string) *CLIError {
 	return &CLIError{
-		Category:   CategoryRuntime,
-		Message:    fmt.Sprintf("state operation failed: %s", operation),
-		Cause:      cause,
-		Suggestion: "try 'multiclaude repair' if state is corrupted",
+		Category:   CategoryNotFound,
+		Message:    fmt.Sprintf("no agents found in repo '%s'", repo),
+		Suggestion: fmt.Sprintf("multiclaude work list --repo %s", repo),
 	}
 }
 
-// DirectoryOperationFailed creates an error for directory/path operation failures
-func DirectoryOperationFailed(operation string, cause error) *CLIError {
+// WorkspaceNotFound creates an error for when a workspace is not found
+func WorkspaceNotFound(name, repo string) *CLIError {
 	return &CLIError{
-		Category:   CategoryRuntime,
-		Message:    fmt.Sprintf("directory operation failed: %s", operation),
-		Cause:      cause,
-	}
-}
-
-// PromptGenerationFailed creates an error for prompt generation failures
-func PromptGenerationFailed(agentType string, cause error) *CLIError {
-	return &CLIError{
-		Category:   CategoryRuntime,
-		Message:    fmt.Sprintf("failed to generate %s prompt", agentType),
-		Cause:      cause,
-		Suggestion: "check that multiclaude is properly installed",
-	}
-}
-
-// SessionIDGenerationFailed creates an error for session ID generation failures
-func SessionIDGenerationFailed(agentType string, cause error) *CLIError {
-	return &CLIError{
-		Category:   CategoryRuntime,
-		Message:    fmt.Sprintf("failed to generate session ID for %s", agentType),
-		Cause:      cause,
-	}
-}
-
-// ClaudeStartFailed creates an error for Claude startup failures
-func ClaudeStartFailed(agentType string, cause error) *CLIError {
-	return &CLIError{
-		Category:   CategoryRuntime,
-		Message:    fmt.Sprintf("failed to start Claude for %s", agentType),
-		Cause:      cause,
-		Suggestion: "check that you're logged in with 'claude login' and have valid credentials",
-	}
-}
-
-// RegistrationFailed creates an error for agent registration failures
-func RegistrationFailed(agentType string, cause error) *CLIError {
-	return &CLIError{
-		Category:   CategoryConnection,
-		Message:    fmt.Sprintf("failed to register %s with daemon", agentType),
-		Cause:      cause,
-		Suggestion: "multiclaude daemon status",
-	}
-}
-
-// MessageOperationFailed creates an error for message-related operation failures
-func MessageOperationFailed(operation string, cause error) *CLIError {
-	return &CLIError{
-		Category:   CategoryRuntime,
-		Message:    fmt.Sprintf("message operation failed: %s", operation),
-		Cause:      cause,
-		Suggestion: "ensure you're running this from within an agent's tmux window",
+		Category:   CategoryNotFound,
+		Message:    fmt.Sprintf("workspace '%s' not found in repo '%s'", name, repo),
+		Suggestion: fmt.Sprintf("multiclaude workspace list --repo %s", repo),
 	}
 }

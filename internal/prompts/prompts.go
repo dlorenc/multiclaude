@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/dlorenc/multiclaude/internal/prompts/commands"
 )
 
 // AgentType represents the type of agent
@@ -88,7 +91,7 @@ func LoadCustomPrompt(repoPath string, agentType AgentType) (string, error) {
 	return string(content), nil
 }
 
-// GetPrompt returns the complete prompt for an agent, combining default, custom prompts, and CLI docs
+// GetPrompt returns the complete prompt for an agent, combining default, custom prompts, CLI docs, and slash commands
 func GetPrompt(repoPath string, agentType AgentType, cliDocs string) (string, error) {
 	defaultPrompt := GetDefaultPrompt(agentType)
 
@@ -104,6 +107,12 @@ func GetPrompt(repoPath string, agentType AgentType, cliDocs string) (string, er
 	// Add CLI documentation
 	if cliDocs != "" {
 		result += fmt.Sprintf("\n\n---\n\n%s", cliDocs)
+	}
+
+	// Add slash commands section
+	slashCommands := GetSlashCommandsPrompt()
+	if slashCommands != "" {
+		result += fmt.Sprintf("\n\n---\n\n%s", slashCommands)
 	}
 
 	// Add custom prompt if it exists
@@ -154,4 +163,25 @@ gh pr list --label multiclaude
 
 Monitor and process all multiclaude-labeled PRs regardless of author or assignee.`
 	}
+}
+
+// GetSlashCommandsPrompt returns a formatted prompt section containing all available
+// slash commands. This can be included in agent prompts to document the available
+// commands.
+func GetSlashCommandsPrompt() string {
+	var builder strings.Builder
+
+	builder.WriteString("## Slash Commands\n\n")
+	builder.WriteString("The following slash commands are available for use:\n\n")
+
+	for _, cmd := range commands.AvailableCommands {
+		content, err := commands.GetCommand(cmd.Name)
+		if err != nil {
+			continue
+		}
+		builder.WriteString(content)
+		builder.WriteString("\n---\n\n")
+	}
+
+	return builder.String()
 }

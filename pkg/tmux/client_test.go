@@ -938,6 +938,94 @@ func TestCustomErrorTypes(t *testing.T) {
 	}
 }
 
+func TestSessionNotFoundErrorIs(t *testing.T) {
+	err1 := &SessionNotFoundError{Name: "session1"}
+	err2 := &SessionNotFoundError{Name: "session2"}
+
+	// Is should return true for same error type regardless of name
+	if !err1.Is(err2) {
+		t.Error("SessionNotFoundError.Is should return true for another SessionNotFoundError")
+	}
+
+	// Is should return false for different error types
+	windowErr := &WindowNotFoundError{Session: "sess", Window: "win"}
+	if err1.Is(windowErr) {
+		t.Error("SessionNotFoundError.Is should return false for WindowNotFoundError")
+	}
+
+	// Is should return false for generic errors
+	genericErr := fmt.Errorf("some error")
+	if err1.Is(genericErr) {
+		t.Error("SessionNotFoundError.Is should return false for generic error")
+	}
+}
+
+func TestWindowNotFoundErrorIs(t *testing.T) {
+	err1 := &WindowNotFoundError{Session: "sess1", Window: "win1"}
+	err2 := &WindowNotFoundError{Session: "sess2", Window: "win2"}
+
+	// Is should return true for same error type regardless of session/window
+	if !err1.Is(err2) {
+		t.Error("WindowNotFoundError.Is should return true for another WindowNotFoundError")
+	}
+
+	// Is should return false for different error types
+	sessionErr := &SessionNotFoundError{Name: "sess"}
+	if err1.Is(sessionErr) {
+		t.Error("WindowNotFoundError.Is should return false for SessionNotFoundError")
+	}
+
+	// Is should return false for generic errors
+	genericErr := fmt.Errorf("some error")
+	if err1.Is(genericErr) {
+		t.Error("WindowNotFoundError.Is should return false for generic error")
+	}
+}
+
+func TestCommandErrorVariants(t *testing.T) {
+	// Test CommandError with only operation (no session or window)
+	cmdErrNoSession := &CommandError{Op: "list-sessions", Err: fmt.Errorf("failed")}
+	expected := "tmux list-sessions failed: failed"
+	if cmdErrNoSession.Error() != expected {
+		t.Errorf("Expected %q, got %q", expected, cmdErrNoSession.Error())
+	}
+
+	// Test CommandError with session but no window
+	cmdErrWithSession := &CommandError{Op: "kill-session", Session: "test-session", Err: fmt.Errorf("not found")}
+	expected = "tmux kill-session failed for session test-session: not found"
+	if cmdErrWithSession.Error() != expected {
+		t.Errorf("Expected %q, got %q", expected, cmdErrWithSession.Error())
+	}
+
+	// Test CommandError with session and window (already covered in TestCustomErrorTypes)
+	cmdErrFull := &CommandError{Op: "send-keys", Session: "sess", Window: "win", Err: fmt.Errorf("error")}
+	expected = "tmux send-keys failed for sess:win: error"
+	if cmdErrFull.Error() != expected {
+		t.Errorf("Expected %q, got %q", expected, cmdErrFull.Error())
+	}
+}
+
+func TestIsHelperFunctionsWithNil(t *testing.T) {
+	// Test helper functions with nil
+	if IsSessionNotFound(nil) {
+		t.Error("IsSessionNotFound(nil) should return false")
+	}
+	if IsWindowNotFound(nil) {
+		t.Error("IsWindowNotFound(nil) should return false")
+	}
+}
+
+func TestIsHelperFunctionsWithGenericErrors(t *testing.T) {
+	genericErr := fmt.Errorf("some generic error")
+
+	if IsSessionNotFound(genericErr) {
+		t.Error("IsSessionNotFound should return false for generic error")
+	}
+	if IsWindowNotFound(genericErr) {
+		t.Error("IsWindowNotFound should return false for generic error")
+	}
+}
+
 // BenchmarkSendKeys measures the performance of sending keys to a tmux pane.
 func BenchmarkSendKeys(b *testing.B) {
 	ctx := context.Background()

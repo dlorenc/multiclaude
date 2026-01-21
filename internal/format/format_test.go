@@ -204,3 +204,110 @@ func TestColoredStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestMessageBadge(t *testing.T) {
+	tests := []struct {
+		name     string
+		pending  int
+		total    int
+		contains string // substring that should be in result
+	}{
+		{"no messages", 0, 0, "-"},
+		{"no pending", 0, 5, "0/5"},
+		{"some pending", 2, 5, "2/5"},
+		{"all pending", 5, 5, "5/5"},
+		{"single pending", 1, 1, "1/1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MessageBadge(tt.pending, tt.total)
+			if !strings.Contains(got, tt.contains) {
+				t.Errorf("MessageBadge(%d, %d) = %q, want to contain %q", tt.pending, tt.total, got, tt.contains)
+			}
+		})
+	}
+}
+
+func TestColoredTableTotalWidth(t *testing.T) {
+	// Test totalWidth through the ColoredTable
+	table := NewColoredTable("Name", "Status", "Task")
+
+	// Initial widths should be based on headers
+	// Name=4, Status=6, Task=4 + spacing (2 between each column)
+	// Total = 4 + 2 + 6 + 2 + 4 = 18
+
+	// Add rows to potentially expand widths
+	table.AddRow(Cell("worker-1"), Cell("running"), Cell("Test task"))
+
+	// Add another row
+	table.AddRow(Cell("supervisor"), Cell("idle"), Cell("Short"))
+
+	// Verify rows were added correctly
+	if len(table.rows) != 2 {
+		t.Errorf("Expected 2 rows, got %d", len(table.rows))
+	}
+
+	// Verify widths are calculated (longest values)
+	// Name: "supervisor" = 10
+	// Status: "running" = 7
+	// Task: "Test task" = 9
+	if table.widths[0] < 10 {
+		t.Errorf("Expected width[0] >= 10 for 'supervisor', got %d", table.widths[0])
+	}
+	if table.widths[1] < 7 {
+		t.Errorf("Expected width[1] >= 7 for 'running', got %d", table.widths[1])
+	}
+	if table.widths[2] < 9 {
+		t.Errorf("Expected width[2] >= 9 for 'Test task', got %d", table.widths[2])
+	}
+}
+
+func TestTableWithMoreCellsThanHeaders(t *testing.T) {
+	// Test that extra cells beyond header count are ignored
+	table := NewTable("A", "B")
+	table.AddRow("1", "2", "3", "4") // More cells than headers
+
+	output := table.String()
+	// Should only contain first 2 cells
+	if !strings.Contains(output, "1") {
+		t.Error("Table output missing first cell")
+	}
+	if !strings.Contains(output, "2") {
+		t.Error("Table output missing second cell")
+	}
+}
+
+func TestTableWithFewerCellsThanHeaders(t *testing.T) {
+	// Test that missing cells are handled
+	table := NewTable("A", "B", "C")
+	table.AddRow("1") // Fewer cells than headers
+
+	output := table.String()
+	// Should contain the cell we provided
+	if !strings.Contains(output, "1") {
+		t.Error("Table output missing first cell")
+	}
+	// Should have all headers
+	if !strings.Contains(output, "A") || !strings.Contains(output, "B") || !strings.Contains(output, "C") {
+		t.Error("Table output missing headers")
+	}
+	// Should have separator dashes (one per column, separated by spaces)
+	if strings.Count(output, "-") < 3 {
+		t.Error("Table output missing column separators")
+	}
+}
+
+func TestTableEmpty(t *testing.T) {
+	table := NewTable("Header1", "Header2")
+	// No rows added
+	output := table.String()
+
+	// Should have headers and separator, but no data rows
+	if !strings.Contains(output, "Header1") {
+		t.Error("Empty table should still have headers")
+	}
+	if !strings.Contains(output, "---") {
+		t.Error("Empty table should have separator")
+	}
+}

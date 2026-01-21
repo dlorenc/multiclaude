@@ -162,3 +162,110 @@ func TestOutputPaths(t *testing.T) {
 		t.Errorf("AgentLogFile(happy-eagle, true) = %q, want %q", workerLog, expected)
 	}
 }
+
+func TestAgentClaudeConfigDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	paths := &Paths{
+		Root:            tmpDir,
+		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
+	}
+
+	repoName := "test-repo"
+	agentName := "happy-eagle"
+
+	configDir := paths.AgentClaudeConfigDir(repoName, agentName)
+	expected := filepath.Join(tmpDir, "claude-config", repoName, agentName)
+	if configDir != expected {
+		t.Errorf("AgentClaudeConfigDir() = %q, want %q", configDir, expected)
+	}
+
+	// Test with different agent types
+	supervisorConfigDir := paths.AgentClaudeConfigDir(repoName, "supervisor")
+	expected = filepath.Join(tmpDir, "claude-config", repoName, "supervisor")
+	if supervisorConfigDir != expected {
+		t.Errorf("AgentClaudeConfigDir(supervisor) = %q, want %q", supervisorConfigDir, expected)
+	}
+}
+
+func TestAgentCommandsDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	paths := &Paths{
+		Root:            tmpDir,
+		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
+	}
+
+	repoName := "test-repo"
+	agentName := "happy-eagle"
+
+	commandsDir := paths.AgentCommandsDir(repoName, agentName)
+	expected := filepath.Join(tmpDir, "claude-config", repoName, agentName, "commands")
+	if commandsDir != expected {
+		t.Errorf("AgentCommandsDir() = %q, want %q", commandsDir, expected)
+	}
+
+	// Verify it builds on AgentClaudeConfigDir
+	configDir := paths.AgentClaudeConfigDir(repoName, agentName)
+	expectedFromConfig := filepath.Join(configDir, "commands")
+	if commandsDir != expectedFromConfig {
+		t.Errorf("AgentCommandsDir should be AgentClaudeConfigDir + 'commands'")
+	}
+}
+
+func TestNewTestPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	paths := NewTestPaths(tmpDir)
+
+	// Verify all paths are set correctly
+	if paths.Root != tmpDir {
+		t.Errorf("Root = %q, want %q", paths.Root, tmpDir)
+	}
+
+	expectedPaths := map[string]string{
+		"DaemonPID":       filepath.Join(tmpDir, "daemon.pid"),
+		"DaemonSock":      filepath.Join(tmpDir, "daemon.sock"),
+		"DaemonLog":       filepath.Join(tmpDir, "daemon.log"),
+		"StateFile":       filepath.Join(tmpDir, "state.json"),
+		"ReposDir":        filepath.Join(tmpDir, "repos"),
+		"WorktreesDir":    filepath.Join(tmpDir, "wts"),
+		"MessagesDir":     filepath.Join(tmpDir, "messages"),
+		"OutputDir":       filepath.Join(tmpDir, "output"),
+		"ClaudeConfigDir": filepath.Join(tmpDir, "claude-config"),
+	}
+
+	if paths.DaemonPID != expectedPaths["DaemonPID"] {
+		t.Errorf("DaemonPID = %q, want %q", paths.DaemonPID, expectedPaths["DaemonPID"])
+	}
+	if paths.DaemonSock != expectedPaths["DaemonSock"] {
+		t.Errorf("DaemonSock = %q, want %q", paths.DaemonSock, expectedPaths["DaemonSock"])
+	}
+	if paths.DaemonLog != expectedPaths["DaemonLog"] {
+		t.Errorf("DaemonLog = %q, want %q", paths.DaemonLog, expectedPaths["DaemonLog"])
+	}
+	if paths.StateFile != expectedPaths["StateFile"] {
+		t.Errorf("StateFile = %q, want %q", paths.StateFile, expectedPaths["StateFile"])
+	}
+	if paths.ReposDir != expectedPaths["ReposDir"] {
+		t.Errorf("ReposDir = %q, want %q", paths.ReposDir, expectedPaths["ReposDir"])
+	}
+	if paths.WorktreesDir != expectedPaths["WorktreesDir"] {
+		t.Errorf("WorktreesDir = %q, want %q", paths.WorktreesDir, expectedPaths["WorktreesDir"])
+	}
+	if paths.MessagesDir != expectedPaths["MessagesDir"] {
+		t.Errorf("MessagesDir = %q, want %q", paths.MessagesDir, expectedPaths["MessagesDir"])
+	}
+	if paths.OutputDir != expectedPaths["OutputDir"] {
+		t.Errorf("OutputDir = %q, want %q", paths.OutputDir, expectedPaths["OutputDir"])
+	}
+	if paths.ClaudeConfigDir != expectedPaths["ClaudeConfigDir"] {
+		t.Errorf("ClaudeConfigDir = %q, want %q", paths.ClaudeConfigDir, expectedPaths["ClaudeConfigDir"])
+	}
+
+	// Verify helper methods work correctly
+	repoDir := paths.RepoDir("test-repo")
+	if repoDir != filepath.Join(tmpDir, "repos", "test-repo") {
+		t.Errorf("RepoDir() on NewTestPaths result = %q, unexpected", repoDir)
+	}
+}

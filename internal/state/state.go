@@ -103,27 +103,12 @@ type Repository struct {
 	MergeQueueConfig MergeQueueConfig   `json:"merge_queue_config,omitempty"`
 }
 
-// UpdateStatus tracks the state of update checks
-type UpdateStatus struct {
-	// LastChecked is when the last update check was performed
-	LastChecked time.Time `json:"last_checked,omitempty"`
-	// CurrentVersion is the version of the running binary
-	CurrentVersion string `json:"current_version,omitempty"`
-	// LatestVersion is the latest available version (if known)
-	LatestVersion string `json:"latest_version,omitempty"`
-	// UpdateAvailable indicates if a newer version is available
-	UpdateAvailable bool `json:"update_available,omitempty"`
-	// LastError contains the last error message from update check (if any)
-	LastError string `json:"last_error,omitempty"`
-}
-
 // State represents the entire daemon state
 type State struct {
-	Repos        map[string]*Repository `json:"repos"`
-	CurrentRepo  string                 `json:"current_repo,omitempty"`
-	UpdateStatus UpdateStatus           `json:"update_status,omitempty"`
-	mu           sync.RWMutex
-	path         string
+	Repos       map[string]*Repository `json:"repos"`
+	CurrentRepo string                 `json:"current_repo,omitempty"`
+	mu          sync.RWMutex
+	path        string
 }
 
 // New creates a new empty state
@@ -529,21 +514,6 @@ func (s *State) UpdateTaskHistorySummary(repoName, taskName, summary, failureRea
 	}
 
 	return fmt.Errorf("task %q not found in history", taskName)
-}
-
-// GetUpdateStatus returns the current update status
-func (s *State) GetUpdateStatus() UpdateStatus {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.UpdateStatus
-}
-
-// SetUpdateStatus sets the update status
-func (s *State) SetUpdateStatus(status UpdateStatus) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.UpdateStatus = status
-	return s.saveUnlocked()
 }
 
 // saveUnlocked saves state without acquiring lock (caller must hold lock)

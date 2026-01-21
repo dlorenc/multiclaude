@@ -14,6 +14,16 @@ Key constraints:
 - **Simple**: Prefer deleting code over adding complexity
 - **Terminal-native**: No web dashboards, GUIs, or browser-based interfaces
 
+## Operational Principles
+
+These principles guide how multiclaude interacts with the user's environment:
+
+1. **Zero Repo Requirements**: Users can use multiclaude without adding anything to their repository. Repo-level customization via `.multiclaude/` is optional.
+
+2. **Self-Contained State**: All multiclaude state lives in `$HOME/.multiclaude/`. Never modify global Claude state (`~/.claude/`) or other global configs.
+
+3. **Optional Repo Config**: If users want repo-specific behavior, they can add a `.multiclaude/` directory to their repo.
+
 ## Current Phase: Stabilization
 
 Focus: Make the core experience rock-solid before adding features.
