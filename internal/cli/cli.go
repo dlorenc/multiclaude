@@ -422,7 +422,7 @@ func (c *CLI) registerCommands() {
 	agentCmd.Subcommands["complete"] = &Command{
 		Name:        "complete",
 		Description: "Signal worker completion",
-		Usage:       "multiclaude agent complete",
+		Usage:       "multiclaude agent complete [--summary <text>] [--failure <reason>]",
 		Run:         c.completeWorker,
 	}
 
@@ -1859,6 +1859,14 @@ func (c *CLI) showHistory(args []string) error {
 	format.Header("Task History for '%s' (last %d):", repoName, len(history))
 	fmt.Println()
 
+	// First pass: collect entries with details to show after table
+	type entryDetails struct {
+		name          string
+		summary       string
+		failureReason string
+	}
+	var detailsToShow []entryDetails
+
 	table := format.NewColoredTable("NAME", "STATUS", "PR", "COMPLETED", "TASK")
 	for _, item := range history {
 		entry, ok := item.(map[string]interface{})
@@ -1871,9 +1879,26 @@ func (c *CLI) showHistory(args []string) error {
 		branch, _ := entry["branch"].(string)
 		prURL, _ := entry["pr_url"].(string)
 		completedAt, _ := entry["completed_at"].(string)
+		summary, _ := entry["summary"].(string)
+		failureReason, _ := entry["failure_reason"].(string)
+		storedStatus, _ := entry["status"].(string)
+
+		// Collect entries with summary or failure for detailed display
+		if summary != "" || failureReason != "" {
+			detailsToShow = append(detailsToShow, entryDetails{
+				name:          name,
+				summary:       summary,
+				failureReason: failureReason,
+			})
+		}
 
 		// Try to get PR status from GitHub if we have a branch
 		prStatus, prLink := c.getPRStatusForBranch(repoPath, branch, prURL)
+
+		// Use stored status if it indicates failure
+		if storedStatus == "failed" {
+			prStatus = "failed"
+		}
 
 		// Format status with color
 		var statusCell format.ColoredCell
@@ -1884,6 +1909,8 @@ func (c *CLI) showHistory(args []string) error {
 			statusCell = format.ColorCell("open", format.Yellow)
 		case "closed":
 			statusCell = format.ColorCell("closed", format.Red)
+		case "failed":
+			statusCell = format.ColorCell("failed", format.Red)
 		default:
 			statusCell = format.ColorCell("no-pr", format.Dim)
 		}
@@ -1903,8 +1930,8 @@ func (c *CLI) showHistory(args []string) error {
 			}
 		}
 
-		// Truncate task
-		truncTask := format.Truncate(task, 35)
+		// Truncate task (increased width from 35 to 50)
+		truncTask := format.Truncate(task, 50)
 
 		table.AddRow(
 			format.Cell(name),
@@ -1915,6 +1942,21 @@ func (c *CLI) showHistory(args []string) error {
 		)
 	}
 	table.Print()
+
+	// Print detailed summary/failure section if any entries have them
+	if len(detailsToShow) > 0 {
+		fmt.Println()
+		format.Header("Details:")
+		for _, d := range detailsToShow {
+			format.Bold.Printf("\n%s:\n", d.name)
+			if d.summary != "" {
+				format.Dimmed("  Summary: %s", d.summary)
+			}
+			if d.failureReason != "" {
+				format.Red.Printf("  Failure: %s\n", d.failureReason)
+			}
+		}
+	}
 
 	return nil
 }
@@ -2973,6 +3015,9 @@ func truncateString(s string, maxLen int) string {
 }
 
 func (c *CLI) completeWorker(args []string) error {
+	// Parse flags for optional summary and failure reason
+	flags, _ := ParseFlags(args)
+
 	// Determine current agent and repo
 	repoName, agentName, err := c.inferAgentContext()
 	if err != nil {
@@ -2981,13 +3026,28 @@ func (c *CLI) completeWorker(args []string) error {
 
 	fmt.Printf("Marking agent '%s' as complete...\n", agentName)
 
+	// Build request args
+	reqArgs := map[string]interface{}{
+		"repo":  repoName,
+		"agent": agentName,
+	}
+
+	// Add optional summary
+	if summary, ok := flags["summary"]; ok && summary != "" {
+		reqArgs["summary"] = summary
+		fmt.Printf("Summary: %s\n", summary)
+	}
+
+	// Add optional failure reason
+	if failureReason, ok := flags["failure"]; ok && failureReason != "" {
+		reqArgs["failure_reason"] = failureReason
+		fmt.Printf("Failure reason: %s\n", failureReason)
+	}
+
 	client := socket.NewClient(c.paths.DaemonSock)
 	resp, err := client.Send(socket.Request{
 		Command: "complete_agent",
-		Args: map[string]interface{}{
-			"repo":  repoName,
-			"agent": agentName,
-		},
+		Args:    reqArgs,
 	})
 	if err != nil {
 		return errors.DaemonCommunicationFailed("marking agent complete", err)

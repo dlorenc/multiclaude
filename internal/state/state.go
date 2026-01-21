@@ -59,20 +59,24 @@ const (
 	TaskStatusClosed TaskStatus = "closed"
 	// TaskStatusNoPR means no PR was created
 	TaskStatusNoPR TaskStatus = "no-pr"
+	// TaskStatusFailed means the task failed without creating a PR
+	TaskStatusFailed TaskStatus = "failed"
 	// TaskStatusUnknown means the status couldn't be determined
 	TaskStatusUnknown TaskStatus = "unknown"
 )
 
 // TaskHistoryEntry represents a completed task in the history
 type TaskHistoryEntry struct {
-	Name        string     `json:"name"`                   // Worker name
-	Task        string     `json:"task"`                   // Task description
-	Branch      string     `json:"branch"`                 // Git branch
-	PRURL       string     `json:"pr_url,omitempty"`       // Pull request URL if created
-	PRNumber    int        `json:"pr_number,omitempty"`    // PR number for quick lookup
-	Status      TaskStatus `json:"status"`                 // Current status
-	CreatedAt   time.Time  `json:"created_at"`             // When the task was started
-	CompletedAt time.Time  `json:"completed_at,omitempty"` // When the task was completed
+	Name          string     `json:"name"`                     // Worker name
+	Task          string     `json:"task"`                     // Task description
+	Branch        string     `json:"branch"`                   // Git branch
+	PRURL         string     `json:"pr_url,omitempty"`         // Pull request URL if created
+	PRNumber      int        `json:"pr_number,omitempty"`      // PR number for quick lookup
+	Status        TaskStatus `json:"status"`                   // Current status
+	Summary       string     `json:"summary,omitempty"`        // Brief summary of what was accomplished
+	FailureReason string     `json:"failure_reason,omitempty"` // Why the task failed (if applicable)
+	CreatedAt     time.Time  `json:"created_at"`               // When the task was started
+	CompletedAt   time.Time  `json:"completed_at,omitempty"`   // When the task was completed
 }
 
 // Agent represents an agent's state
@@ -82,7 +86,9 @@ type Agent struct {
 	TmuxWindow      string    `json:"tmux_window"`
 	SessionID       string    `json:"session_id"`
 	PID             int       `json:"pid"`
-	Task            string    `json:"task,omitempty"` // Only for workers
+	Task            string    `json:"task,omitempty"`             // Only for workers
+	Summary         string    `json:"summary,omitempty"`          // Brief summary of work done (workers only)
+	FailureReason   string    `json:"failure_reason,omitempty"`   // Why the task failed (workers only)
 	CreatedAt       time.Time `json:"created_at"`
 	LastNudge       time.Time `json:"last_nudge,omitempty"`
 	ReadyForCleanup bool      `json:"ready_for_cleanup,omitempty"` // Only for workers
@@ -462,6 +468,34 @@ func (s *State) UpdateTaskHistoryStatus(repoName, taskName string, status TaskSt
 			}
 			if prNumber > 0 {
 				repo.TaskHistory[i].PRNumber = prNumber
+			}
+			return s.saveUnlocked()
+		}
+	}
+
+	return fmt.Errorf("task %q not found in history", taskName)
+}
+
+// UpdateTaskHistorySummary updates the summary and failure reason for a task by name
+func (s *State) UpdateTaskHistorySummary(repoName, taskName, summary, failureReason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return fmt.Errorf("repository %q not found", repoName)
+	}
+
+	// Find the most recent entry with this name and update it
+	for i := len(repo.TaskHistory) - 1; i >= 0; i-- {
+		if repo.TaskHistory[i].Name == taskName {
+			if summary != "" {
+				repo.TaskHistory[i].Summary = summary
+			}
+			if failureReason != "" {
+				repo.TaskHistory[i].FailureReason = failureReason
+				// Also update status to failed if a failure reason is provided
+				repo.TaskHistory[i].Status = TaskStatusFailed
 			}
 			return s.saveUnlocked()
 		}

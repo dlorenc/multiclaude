@@ -843,6 +843,15 @@ func (d *Daemon) handleCompleteAgent(req socket.Request) socket.Response {
 
 	// Mark as ready for cleanup
 	agent.ReadyForCleanup = true
+
+	// Optional: capture summary and failure reason for task history
+	if summary, ok := req.Args["summary"].(string); ok && summary != "" {
+		agent.Summary = summary
+	}
+	if failureReason, ok := req.Args["failure_reason"].(string); ok && failureReason != "" {
+		agent.FailureReason = failureReason
+	}
+
 	if err := d.state.UpdateAgent(repoName, agentName, agent); err != nil {
 		return socket.Response{Success: false, Error: err.Error()}
 	}
@@ -1156,19 +1165,27 @@ func (d *Daemon) recordTaskHistory(repoName, agentName string, agent state.Agent
 		}
 	}
 
+	// Determine initial status
+	status := state.TaskStatusUnknown
+	if agent.FailureReason != "" {
+		status = state.TaskStatusFailed
+	}
+
 	entry := state.TaskHistoryEntry{
-		Name:        agentName,
-		Task:        agent.Task,
-		Branch:      branch,
-		Status:      state.TaskStatusUnknown, // Will be updated when displaying
-		CreatedAt:   agent.CreatedAt,
-		CompletedAt: time.Now(),
+		Name:          agentName,
+		Task:          agent.Task,
+		Branch:        branch,
+		Status:        status, // Will be updated when displaying if a PR exists
+		Summary:       agent.Summary,
+		FailureReason: agent.FailureReason,
+		CreatedAt:     agent.CreatedAt,
+		CompletedAt:   time.Now(),
 	}
 
 	if err := d.state.AddTaskHistory(repoName, entry); err != nil {
 		d.logger.Warn("Failed to record task history for %s: %v", agentName, err)
 	} else {
-		d.logger.Info("Recorded task history for %s (branch: %s)", agentName, branch)
+		d.logger.Info("Recorded task history for %s (branch: %s, summary: %q)", agentName, branch, agent.Summary)
 	}
 }
 
@@ -1194,14 +1211,16 @@ func (d *Daemon) handleTaskHistory(req socket.Request) socket.Response {
 	result := make([]map[string]interface{}, len(history))
 	for i, entry := range history {
 		result[i] = map[string]interface{}{
-			"name":         entry.Name,
-			"task":         entry.Task,
-			"branch":       entry.Branch,
-			"pr_url":       entry.PRURL,
-			"pr_number":    entry.PRNumber,
-			"status":       string(entry.Status),
-			"created_at":   entry.CreatedAt,
-			"completed_at": entry.CompletedAt,
+			"name":           entry.Name,
+			"task":           entry.Task,
+			"branch":         entry.Branch,
+			"pr_url":         entry.PRURL,
+			"pr_number":      entry.PRNumber,
+			"status":         string(entry.Status),
+			"summary":        entry.Summary,
+			"failure_reason": entry.FailureReason,
+			"created_at":     entry.CreatedAt,
+			"completed_at":   entry.CompletedAt,
 		}
 	}
 
