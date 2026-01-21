@@ -168,6 +168,89 @@ func TestSetupAgentCommandsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCopyFileIfExists(t *testing.T) {
+	t.Run("copies existing file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		srcPath := filepath.Join(tmpDir, "source.json")
+		dstPath := filepath.Join(tmpDir, "dest.json")
+
+		// Create source file with test content
+		testContent := []byte(`{"test": "credentials"}`)
+		if err := os.WriteFile(srcPath, testContent, 0644); err != nil {
+			t.Fatalf("Failed to create source file: %v", err)
+		}
+
+		// Copy the file
+		if err := copyFileIfExists(srcPath, dstPath); err != nil {
+			t.Fatalf("copyFileIfExists failed: %v", err)
+		}
+
+		// Verify destination file exists with correct content
+		gotContent, err := os.ReadFile(dstPath)
+		if err != nil {
+			t.Fatalf("Failed to read destination file: %v", err)
+		}
+		if string(gotContent) != string(testContent) {
+			t.Errorf("Content mismatch: got %q, want %q", gotContent, testContent)
+		}
+
+		// Verify destination file has restricted permissions (0600)
+		info, err := os.Stat(dstPath)
+		if err != nil {
+			t.Fatalf("Failed to stat destination file: %v", err)
+		}
+		if perm := info.Mode().Perm(); perm != 0600 {
+			t.Errorf("Destination file permissions: got %o, want 0600", perm)
+		}
+	})
+
+	t.Run("does nothing when source missing", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		srcPath := filepath.Join(tmpDir, "nonexistent.json")
+		dstPath := filepath.Join(tmpDir, "dest.json")
+
+		// Copy should succeed (no-op)
+		if err := copyFileIfExists(srcPath, dstPath); err != nil {
+			t.Fatalf("copyFileIfExists failed: %v", err)
+		}
+
+		// Verify destination was not created
+		if _, err := os.Stat(dstPath); !os.IsNotExist(err) {
+			t.Error("Destination file should not exist when source is missing")
+		}
+	})
+
+	t.Run("overwrites existing destination", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		srcPath := filepath.Join(tmpDir, "source.json")
+		dstPath := filepath.Join(tmpDir, "dest.json")
+
+		// Create source and destination files
+		srcContent := []byte(`{"new": "content"}`)
+		dstContent := []byte(`{"old": "content"}`)
+		if err := os.WriteFile(srcPath, srcContent, 0644); err != nil {
+			t.Fatalf("Failed to create source file: %v", err)
+		}
+		if err := os.WriteFile(dstPath, dstContent, 0644); err != nil {
+			t.Fatalf("Failed to create destination file: %v", err)
+		}
+
+		// Copy should overwrite
+		if err := copyFileIfExists(srcPath, dstPath); err != nil {
+			t.Fatalf("copyFileIfExists failed: %v", err)
+		}
+
+		// Verify destination has new content
+		gotContent, err := os.ReadFile(dstPath)
+		if err != nil {
+			t.Fatalf("Failed to read destination file: %v", err)
+		}
+		if string(gotContent) != string(srcContent) {
+			t.Errorf("Content mismatch: got %q, want %q", gotContent, srcContent)
+		}
+	})
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
 }

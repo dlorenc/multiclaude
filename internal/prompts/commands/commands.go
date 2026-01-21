@@ -80,5 +80,39 @@ func SetupAgentCommands(configDir string) error {
 		return err
 	}
 
+	// Copy credentials file if it exists so agents don't need to re-authenticate
+	home, err := os.UserHomeDir()
+	if err == nil {
+		srcPath := filepath.Join(home, ".claude", ".credentials.json")
+		dstPath := filepath.Join(configDir, ".credentials.json")
+		if err := copyFileIfExists(srcPath, dstPath); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// copyFileIfExists copies a file from src to dst if src exists.
+// The destination file is created with mode 0600 for security.
+func copyFileIfExists(src, dst string) error {
+	// Check if source file exists
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		return nil // Source doesn't exist, nothing to copy
+	} else if err != nil {
+		return fmt.Errorf("failed to check file %s: %w", src, err)
+	}
+
+	// Read source file
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("failed to read file %s: %w", src, err)
+	}
+
+	// Write destination file with restricted permissions (credentials are sensitive)
+	if err := os.WriteFile(dst, data, 0600); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", dst, err)
+	}
+
 	return nil
 }
