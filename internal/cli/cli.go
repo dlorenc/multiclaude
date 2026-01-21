@@ -99,6 +99,15 @@ func (c *CLI) getClaudeBinary() (string, error) {
 	return binaryPath, nil
 }
 
+// loadState loads the state file, wrapping errors with context
+func (c *CLI) loadState() (*state.State, error) {
+	st, err := state.Load(c.paths.StateFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load state: %w", err)
+	}
+	return st, nil
+}
+
 // tmuxSanitizer replaces problematic characters with hyphens for tmux session names.
 // tmux has issues with dots, colons, spaces, and forward slashes in session names.
 var tmuxSanitizer = strings.NewReplacer(
@@ -3152,9 +3161,9 @@ func (c *CLI) findRepoFromGitRemote() (string, error) {
 	}
 
 	// Load state to check against known repositories
-	st, err := state.Load(c.paths.StateFile)
+	st, err := c.loadState()
 	if err != nil {
-		return "", fmt.Errorf("failed to load state: %w", err)
+		return "", err
 	}
 
 	// Iterate through repos and find a match
@@ -3972,9 +3981,9 @@ func (c *CLI) cleanupMergedBranches(dryRun bool, verbose bool) error {
 	fmt.Println("\nChecking for branches merged upstream...")
 
 	// Load state to get repository list
-	st, err := state.Load(c.paths.StateFile)
+	st, err := c.loadState()
 	if err != nil {
-		return fmt.Errorf("failed to load state: %w", err)
+		return err
 	}
 
 	totalDeleted := 0
@@ -4402,9 +4411,9 @@ func (c *CLI) repair(args []string) error {
 // localRepair performs state repair without the daemon running
 func (c *CLI) localRepair(verbose bool) error {
 	// Load state from disk
-	st, err := state.Load(c.paths.StateFile)
+	st, err := c.loadState()
 	if err != nil {
-		return fmt.Errorf("failed to load state: %w", err)
+		return err
 	}
 
 	tmuxClient := tmux.NewClient()

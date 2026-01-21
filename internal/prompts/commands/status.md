@@ -34,6 +34,7 @@ Run the following commands and summarize the results:
 Present the results in a clear, organized format with sections for:
 - Tracked repositories and agents
 - Daemon status
+- Tracked repositories and agents
 - Current branch and git status
 - Recent commits
 - Pending messages (if any)

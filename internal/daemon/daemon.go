@@ -170,6 +170,19 @@ func (d *Daemon) Stop() error {
 	return nil
 }
 
+// getRequiredStringArg extracts a required string argument from request Args.
+// Returns the value and true if present, or an error response and false if missing.
+func getRequiredStringArg(args map[string]interface{}, key, description string) (string, socket.Response, bool) {
+	val, ok := args[key].(string)
+	if !ok || val == "" {
+		return "", socket.Response{
+			Success: false,
+			Error:   fmt.Sprintf("missing '%s': %s", key, description),
+		}, false
+	}
+	return val, socket.Response{}, true
+}
+
 // serverLoop handles socket connections
 func (d *Daemon) serverLoop() {
 	defer d.wg.Done()
@@ -727,19 +740,19 @@ func (d *Daemon) handleListRepos(req socket.Request) socket.Response {
 
 // handleAddRepo adds a new repository
 func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
-	name, ok := req.Args["name"].(string)
-	if !ok || name == "" {
-		return socket.Response{Success: false, Error: "missing 'name': repository name is required (e.g., 'my-project')"}
+	name, errResp, ok := getRequiredStringArg(req.Args, "name", "repository name is required (e.g., 'my-project')")
+	if !ok {
+		return errResp
 	}
 
-	githubURL, ok := req.Args["github_url"].(string)
-	if !ok || githubURL == "" {
-		return socket.Response{Success: false, Error: "missing 'github_url': GitHub repository URL is required (e.g., 'https://github.com/owner/repo')"}
+	githubURL, errResp, ok := getRequiredStringArg(req.Args, "github_url", "GitHub repository URL is required (e.g., 'https://github.com/owner/repo')")
+	if !ok {
+		return errResp
 	}
 
-	tmuxSession, ok := req.Args["tmux_session"].(string)
-	if !ok || tmuxSession == "" {
-		return socket.Response{Success: false, Error: "missing 'tmux_session': tmux session name is required"}
+	tmuxSession, errResp, ok := getRequiredStringArg(req.Args, "tmux_session", "tmux session name is required")
+	if !ok {
+		return errResp
 	}
 
 	// Parse merge queue configuration (optional, defaults to enabled with "all" tracking)
@@ -775,9 +788,9 @@ func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
 
 // handleRemoveRepo removes a repository from state
 func (d *Daemon) handleRemoveRepo(req socket.Request) socket.Response {
-	name, ok := req.Args["name"].(string)
-	if !ok || name == "" {
-		return socket.Response{Success: false, Error: "missing 'name': repository name is required"}
+	name, errResp, ok := getRequiredStringArg(req.Args, "name", "repository name is required")
+	if !ok {
+		return errResp
 	}
 
 	if err := d.state.RemoveRepo(name); err != nil {
@@ -790,34 +803,34 @@ func (d *Daemon) handleRemoveRepo(req socket.Request) socket.Response {
 
 // handleAddAgent adds a new agent
 func (d *Daemon) handleAddAgent(req socket.Request) socket.Response {
-	repoName, ok := req.Args["repo"].(string)
-	if !ok || repoName == "" {
-		return socket.Response{Success: false, Error: "missing 'repo': repository name is required"}
+	repoName, errResp, ok := getRequiredStringArg(req.Args, "repo", "repository name is required")
+	if !ok {
+		return errResp
 	}
 
-	agentName, ok := req.Args["agent"].(string)
-	if !ok || agentName == "" {
-		return socket.Response{Success: false, Error: "missing 'agent': agent name is required"}
+	agentName, errResp, ok := getRequiredStringArg(req.Args, "agent", "agent name is required")
+	if !ok {
+		return errResp
 	}
 
-	agentTypeStr, ok := req.Args["type"].(string)
-	if !ok || agentTypeStr == "" {
-		return socket.Response{Success: false, Error: "missing 'type': agent type is required (supervisor, worker, merge-queue, or reviewer)"}
+	agentTypeStr, errResp, ok := getRequiredStringArg(req.Args, "type", "agent type is required (supervisor, worker, merge-queue, or reviewer)")
+	if !ok {
+		return errResp
 	}
 
-	worktreePath, ok := req.Args["worktree_path"].(string)
-	if !ok || worktreePath == "" {
-		return socket.Response{Success: false, Error: "missing 'worktree_path': path to the agent's git worktree is required"}
+	worktreePath, errResp, ok := getRequiredStringArg(req.Args, "worktree_path", "path to the agent's git worktree is required")
+	if !ok {
+		return errResp
 	}
 
-	tmuxWindow, ok := req.Args["tmux_window"].(string)
-	if !ok || tmuxWindow == "" {
-		return socket.Response{Success: false, Error: "missing 'tmux_window': tmux window name is required"}
+	tmuxWindow, errResp, ok := getRequiredStringArg(req.Args, "tmux_window", "tmux window name is required")
+	if !ok {
+		return errResp
 	}
 
 	// Get session ID from args or generate one
-	sessionID, ok := req.Args["session_id"].(string)
-	if !ok || sessionID == "" {
+	sessionID, _, ok := getRequiredStringArg(req.Args, "session_id", "")
+	if !ok {
 		sessionID = fmt.Sprintf("agent-%d", time.Now().UnixNano())
 	}
 
@@ -853,14 +866,14 @@ func (d *Daemon) handleAddAgent(req socket.Request) socket.Response {
 
 // handleRemoveAgent removes an agent
 func (d *Daemon) handleRemoveAgent(req socket.Request) socket.Response {
-	repoName, ok := req.Args["repo"].(string)
-	if !ok || repoName == "" {
-		return socket.Response{Success: false, Error: "missing 'repo': repository name is required"}
+	repoName, errResp, ok := getRequiredStringArg(req.Args, "repo", "repository name is required")
+	if !ok {
+		return errResp
 	}
 
-	agentName, ok := req.Args["agent"].(string)
-	if !ok || agentName == "" {
-		return socket.Response{Success: false, Error: "missing 'agent': agent name is required"}
+	agentName, errResp, ok := getRequiredStringArg(req.Args, "agent", "agent name is required")
+	if !ok {
+		return errResp
 	}
 
 	if err := d.state.RemoveAgent(repoName, agentName); err != nil {
@@ -873,9 +886,9 @@ func (d *Daemon) handleRemoveAgent(req socket.Request) socket.Response {
 
 // handleListAgents lists agents for a repository
 func (d *Daemon) handleListAgents(req socket.Request) socket.Response {
-	repoName, ok := req.Args["repo"].(string)
-	if !ok || repoName == "" {
-		return socket.Response{Success: false, Error: "missing 'repo': repository name is required"}
+	repoName, errResp, ok := getRequiredStringArg(req.Args, "repo", "repository name is required")
+	if !ok {
+		return errResp
 	}
 
 	agents, err := d.state.ListAgents(repoName)
@@ -953,14 +966,14 @@ func (d *Daemon) handleListAgents(req socket.Request) socket.Response {
 
 // handleCompleteAgent marks an agent as ready for cleanup
 func (d *Daemon) handleCompleteAgent(req socket.Request) socket.Response {
-	repoName, ok := req.Args["repo"].(string)
-	if !ok || repoName == "" {
-		return socket.Response{Success: false, Error: "missing 'repo': repository name is required"}
+	repoName, errResp, ok := getRequiredStringArg(req.Args, "repo", "repository name is required")
+	if !ok {
+		return errResp
 	}
 
-	agentName, ok := req.Args["agent"].(string)
-	if !ok || agentName == "" {
-		return socket.Response{Success: false, Error: "missing 'agent': agent name is required"}
+	agentName, errResp, ok := getRequiredStringArg(req.Args, "agent", "agent name is required")
+	if !ok {
+		return errResp
 	}
 
 	agent, exists := d.state.GetAgent(repoName, agentName)
@@ -1031,14 +1044,14 @@ func (d *Daemon) handleCompleteAgent(req socket.Request) socket.Response {
 
 // handleRestartAgent restarts an agent that has crashed or exited
 func (d *Daemon) handleRestartAgent(req socket.Request) socket.Response {
-	repoName, ok := req.Args["repo"].(string)
-	if !ok || repoName == "" {
-		return socket.Response{Success: false, Error: "missing 'repo': repository name is required"}
+	repoName, errResp, ok := getRequiredStringArg(req.Args, "repo", "repository name is required")
+	if !ok {
+		return errResp
 	}
 
-	agentName, ok := req.Args["agent"].(string)
-	if !ok || agentName == "" {
-		return socket.Response{Success: false, Error: "missing 'agent': agent name is required"}
+	agentName, errResp, ok := getRequiredStringArg(req.Args, "agent", "agent name is required")
+	if !ok {
+		return errResp
 	}
 
 	force, _ := req.Args["force"].(bool)
@@ -1185,9 +1198,9 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 
 // handleGetRepoConfig returns the configuration for a repository
 func (d *Daemon) handleGetRepoConfig(req socket.Request) socket.Response {
-	name, ok := req.Args["name"].(string)
+	name, errResp, ok := getRequiredStringArg(req.Args, "name", "repository name is required")
 	if !ok {
-		return socket.Response{Success: false, Error: "missing or invalid 'name' argument"}
+		return errResp
 	}
 
 	repo, exists := d.state.GetRepo(name)
@@ -1212,9 +1225,9 @@ func (d *Daemon) handleGetRepoConfig(req socket.Request) socket.Response {
 
 // handleUpdateRepoConfig updates the configuration for a repository
 func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
-	name, ok := req.Args["name"].(string)
+	name, errResp, ok := getRequiredStringArg(req.Args, "name", "repository name is required")
 	if !ok {
-		return socket.Response{Success: false, Error: "missing or invalid 'name' argument"}
+		return errResp
 	}
 
 	// Get current merge queue config
@@ -1255,9 +1268,9 @@ func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
 
 // handleSetCurrentRepo sets the current/default repository
 func (d *Daemon) handleSetCurrentRepo(req socket.Request) socket.Response {
-	name, ok := req.Args["name"].(string)
-	if !ok || name == "" {
-		return socket.Response{Success: false, Error: "missing 'name': repository name is required"}
+	name, errResp, ok := getRequiredStringArg(req.Args, "name", "repository name is required")
+	if !ok {
+		return errResp
 	}
 
 	if err := d.state.SetCurrentRepo(name); err != nil {
@@ -1382,9 +1395,9 @@ func (d *Daemon) recordTaskHistory(repoName, agentName string, agent state.Agent
 
 // handleTaskHistory returns the task history for a repository
 func (d *Daemon) handleTaskHistory(req socket.Request) socket.Response {
-	repoName, ok := req.Args["repo"].(string)
-	if !ok || repoName == "" {
-		return socket.Response{Success: false, Error: "missing 'repo': repository name is required"}
+	repoName, errResp, ok := getRequiredStringArg(req.Args, "repo", "repository name is required")
+	if !ok {
+		return errResp
 	}
 
 	// Get optional limit
