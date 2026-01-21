@@ -102,11 +102,12 @@ func (d *Daemon) Start() error {
 	d.restoreTrackedRepos()
 
 	// Start core loops after restore completes
-	d.wg.Add(4)
+	d.wg.Add(5)
 	go d.healthCheckLoop()
 	go d.messageRouterLoop()
 	go d.wakeLoop()
 	go d.serverLoop()
+	go d.worktreeRefreshLoop()
 
 	return nil
 }
@@ -454,6 +455,130 @@ func (d *Daemon) wakeAgents() {
 			d.logger.Debug("Woke agent %s in repo %s", agentName, repoName)
 		}
 	}
+}
+
+// worktreeRefreshLoop periodically syncs worker worktrees with main branch
+func (d *Daemon) worktreeRefreshLoop() {
+	defer d.wg.Done()
+	d.logger.Info("Starting worktree refresh loop")
+
+	// Run every 5 minutes
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	// Run once after a short delay on startup (respecting context cancellation)
+	select {
+	case <-time.After(30 * time.Second):
+		d.refreshWorktrees()
+	case <-d.ctx.Done():
+		d.logger.Info("Worktree refresh loop stopped")
+		return
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			d.refreshWorktrees()
+		case <-d.ctx.Done():
+			d.logger.Info("Worktree refresh loop stopped")
+			return
+		}
+	}
+}
+
+// refreshWorktrees syncs worker worktrees that are behind main
+func (d *Daemon) refreshWorktrees() {
+	d.logger.Debug("Checking worker worktrees for refresh")
+
+	repos := d.state.GetAllRepos()
+	for repoName, repo := range repos {
+		repoPath := d.paths.RepoDir(repoName)
+
+		// Check if repo path exists
+		if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+			continue
+		}
+
+		wt := worktree.NewManager(repoPath)
+
+		// Get the upstream remote and default branch
+		remote, err := wt.GetUpstreamRemote()
+		if err != nil {
+			d.logger.Debug("Could not get remote for %s: %v", repoName, err)
+			continue
+		}
+
+		mainBranch, err := wt.GetDefaultBranch(remote)
+		if err != nil {
+			d.logger.Debug("Could not get default branch for %s: %v", repoName, err)
+			continue
+		}
+
+		// Fetch from remote to have latest state
+		if err := wt.FetchRemote(remote); err != nil {
+			d.logger.Debug("Could not fetch from remote for %s: %v", repoName, err)
+			continue
+		}
+
+		// Check each worker agent's worktree
+		for agentName, agent := range repo.Agents {
+			// Only refresh worker worktrees
+			if agent.Type != state.AgentTypeWorker {
+				continue
+			}
+
+			// Skip if worktree path is empty
+			if agent.WorktreePath == "" {
+				continue
+			}
+
+			// Check if worktree exists
+			if _, err := os.Stat(agent.WorktreePath); os.IsNotExist(err) {
+				continue
+			}
+
+			// Check worktree state
+			wtState, err := worktree.GetWorktreeState(agent.WorktreePath, remote, mainBranch)
+			if err != nil {
+				d.logger.Debug("Could not get worktree state for %s/%s: %v", repoName, agentName, err)
+				continue
+			}
+
+			// Skip if can't refresh (detached HEAD, mid-rebase, mid-merge, on main, or up to date)
+			if !wtState.CanRefresh {
+				d.logger.Debug("Skipping refresh for %s/%s: %s", repoName, agentName, wtState.RefreshReason)
+				continue
+			}
+
+			// Refresh the worktree
+			d.logger.Info("Refreshing worktree for %s/%s (%d commits behind)", repoName, agentName, wtState.CommitsBehind)
+			result := worktree.RefreshWorktree(agent.WorktreePath, remote, mainBranch)
+
+			if result.Error != nil {
+				if result.HasConflicts {
+					d.logger.Warn("Worktree refresh for %s/%s has conflicts in: %v", repoName, agentName, result.ConflictFiles)
+				} else {
+					d.logger.Error("Failed to refresh worktree for %s/%s: %v", repoName, agentName, result.Error)
+				}
+			} else if result.Skipped {
+				d.logger.Debug("Worktree refresh for %s/%s skipped: %s", repoName, agentName, result.SkipReason)
+			} else {
+				d.logger.Info("Refreshed worktree for %s/%s: rebased %d commits", repoName, agentName, result.CommitsRebased)
+
+				// Notify the agent that their worktree was refreshed
+				msgMgr := d.getMessageManager()
+				msg := fmt.Sprintf("Your worktree has been automatically synced with main (rebased %d commits). Run 'git log --oneline -5' to see recent changes.", result.CommitsRebased)
+				if _, err := msgMgr.Send(repoName, "daemon", agentName, msg); err != nil {
+					d.logger.Debug("Could not send refresh notification to %s/%s: %v", repoName, agentName, err)
+				}
+			}
+		}
+	}
+}
+
+// TriggerWorktreeRefresh triggers an immediate worktree refresh (for testing)
+func (d *Daemon) TriggerWorktreeRefresh() {
+	d.refreshWorktrees()
 }
 
 // handleRequest handles incoming socket requests
@@ -1833,4 +1958,121 @@ func isLogFile(path string) bool {
 	base := filepath.Base(path)
 	// Only match .log files, not already-rotated files (which have timestamps)
 	return len(base) > 4 && base[len(base)-4:] == ".log"
+}
+
+// linkGlobalCredentials creates a symlink from the Claude config directory's .credentials.json
+// to the global ~/.claude/.credentials.json. This ensures workers can access OAuth
+// credentials without duplicating sensitive files.
+//
+// When CLAUDE_CONFIG_DIR is set, Claude looks for credentials there, not in the
+// project's .claude directory or the global ~/.claude directory.
+func (d *Daemon) linkGlobalCredentials(claudeConfigDir string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
+	localCredFile := filepath.Join(claudeConfigDir, ".credentials.json")
+
+	// Check if global credentials exist
+	if _, err := os.Stat(globalCredFile); os.IsNotExist(err) {
+		// No global credentials - user might be using API key
+		return nil
+	}
+
+	// Ensure the config directory exists
+	if err := os.MkdirAll(claudeConfigDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Check if symlink already exists and is valid
+	if linkTarget, err := os.Readlink(localCredFile); err == nil {
+		if linkTarget == globalCredFile {
+			// Already correctly linked
+			return nil
+		}
+		// Invalid link, remove it
+		os.Remove(localCredFile)
+	} else if _, err := os.Stat(localCredFile); err == nil {
+		// File exists but is not a symlink, remove it
+		os.Remove(localCredFile)
+	}
+
+	// Create symlink
+	if err := os.Symlink(globalCredFile, localCredFile); err != nil {
+		return fmt.Errorf("failed to create credentials symlink: %w", err)
+	}
+
+	return nil
+}
+
+// repairCredentials fixes CLAUDE_CONFIG_DIR directories that are missing credential symlinks
+func (d *Daemon) repairCredentials() (int, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
+
+	// Check if global credentials exist
+	if _, err := os.Stat(globalCredFile); os.IsNotExist(err) {
+		// No global credentials - user might be using API key
+		return 0, nil
+	}
+
+	fixed := 0
+	for _, repoName := range d.state.ListRepos() {
+		// Walk CLAUDE_CONFIG_DIR directories for this repo
+		repoConfigDir := filepath.Join(d.paths.ClaudeConfigDir, repoName)
+
+		// Skip if config directory doesn't exist
+		if _, err := os.Stat(repoConfigDir); os.IsNotExist(err) {
+			continue
+		}
+
+		entries, err := os.ReadDir(repoConfigDir)
+		if err != nil {
+			d.logger.Warn("Failed to read config dir for %s: %v", repoName, err)
+			continue
+		}
+
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+
+			agentConfigDir := filepath.Join(repoConfigDir, entry.Name())
+			localCredFile := filepath.Join(agentConfigDir, ".credentials.json")
+
+			// Check if credentials already exist and are a valid symlink
+			if linkTarget, err := os.Readlink(localCredFile); err == nil {
+				if linkTarget == globalCredFile {
+					// Already correctly linked
+					continue
+				}
+				// Invalid symlink, will be recreated below
+				os.Remove(localCredFile)
+			} else if _, err := os.Stat(localCredFile); err == nil {
+				// File exists but is not a symlink, remove it
+				d.logger.Debug("Removing non-symlink credential file in %s/%s", repoName, entry.Name())
+				os.Remove(localCredFile)
+			} else if !os.IsNotExist(err) {
+				// Some other error
+				d.logger.Warn("Failed to check credentials in %s/%s: %v", repoName, entry.Name(), err)
+				continue
+			}
+
+			// Create or recreate symlink
+			if err := os.Symlink(globalCredFile, localCredFile); err != nil {
+				d.logger.Warn("Failed to link credentials in %s/%s: %v", repoName, entry.Name(), err)
+			} else {
+				d.logger.Debug("Linked credentials in %s/%s", repoName, entry.Name())
+				fixed++
+			}
+		}
+	}
+
+	return fixed, nil
 }
