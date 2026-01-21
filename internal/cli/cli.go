@@ -4998,39 +4998,46 @@ func (c *CLI) linkGlobalCredentials(claudeConfigDir string) error {
 		return fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
-	localCredFile := filepath.Join(claudeConfigDir, ".credentials.json")
-
-	// Check if global credentials exist
-	if _, err := os.Stat(globalCredFile); os.IsNotExist(err) {
-		// No global credentials - user might be using API key
-		return nil
-	}
-
 	// Ensure the config directory exists
 	if err := os.MkdirAll(claudeConfigDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	// Read the global credentials
-	credData, err := os.ReadFile(globalCredFile)
-	if err != nil {
-		return fmt.Errorf("failed to read global credentials: %w", err)
+	// Copy credentials if they exist
+	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
+	if _, err := os.Stat(globalCredFile); err == nil {
+		credData, err := os.ReadFile(globalCredFile)
+		if err != nil {
+			return fmt.Errorf("failed to read global credentials: %w", err)
+		}
+		localCredFile := filepath.Join(claudeConfigDir, ".credentials.json")
+		os.Remove(localCredFile)
+		// Copy credentials file instead of symlinking
+		// Claude Code cannot read symlinked credentials on startup, so we must copy the file
+		if err := os.WriteFile(localCredFile, credData, 0600); err != nil {
+			return fmt.Errorf("failed to write credentials file: %w", err)
+		}
 	}
 
-	// Remove any existing file or symlink
-	os.Remove(localCredFile)
-
-	// Copy credentials file instead of symlinking
-	// Claude Code cannot read symlinked credentials on startup, so we must copy the file
-	if err := os.WriteFile(localCredFile, credData, 0600); err != nil {
-		return fmt.Errorf("failed to write credentials file: %w", err)
+	// Copy settings.json if it exists (contains hooks and other user preferences)
+	// This ensures workers inherit user's global hooks configuration
+	globalSettingsFile := filepath.Join(home, ".claude", "settings.json")
+	if _, err := os.Stat(globalSettingsFile); err == nil {
+		settingsData, err := os.ReadFile(globalSettingsFile)
+		if err != nil {
+			return fmt.Errorf("failed to read global settings: %w", err)
+		}
+		localSettingsFile := filepath.Join(claudeConfigDir, "settings.json")
+		os.Remove(localSettingsFile)
+		if err := os.WriteFile(localSettingsFile, settingsData, 0644); err != nil {
+			return fmt.Errorf("failed to write settings file: %w", err)
+		}
 	}
 
 	return nil
 }
 
-// repairCredentials copies credentials to CLAUDE_CONFIG_DIR directories that are missing them
+// repairCredentials copies credentials and settings to CLAUDE_CONFIG_DIR directories that are missing them
 func (c *CLI) repairCredentials(verbose bool) (int, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -5038,11 +5045,21 @@ func (c *CLI) repairCredentials(verbose bool) (int, error) {
 	}
 
 	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
+	globalSettingsFile := filepath.Join(home, ".claude", "settings.json")
 
-	// Check if global credentials exist
-	if _, err := os.Stat(globalCredFile); os.IsNotExist(err) {
+	// Check if any global config exists
+	hasCredentials := false
+	hasSettings := false
+	if _, err := os.Stat(globalCredFile); err == nil {
+		hasCredentials = true
+	}
+	if _, err := os.Stat(globalSettingsFile); err == nil {
+		hasSettings = true
+	}
+
+	if !hasCredentials && !hasSettings {
 		if verbose {
-			fmt.Println("  No global credentials found - skipping credential repair")
+			fmt.Println("  No global credentials or settings found - skipping config repair")
 		}
 		return 0, nil
 	}
@@ -5077,31 +5094,61 @@ func (c *CLI) repairCredentials(verbose bool) (int, error) {
 			}
 
 			agentConfigDir := filepath.Join(repoConfigDir, entry.Name())
-			localCredFile := filepath.Join(agentConfigDir, ".credentials.json")
+			repaired := false
 
-			// Remove any existing symlinks (from old behavior) or outdated files
-			if _, err := os.Lstat(localCredFile); err == nil {
-				os.Remove(localCredFile)
+			// Copy credentials if they exist
+			if hasCredentials {
+				localCredFile := filepath.Join(agentConfigDir, ".credentials.json")
+				// Remove any existing symlinks (from old behavior) or outdated files
+				if _, err := os.Lstat(localCredFile); err == nil {
+					os.Remove(localCredFile)
+				}
+
+				// Copy credentials instead of symlinking
+				// Claude Code cannot read symlinked credentials on startup
+				credData, err := os.ReadFile(globalCredFile)
+				if err != nil {
+					if verbose {
+						fmt.Printf("  Warning: failed to read global credentials: %v\n", err)
+					}
+				} else if err := os.WriteFile(localCredFile, credData, 0600); err != nil {
+					if verbose {
+						fmt.Printf("  Warning: failed to copy credentials in %s/%s: %v\n", repoName, entry.Name(), err)
+					}
+				} else {
+					repaired = true
+					if verbose {
+						fmt.Printf("  Copied credentials in %s/%s\n", repoName, entry.Name())
+					}
+				}
 			}
 
-			// Copy credentials instead of symlinking
-			// Claude Code cannot read symlinked credentials on startup
-			credData, err := os.ReadFile(globalCredFile)
-			if err != nil {
-				if verbose {
-					fmt.Printf("  Warning: failed to read global credentials: %v\n", err)
+			// Copy settings if they exist
+			if hasSettings {
+				localSettingsFile := filepath.Join(agentConfigDir, "settings.json")
+				// Remove any existing file
+				if _, err := os.Lstat(localSettingsFile); err == nil {
+					os.Remove(localSettingsFile)
 				}
-				continue
+
+				settingsData, err := os.ReadFile(globalSettingsFile)
+				if err != nil {
+					if verbose {
+						fmt.Printf("  Warning: failed to read global settings: %v\n", err)
+					}
+				} else if err := os.WriteFile(localSettingsFile, settingsData, 0644); err != nil {
+					if verbose {
+						fmt.Printf("  Warning: failed to copy settings in %s/%s: %v\n", repoName, entry.Name(), err)
+					}
+				} else {
+					repaired = true
+					if verbose {
+						fmt.Printf("  Copied settings in %s/%s\n", repoName, entry.Name())
+					}
+				}
 			}
 
-			if err := os.WriteFile(localCredFile, credData, 0600); err != nil {
-				if verbose {
-					fmt.Printf("  Warning: failed to copy credentials in %s/%s: %v\n", repoName, entry.Name(), err)
-				}
-			} else {
-				if verbose {
-					fmt.Printf("  Copied credentials in %s/%s\n", repoName, entry.Name())
-				}
+			if repaired {
 				fixed++
 			}
 		}
