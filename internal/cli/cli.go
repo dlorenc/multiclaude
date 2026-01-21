@@ -15,6 +15,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/daemon"
 	"github.com/dlorenc/multiclaude/internal/errors"
 	"github.com/dlorenc/multiclaude/internal/format"
+	"github.com/dlorenc/multiclaude/internal/github"
 	"github.com/dlorenc/multiclaude/internal/hooks"
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/names"
@@ -522,6 +523,14 @@ func (c *CLI) registerCommands() {
 		Description: "Generate a diagnostic bug report",
 		Usage:       "multiclaude bug [--output <file>] [--verbose] [description]",
 		Run:         c.bugReport,
+	}
+
+	// Auth check command
+	c.rootCmd.Subcommands["auth-check"] = &Command{
+		Name:        "auth-check",
+		Description: "Check GitHub CLI authentication and permissions",
+		Usage:       "multiclaude auth-check [owner/repo]",
+		Run:         c.authCheck,
 	}
 }
 
@@ -1478,6 +1487,72 @@ func (c *CLI) updateRepoConfig(repoName string, flags map[string]string) error {
 
 	// Show the updated config
 	return c.showRepoConfig(repoName)
+}
+
+func (c *CLI) authCheck(args []string) error {
+	_, posArgs := ParseFlags(args)
+
+	fmt.Println("Checking GitHub CLI authentication...")
+	fmt.Println()
+
+	// Check basic auth
+	status, err := github.CheckAuth()
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("  Authenticated: yes\n")
+	if status.Username != "" {
+		fmt.Printf("  Username: %s\n", status.Username)
+	}
+	if len(status.Scopes) > 0 {
+		fmt.Printf("  Token scopes: %s\n", strings.Join(status.Scopes, ", "))
+	}
+
+	// Check required scopes
+	if err := github.CheckRequiredScopes(status); err != nil {
+		fmt.Println()
+		return err
+	}
+	fmt.Printf("  Required scopes: present\n")
+
+	// If a repo is specified, check permissions on it
+	if len(posArgs) >= 1 {
+		repoArg := posArgs[0]
+		parts := strings.Split(repoArg, "/")
+		if len(parts) != 2 {
+			return errors.InvalidUsage("repository must be in owner/repo format")
+		}
+		owner, repo := parts[0], parts[1]
+
+		fmt.Println()
+		fmt.Printf("Checking permissions on %s/%s...\n", owner, repo)
+
+		perms, err := github.CheckRepoPermissions(owner, repo, false)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("  Pull: %v\n", perms.Pull)
+		fmt.Printf("  Push: %v\n", perms.Push)
+		fmt.Printf("  Maintain: %v\n", perms.Maintain)
+		fmt.Printf("  Admin: %v\n", perms.Admin)
+
+		if !perms.Push {
+			fmt.Println()
+			fmt.Println("Warning: You don't have push access to this repository.")
+			fmt.Println("Merge queue operations will fail without push permissions.")
+		} else {
+			fmt.Println()
+			fmt.Println("All checks passed. You have sufficient permissions for merge operations.")
+		}
+	} else {
+		fmt.Println()
+		fmt.Println("To check permissions on a specific repository:")
+		fmt.Println("  multiclaude auth-check owner/repo")
+	}
+
+	return nil
 }
 
 func (c *CLI) createWorker(args []string) error {
