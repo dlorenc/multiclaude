@@ -618,11 +618,11 @@ func (c *CLI) stopDaemon(args []string) error {
 		Command: "stop",
 	})
 	if err != nil {
-		return fmt.Errorf("failed to send stop command: %w", err)
+		return errors.DaemonCommunicationFailed("stopping daemon", err)
 	}
 
 	if !resp.Success {
-		return fmt.Errorf("daemon stop failed: %s", resp.Error)
+		return errors.DaemonOperationFailed(resp.Error, nil)
 	}
 
 	fmt.Println("Daemon stopped successfully")
@@ -634,7 +634,7 @@ func (c *CLI) daemonStatus(args []string) error {
 	pidFile := daemon.NewPIDFile(c.paths.DaemonPID)
 	running, pid, err := pidFile.IsRunning()
 	if err != nil {
-		return fmt.Errorf("failed to check daemon status: %w", err)
+		return errors.DaemonOperationFailed("checking daemon status", err)
 	}
 
 	if !running {
@@ -902,28 +902,28 @@ func (c *CLI) initRepo(args []string) error {
 	// Generate session IDs for agents
 	supervisorSessionID, err := claude.GenerateSessionID()
 	if err != nil {
-		return fmt.Errorf("failed to generate supervisor session ID: %w", err)
+		return errors.SessionIDGenerationFailed("supervisor", err)
 	}
 
 	var mergeQueueSessionID string
 	if mqEnabled {
 		mergeQueueSessionID, err = claude.GenerateSessionID()
 		if err != nil {
-			return fmt.Errorf("failed to generate merge-queue session ID: %w", err)
+			return errors.SessionIDGenerationFailed("merge-queue", err)
 		}
 	}
 
 	// Write prompt files
 	supervisorPromptFile, err := c.writePromptFile(repoPath, prompts.TypeSupervisor, "supervisor")
 	if err != nil {
-		return fmt.Errorf("failed to write supervisor prompt: %w", err)
+		return errors.PromptGenerationFailed("supervisor", err)
 	}
 
 	var mergeQueuePromptFile string
 	if mqEnabled {
 		mergeQueuePromptFile, err = c.writeMergeQueuePromptFile(repoPath, "merge-queue", mqConfig)
 		if err != nil {
-			return fmt.Errorf("failed to write merge-queue prompt: %w", err)
+			return errors.PromptGenerationFailed("merge-queue", err)
 		}
 	}
 
@@ -956,7 +956,7 @@ func (c *CLI) initRepo(args []string) error {
 		fmt.Println("Starting Claude Code in supervisor window...")
 		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, "supervisor", repoPath, supervisorSessionID, supervisorPromptFile, repoName, "")
 		if err != nil {
-			return fmt.Errorf("failed to start supervisor Claude: %w", err)
+			return errors.ClaudeStartFailed("supervisor", err)
 		}
 		supervisorPID = pid
 
@@ -970,7 +970,7 @@ func (c *CLI) initRepo(args []string) error {
 			fmt.Println("Starting Claude Code in merge-queue window...")
 			pid, err = c.startClaudeInTmux(claudeBinary, tmuxSession, "merge-queue", repoPath, mergeQueueSessionID, mergeQueuePromptFile, repoName, "")
 			if err != nil {
-				return fmt.Errorf("failed to start merge-queue Claude: %w", err)
+				return errors.ClaudeStartFailed("merge-queue", err)
 			}
 			mergeQueuePID = pid
 
@@ -1013,10 +1013,10 @@ func (c *CLI) initRepo(args []string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to register supervisor: %w", err)
+		return errors.RegistrationFailed("supervisor", err)
 	}
 	if !resp.Success {
-		return fmt.Errorf("failed to register supervisor: %s", resp.Error)
+		return errors.RegistrationFailed("supervisor", fmt.Errorf("%s", resp.Error))
 	}
 
 	// Add merge-queue agent only if enabled
@@ -1034,10 +1034,10 @@ func (c *CLI) initRepo(args []string) error {
 			},
 		})
 		if err != nil {
-			return fmt.Errorf("failed to register merge-queue: %w", err)
+			return errors.RegistrationFailed("merge-queue", err)
 		}
 		if !resp.Success {
-			return fmt.Errorf("failed to register merge-queue: %s", resp.Error)
+			return errors.RegistrationFailed("merge-queue", fmt.Errorf("%s", resp.Error))
 		}
 	}
 
@@ -1075,7 +1075,7 @@ func (c *CLI) initRepo(args []string) error {
 	// Generate session ID for workspace
 	workspaceSessionID, err := claude.GenerateSessionID()
 	if err != nil {
-		return fmt.Errorf("failed to generate workspace session ID: %w", err)
+		return errors.SessionIDGenerationFailed("workspace", err)
 	}
 
 	// Write prompt file for default workspace
@@ -1246,7 +1246,7 @@ func (c *CLI) removeRepo(args []string) error {
 		repos, _ := resp.Data.([]interface{})
 		items := reposToSelectableItems(repos)
 		if len(items) == 0 {
-			return fmt.Errorf("no repositories found")
+			return errors.NoReposFound()
 		}
 		selected, err := SelectFromList("Select repository to remove:", items)
 		if err != nil {
@@ -1444,7 +1444,7 @@ func (c *CLI) configRepo(args []string) error {
 		// Try to infer from current directory
 		cwd, err := os.Getwd()
 		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
+			return errors.DirectoryOperationFailed("getting current directory", err)
 		}
 
 		// Check if we're in a tracked repo
@@ -1462,7 +1462,8 @@ func (c *CLI) configRepo(args []string) error {
 			if len(repos) == 1 {
 				repoName = repos[0]
 			} else {
-				return fmt.Errorf("please specify a repository name or run from within a tracked repository")
+				return errors.Wrap(errors.CategoryUsage, "could not determine repository", nil).
+					WithSuggestion("use --repo flag or run from within a tracked repository")
 			}
 		}
 	}
@@ -1489,17 +1490,17 @@ func (c *CLI) showRepoConfig(repoName string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to get repo config: %w (is daemon running?)", err)
+		return errors.DaemonCommunicationFailed("getting repo config", err)
 	}
 
 	if !resp.Success {
-		return fmt.Errorf("failed to get repo config: %s", resp.Error)
+		return errors.DaemonOperationFailed(resp.Error, nil)
 	}
 
 	// Parse response
 	configMap, ok := resp.Data.(map[string]interface{})
 	if !ok {
-		return fmt.Errorf("unexpected response format")
+		return errors.Wrap(errors.CategoryRuntime, "unexpected response format from daemon", nil)
 	}
 
 	fmt.Printf("Configuration for repository: %s\n\n", repoName)
@@ -1562,11 +1563,11 @@ func (c *CLI) updateRepoConfig(repoName string, flags map[string]string) error {
 		Args:    updateArgs,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to update repo config: %w (is daemon running?)", err)
+		return errors.DaemonCommunicationFailed("updating repo config", err)
 	}
 
 	if !resp.Success {
-		return fmt.Errorf("failed to update repo config: %s", resp.Error)
+		return errors.DaemonOperationFailed(resp.Error, nil)
 	}
 
 	fmt.Printf("Configuration updated for repository: %s\n", repoName)
@@ -1707,7 +1708,7 @@ func (c *CLI) createWorker(args []string) error {
 	// Generate session ID for worker
 	workerSessionID, err := claude.GenerateSessionID()
 	if err != nil {
-		return fmt.Errorf("failed to generate worker session ID: %w", err)
+		return errors.SessionIDGenerationFailed("worker", err)
 	}
 
 	// Write prompt file for worker (with push-to config if specified)
@@ -1717,7 +1718,7 @@ func (c *CLI) createWorker(args []string) error {
 	}
 	workerPromptFile, err := c.writeWorkerPromptFile(repoPath, workerName, workerConfig)
 	if err != nil {
-		return fmt.Errorf("failed to write worker prompt: %w", err)
+		return errors.PromptGenerationFailed("worker", err)
 	}
 
 	// Copy hooks configuration if it exists
@@ -1744,7 +1745,7 @@ func (c *CLI) createWorker(args []string) error {
 		initialMessage := fmt.Sprintf("Task: %s", task)
 		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workerName, wtPath, workerSessionID, workerPromptFile, repoName, initialMessage)
 		if err != nil {
-			return fmt.Errorf("failed to start worker Claude: %w", err)
+			return errors.ClaudeStartFailed("worker", err)
 		}
 		workerPID = pid
 
@@ -1769,10 +1770,10 @@ func (c *CLI) createWorker(args []string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to register worker: %w", err)
+		return errors.RegistrationFailed("worker", err)
 	}
 	if !resp.Success {
-		return fmt.Errorf("failed to register worker: %s", resp.Error)
+		return errors.RegistrationFailed("worker", fmt.Errorf("%s", resp.Error))
 	}
 
 	fmt.Println()
@@ -2157,7 +2158,7 @@ func (c *CLI) removeWorker(args []string) error {
 		// Interactive selection
 		items := agentsToSelectableItems(agents, []string{"worker"})
 		if len(items) == 0 {
-			return fmt.Errorf("no workers found in repo '%s'", repoName)
+			return errors.NoWorkersFound(repoName)
 		}
 		selected, err := SelectFromList("Select worker to remove:", items)
 		if err != nil {
@@ -2342,7 +2343,7 @@ func (c *CLI) addWorkspace(args []string) error {
 			agentType, _ := agentMap["type"].(string)
 			name, _ := agentMap["name"].(string)
 			if agentType == "workspace" && name == workspaceName {
-				return fmt.Errorf("workspace '%s' already exists in repo '%s'", workspaceName, repoName)
+				return errors.WorkspaceAlreadyExists(workspaceName, repoName)
 			}
 		}
 	}
@@ -2373,13 +2374,13 @@ func (c *CLI) addWorkspace(args []string) error {
 	// Generate session ID for workspace
 	workspaceSessionID, err := claude.GenerateSessionID()
 	if err != nil {
-		return fmt.Errorf("failed to generate workspace session ID: %w", err)
+		return errors.SessionIDGenerationFailed("workspace", err)
 	}
 
 	// Write prompt file for workspace
 	workspacePromptFile, err := c.writePromptFile(repoPath, prompts.TypeWorkspace, workspaceName)
 	if err != nil {
-		return fmt.Errorf("failed to write workspace prompt: %w", err)
+		return errors.PromptGenerationFailed("workspace", err)
 	}
 
 	// Copy hooks configuration if it exists
@@ -2405,7 +2406,7 @@ func (c *CLI) addWorkspace(args []string) error {
 		fmt.Println("Starting Claude Code in workspace window...")
 		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, workspaceName, wtPath, workspaceSessionID, workspacePromptFile, repoName, "")
 		if err != nil {
-			return fmt.Errorf("failed to start workspace Claude: %w", err)
+			return errors.ClaudeStartFailed("workspace", err)
 		}
 		workspacePID = pid
 
@@ -2429,10 +2430,10 @@ func (c *CLI) addWorkspace(args []string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to register workspace: %w", err)
+		return errors.RegistrationFailed("workspace", err)
 	}
 	if !resp.Success {
-		return fmt.Errorf("failed to register workspace: %s", resp.Error)
+		return errors.RegistrationFailed("workspace", fmt.Errorf("%s", resp.Error))
 	}
 
 	fmt.Println()
@@ -2481,7 +2482,7 @@ func (c *CLI) removeWorkspace(args []string) error {
 		// Interactive selection
 		items := agentsToSelectableItems(agents, []string{"workspace"})
 		if len(items) == 0 {
-			return fmt.Errorf("no workspaces found in repo '%s'", repoName)
+			return errors.NoWorkspacesFound(repoName)
 		}
 		selected, err := SelectFromList("Select workspace to remove:", items)
 		if err != nil {
@@ -2714,7 +2715,7 @@ func (c *CLI) connectWorkspace(args []string) error {
 		// Interactive selection
 		items := agentsToSelectableItems(agents, []string{"workspace"})
 		if len(items) == 0 {
-			return fmt.Errorf("no workspaces found in repo '%s'", repoName)
+			return errors.NoWorkspacesFound(repoName)
 		}
 		selected, err := SelectFromList("Select workspace to connect:", items)
 		if err != nil {
@@ -2741,7 +2742,7 @@ func (c *CLI) connectWorkspace(args []string) error {
 	}
 
 	if workspaceInfo == nil {
-		return fmt.Errorf("workspace '%s' not found in repo '%s'", workspaceName, repoName)
+		return errors.WorkspaceNotFound(workspaceName, repoName)
 	}
 
 	// Get tmux session and window
@@ -2768,7 +2769,7 @@ func (c *CLI) connectWorkspace(args []string) error {
 // validateWorkspaceName validates that a workspace name follows branch name restrictions
 func validateWorkspaceName(name string) error {
 	if name == "" {
-		return fmt.Errorf("workspace name cannot be empty")
+		return errors.InvalidWorkspaceName("cannot be empty")
 	}
 
 	// Git branch name restrictions
@@ -2779,25 +2780,25 @@ func validateWorkspaceName(name string) error {
 	// - Cannot be "." or ".."
 
 	if name == "." || name == ".." {
-		return fmt.Errorf("workspace name cannot be '.' or '..'")
+		return errors.InvalidWorkspaceName("cannot be '.' or '..'")
 	}
 
 	if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "-") {
-		return fmt.Errorf("workspace name cannot start with '.' or '-'")
+		return errors.InvalidWorkspaceName("cannot start with '.' or '-'")
 	}
 
 	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, "/") {
-		return fmt.Errorf("workspace name cannot end with '.' or '/'")
+		return errors.InvalidWorkspaceName("cannot end with '.' or '/'")
 	}
 
 	if strings.Contains(name, "..") {
-		return fmt.Errorf("workspace name cannot contain '..'")
+		return errors.InvalidWorkspaceName("cannot contain '..'")
 	}
 
 	invalidChars := []string{"\\", "~", "^", ":", "?", "*", "[", "@", "{", "}", " ", "\t", "\n"}
 	for _, char := range invalidChars {
 		if strings.Contains(name, char) {
-			return fmt.Errorf("workspace name cannot contain '%s'", char)
+			return errors.InvalidWorkspaceName(fmt.Sprintf("cannot contain '%s'", char))
 		}
 	}
 
@@ -2995,7 +2996,7 @@ func (c *CLI) sendMessage(args []string) error {
 	// Send message
 	msg, err := msgMgr.Send(repoName, agentName, to, body)
 	if err != nil {
-		return fmt.Errorf("failed to send message: %w", err)
+		return errors.MessageOperationFailed("sending message", err)
 	}
 
 	// Trigger immediate routing (best-effort, polling is fallback)
@@ -3019,7 +3020,7 @@ func (c *CLI) listMessages(args []string) error {
 	// List messages
 	msgs, err := msgMgr.List(repoName, agentName)
 	if err != nil {
-		return fmt.Errorf("failed to list messages: %w", err)
+		return errors.MessageOperationFailed("listing messages", err)
 	}
 
 	if len(msgs) == 0 {
@@ -3062,7 +3063,7 @@ func (c *CLI) readMessage(args []string) error {
 	// Get message
 	msg, err := msgMgr.Get(repoName, agentName, messageID)
 	if err != nil {
-		return fmt.Errorf("failed to read message: %w", err)
+		return errors.MessageOperationFailed("reading message", err)
 	}
 
 	// Update status to read
@@ -3104,7 +3105,7 @@ func (c *CLI) ackMessage(args []string) error {
 
 	// Ack message
 	if err := msgMgr.Ack(repoName, agentName, messageID); err != nil {
-		return fmt.Errorf("failed to acknowledge message: %w", err)
+		return errors.MessageOperationFailed("acknowledging message", err)
 	}
 
 	fmt.Printf("Message %s acknowledged\n", messageID)
@@ -3335,7 +3336,7 @@ func (c *CLI) reviewPR(args []string) error {
 		// Try to infer from current directory
 		cwd, err := os.Getwd()
 		if err != nil {
-			return fmt.Errorf("failed to get current directory: %w", err)
+			return errors.DirectoryOperationFailed("getting current directory", err)
 		}
 
 		// Check if we're in a tracked repo
@@ -3396,13 +3397,13 @@ func (c *CLI) reviewPR(args []string) error {
 	// Generate session ID for reviewer
 	reviewerSessionID, err := claude.GenerateSessionID()
 	if err != nil {
-		return fmt.Errorf("failed to generate reviewer session ID: %w", err)
+		return errors.SessionIDGenerationFailed("reviewer", err)
 	}
 
 	// Write prompt file for reviewer
 	reviewerPromptFile, err := c.writePromptFile(repoPath, prompts.TypeReview, reviewerName)
 	if err != nil {
-		return fmt.Errorf("failed to write reviewer prompt: %w", err)
+		return errors.PromptGenerationFailed("reviewer", err)
 	}
 
 	// Copy hooks configuration if it exists
@@ -3429,7 +3430,7 @@ func (c *CLI) reviewPR(args []string) error {
 		initialMessage := fmt.Sprintf("Review PR #%s: https://github.com/%s/%s/pull/%s", prNumber, parts[1], parts[2], prNumber)
 		pid, err := c.startClaudeInTmux(claudeBinary, tmuxSession, reviewerName, wtPath, reviewerSessionID, reviewerPromptFile, repoName, initialMessage)
 		if err != nil {
-			return fmt.Errorf("failed to start reviewer Claude: %w", err)
+			return errors.ClaudeStartFailed("reviewer", err)
 		}
 		reviewerPID = pid
 
