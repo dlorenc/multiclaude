@@ -2007,6 +2007,10 @@ func TestRestoreDeadAgentsSkipsAliveProcesses(t *testing.T) {
 	// Create a tmux session
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-restore-alive"
+
+	// Ensure the session doesn't exist at the start
+	tmuxClient.KillSession(context.Background(), sessionName)
+
 	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Skipf("tmux cannot create sessions in this environment: %v", err)
 	}
@@ -2063,6 +2067,10 @@ func TestRestoreDeadAgentsSkipsTransientAgents(t *testing.T) {
 	// Create a tmux session
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-restore-transient"
+
+	// Ensure the session doesn't exist at the start
+	tmuxClient.KillSession(context.Background(), sessionName)
+
 	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Skipf("tmux cannot create sessions in this environment: %v", err)
 	}
@@ -2117,6 +2125,10 @@ func TestRestoreDeadAgentsIncludesWorkspace(t *testing.T) {
 	// Create a tmux session
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-restore-workspace"
+
+	// Ensure the session doesn't exist at the start
+	tmuxClient.KillSession(context.Background(), sessionName)
+
 	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
 		t.Skipf("tmux cannot create sessions in this environment: %v", err)
 	}
