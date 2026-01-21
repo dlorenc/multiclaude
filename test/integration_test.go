@@ -66,7 +66,7 @@ func setupIntegrationTest(t *testing.T, repoName string) (*cli.CLI, *daemon.Daem
 	}
 
 	// Create daemon
-	d, err := daemon.New(paths, "test")
+	d, err := daemon.New(paths)
 	if err != nil {
 		t.Fatalf("Failed to create daemon: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestRepoInitializationIntegration(t *testing.T) {
 	}
 
 	// Create and start daemon
-	d, err := daemon.New(paths, "test")
+	d, err := daemon.New(paths)
 	if err != nil {
 		t.Fatalf("Failed to create daemon: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestRepoInitializationWithMergeQueueDisabled(t *testing.T) {
 		t.Fatalf("Failed to update bare repo HEAD: %v", err)
 	}
 
-	d, _ := daemon.New(paths, "test")
+	d, _ := daemon.New(paths)
 	d.Start()
 	defer d.Stop()
 	time.Sleep(100 * time.Millisecond)
