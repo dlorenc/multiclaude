@@ -4774,6 +4774,11 @@ func (c *CLI) startClaudeInTmux(binaryPath, tmuxSession, tmuxWindow, workDir, se
 		fmt.Printf("Warning: failed to setup agent commands: %v\n", err)
 	}
 
+	// Link global credentials to agent config directory
+	if err := commands.LinkGlobalCredentials(agentConfigDir); err != nil {
+		fmt.Printf("Warning: failed to link credentials: %v\n", err)
+	}
+
 	// Build Claude command using the full path to prevent version drift
 	// Set CLAUDE_CONFIG_DIR to inject per-agent slash commands
 	claudeCmd := fmt.Sprintf("CLAUDE_CONFIG_DIR=%s %s --session-id %s --dangerously-skip-permissions", agentConfigDir, binaryPath, sessionID)

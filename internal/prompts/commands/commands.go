@@ -82,3 +82,52 @@ func SetupAgentCommands(configDir string) error {
 
 	return nil
 }
+
+// LinkGlobalCredentials creates a symlink from the Claude config directory's
+// .credentials.json to the global ~/.claude/.credentials.json.
+//
+// When CLAUDE_CONFIG_DIR is set, Claude looks for credentials there, not in the
+// global ~/.claude directory. This symlink ensures agents can access OAuth
+// credentials without duplicating sensitive files.
+//
+// If global credentials don't exist (e.g., user is using API key), this is a no-op.
+func LinkGlobalCredentials(configDir string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
+	localCredFile := filepath.Join(configDir, ".credentials.json")
+
+	// Check if global credentials exist
+	if _, err := os.Stat(globalCredFile); os.IsNotExist(err) {
+		// No global credentials - user might be using API key
+		return nil
+	}
+
+	// Ensure the config directory exists
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Check if symlink already exists and is valid
+	if linkTarget, err := os.Readlink(localCredFile); err == nil {
+		if linkTarget == globalCredFile {
+			// Already correctly linked
+			return nil
+		}
+		// Invalid link, remove it
+		os.Remove(localCredFile)
+	} else if _, err := os.Stat(localCredFile); err == nil {
+		// File exists but is not a symlink, remove it
+		os.Remove(localCredFile)
+	}
+
+	// Create symlink
+	if err := os.Symlink(globalCredFile, localCredFile); err != nil {
+		return fmt.Errorf("failed to create credentials symlink: %w", err)
+	}
+
+	return nil
+}

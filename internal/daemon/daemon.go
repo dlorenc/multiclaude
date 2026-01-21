@@ -1870,6 +1870,11 @@ func (d *Daemon) restartAgent(repoName, agentName string, agent state.Agent, rep
 		d.logger.Warn("Failed to setup agent commands: %v", err)
 	}
 
+	// Link global credentials to agent config directory
+	if err := commands.LinkGlobalCredentials(agentConfigDir); err != nil {
+		d.logger.Warn("Failed to link credentials: %v", err)
+	}
+
 	// Restart Claude using the runner
 	result, err := d.claudeRunner.Start(d.ctx, repo.TmuxSession, agentName, claude.Config{
 		SessionID:        agent.SessionID,

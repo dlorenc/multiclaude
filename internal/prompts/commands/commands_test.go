@@ -168,6 +168,202 @@ func TestSetupAgentCommandsIdempotent(t *testing.T) {
 	}
 }
 
+func TestLinkGlobalCredentials(t *testing.T) {
+	// Save original HOME and restore after test
+	origHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", origHome)
+
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+
+	// Create fake global credentials
+	globalClaudeDir := filepath.Join(tmpDir, ".claude")
+	if err := os.MkdirAll(globalClaudeDir, 0755); err != nil {
+		t.Fatalf("Failed to create .claude dir: %v", err)
+	}
+	globalCredFile := filepath.Join(globalClaudeDir, ".credentials.json")
+	if err := os.WriteFile(globalCredFile, []byte(`{"token":"test"}`), 0644); err != nil {
+		t.Fatalf("Failed to create credentials file: %v", err)
+	}
+
+	// Create agent config directory
+	configDir := filepath.Join(tmpDir, "agent-config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+
+	// Link credentials
+	if err := LinkGlobalCredentials(configDir); err != nil {
+		t.Fatalf("LinkGlobalCredentials failed: %v", err)
+	}
+
+	// Verify symlink was created
+	localCredFile := filepath.Join(configDir, ".credentials.json")
+	linkTarget, err := os.Readlink(localCredFile)
+	if err != nil {
+		t.Fatalf("Failed to read symlink: %v", err)
+	}
+	if linkTarget != globalCredFile {
+		t.Errorf("Symlink target = %q, want %q", linkTarget, globalCredFile)
+	}
+}
+
+func TestLinkGlobalCredentialsNoGlobalCreds(t *testing.T) {
+	// Save original HOME and restore after test
+	origHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", origHome)
+
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+
+	// Don't create global credentials - simulates API key user
+
+	configDir := filepath.Join(tmpDir, "agent-config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+
+	// Should succeed without creating symlink
+	if err := LinkGlobalCredentials(configDir); err != nil {
+		t.Fatalf("LinkGlobalCredentials failed: %v", err)
+	}
+
+	// Verify no symlink was created
+	localCredFile := filepath.Join(configDir, ".credentials.json")
+	if _, err := os.Stat(localCredFile); !os.IsNotExist(err) {
+		t.Error("Symlink should not exist when global credentials are missing")
+	}
+}
+
+func TestLinkGlobalCredentialsIdempotent(t *testing.T) {
+	// Save original HOME and restore after test
+	origHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", origHome)
+
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+
+	// Create fake global credentials
+	globalClaudeDir := filepath.Join(tmpDir, ".claude")
+	if err := os.MkdirAll(globalClaudeDir, 0755); err != nil {
+		t.Fatalf("Failed to create .claude dir: %v", err)
+	}
+	globalCredFile := filepath.Join(globalClaudeDir, ".credentials.json")
+	if err := os.WriteFile(globalCredFile, []byte(`{"token":"test"}`), 0644); err != nil {
+		t.Fatalf("Failed to create credentials file: %v", err)
+	}
+
+	configDir := filepath.Join(tmpDir, "agent-config")
+
+	// First call
+	if err := LinkGlobalCredentials(configDir); err != nil {
+		t.Fatalf("First LinkGlobalCredentials failed: %v", err)
+	}
+
+	// Second call should not fail
+	if err := LinkGlobalCredentials(configDir); err != nil {
+		t.Fatalf("Second LinkGlobalCredentials failed: %v", err)
+	}
+
+	// Verify symlink still correct
+	localCredFile := filepath.Join(configDir, ".credentials.json")
+	linkTarget, err := os.Readlink(localCredFile)
+	if err != nil {
+		t.Fatalf("Failed to read symlink: %v", err)
+	}
+	if linkTarget != globalCredFile {
+		t.Errorf("Symlink target = %q, want %q", linkTarget, globalCredFile)
+	}
+}
+
+func TestLinkGlobalCredentialsReplacesInvalidSymlink(t *testing.T) {
+	// Save original HOME and restore after test
+	origHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", origHome)
+
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+
+	// Create fake global credentials
+	globalClaudeDir := filepath.Join(tmpDir, ".claude")
+	if err := os.MkdirAll(globalClaudeDir, 0755); err != nil {
+		t.Fatalf("Failed to create .claude dir: %v", err)
+	}
+	globalCredFile := filepath.Join(globalClaudeDir, ".credentials.json")
+	if err := os.WriteFile(globalCredFile, []byte(`{"token":"test"}`), 0644); err != nil {
+		t.Fatalf("Failed to create credentials file: %v", err)
+	}
+
+	configDir := filepath.Join(tmpDir, "agent-config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+
+	// Create an invalid symlink pointing elsewhere
+	localCredFile := filepath.Join(configDir, ".credentials.json")
+	if err := os.Symlink("/some/invalid/path", localCredFile); err != nil {
+		t.Fatalf("Failed to create invalid symlink: %v", err)
+	}
+
+	// LinkGlobalCredentials should fix the invalid symlink
+	if err := LinkGlobalCredentials(configDir); err != nil {
+		t.Fatalf("LinkGlobalCredentials failed: %v", err)
+	}
+
+	// Verify symlink now points to correct location
+	linkTarget, err := os.Readlink(localCredFile)
+	if err != nil {
+		t.Fatalf("Failed to read symlink: %v", err)
+	}
+	if linkTarget != globalCredFile {
+		t.Errorf("Symlink target = %q, want %q", linkTarget, globalCredFile)
+	}
+}
+
+func TestLinkGlobalCredentialsReplacesRegularFile(t *testing.T) {
+	// Save original HOME and restore after test
+	origHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", origHome)
+
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+
+	// Create fake global credentials
+	globalClaudeDir := filepath.Join(tmpDir, ".claude")
+	if err := os.MkdirAll(globalClaudeDir, 0755); err != nil {
+		t.Fatalf("Failed to create .claude dir: %v", err)
+	}
+	globalCredFile := filepath.Join(globalClaudeDir, ".credentials.json")
+	if err := os.WriteFile(globalCredFile, []byte(`{"token":"test"}`), 0644); err != nil {
+		t.Fatalf("Failed to create credentials file: %v", err)
+	}
+
+	configDir := filepath.Join(tmpDir, "agent-config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+
+	// Create a regular file instead of symlink
+	localCredFile := filepath.Join(configDir, ".credentials.json")
+	if err := os.WriteFile(localCredFile, []byte(`{"old":"data"}`), 0644); err != nil {
+		t.Fatalf("Failed to create regular file: %v", err)
+	}
+
+	// LinkGlobalCredentials should replace the regular file with symlink
+	if err := LinkGlobalCredentials(configDir); err != nil {
+		t.Fatalf("LinkGlobalCredentials failed: %v", err)
+	}
+
+	// Verify it's now a symlink to the correct location
+	linkTarget, err := os.Readlink(localCredFile)
+	if err != nil {
+		t.Fatalf("Failed to read symlink (file may not have been replaced): %v", err)
+	}
+	if linkTarget != globalCredFile {
+		t.Errorf("Symlink target = %q, want %q", linkTarget, globalCredFile)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
 }
