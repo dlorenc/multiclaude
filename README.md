@@ -4,86 +4,83 @@ A lightweight orchestrator for running multiple Claude Code agents on GitHub rep
 
 multiclaude spawns and coordinates autonomous Claude Code instances that work together on your codebase. Each agent runs in its own tmux window with an isolated git worktree, making all work observable and interruptible at any time.
 
+## Table of Contents
+
+- [What It Does](#what-it-does)
+- [Philosophy: The Brownian Ratchet](#philosophy-the-brownian-ratchet)
+- [Quick Start](#quick-start)
+- [Architecture](#architecture)
+- [Commands Reference](#commands-reference)
+- [Working with multiclaude](#working-with-multiclaude)
+- [Public Libraries](#public-libraries)
+- [Building](#building)
+- [Requirements](#requirements)
+
+## What It Does
+
+multiclaude lets you run multiple Claude Code instances in parallel, each working on different tasks for the same repository. Instead of manually managing separate terminal sessions, multiclaude:
+
+- **Spawns autonomous agents** - Each agent is a full Claude Code instance with its own task
+- **Isolates work via git worktrees** - Agents can't interfere with each other's changes
+- **Coordinates via tmux** - Watch any agent work in real-time, or let them run unattended
+- **Manages the merge lifecycle** - A dedicated merge-queue agent monitors PRs and merges when CI passes
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     tmux session: mc-repo                   │
+├───────────────┬───────────────┬───────────────┬─────────────┤
+│  supervisor   │  merge-queue  │ happy-platypus│ clever-fox  │
+│   (Claude)    │   (Claude)    │   (Claude)    │  (Claude)   │
+│               │               │               │             │
+│ Coordinates   │ Merges PRs    │ Working on    │ Working on  │
+│ all agents    │ when CI green │ task #1       │ task #2     │
+└───────────────┴───────────────┴───────────────┴─────────────┘
+        │                │               │               │
+        └────────────────┴───────────────┴───────────────┘
+                    isolated git worktrees
+```
+
+### Agent Types
+
+| Agent | Role | Lifecycle |
+|-------|------|-----------|
+| **Supervisor** | Coordinates agents, answers status questions, nudges stuck workers | Persistent |
+| **Merge Queue** | Monitors PRs, merges when CI passes, spawns fixup workers | Persistent |
+| **Worker** | Executes a specific task, creates a PR when done | Ephemeral |
+| **Workspace** | Your persistent interactive session for spawning workers | Persistent |
+
 ## Philosophy: The Brownian Ratchet
 
 multiclaude embraces a counterintuitive design principle: **chaos is fine, as long as we ratchet forward**.
 
 In physics, a Brownian ratchet is a thought experiment where random molecular motion is converted into directed movement through a mechanism that allows motion in only one direction. multiclaude applies this principle to software development.
 
-**The Chaos**: Multiple autonomous agents work simultaneously on overlapping concerns. They may duplicate effort, create conflicting changes, or produce suboptimal solutions. This apparent disorder is not a bug—it's a feature. More attempts mean more chances for progress.
+### The Chaos
 
-**The Ratchet**: CI is the arbiter. If it passes, the code goes in. Every merged PR clicks the ratchet forward one notch. Progress is permanent—we never go backward. The merge queue agent serves as this ratchet mechanism, ensuring that any work meeting the CI bar gets incorporated.
+Multiple autonomous agents work simultaneously on overlapping concerns. They may duplicate effort, create conflicting changes, or produce suboptimal solutions. This apparent disorder is not a bug—it's a feature. More attempts mean more chances for progress.
 
-**Why This Works**:
-- Agents don't need perfect coordination. Redundant work is cheaper than blocked work.
-- Failed attempts cost nothing. Only successful attempts matter.
-- Incremental progress compounds. Many small PRs beat waiting for one perfect PR.
-- The system is antifragile. More agents mean more chaos but also more forward motion.
+### The Ratchet
 
-This philosophy means we optimize for throughput of successful changes, not efficiency of individual agents. An agent that produces a mergeable PR has succeeded, even if another agent was working on the same thing.
+CI is the arbiter. If it passes, the code goes in. Every merged PR clicks the ratchet forward one notch. Progress is permanent—we never go backward. The merge-queue agent serves as this ratchet mechanism, ensuring that any work meeting the CI bar gets incorporated.
 
-## Our Opinions
+### Why This Works
 
-multiclaude is intentionally opinionated. These aren't configuration options—they're core beliefs baked into how the system works:
+- **Agents don't need perfect coordination** - Redundant work is cheaper than blocked work
+- **Failed attempts cost nothing** - Only successful attempts matter
+- **Incremental progress compounds** - Many small PRs beat waiting for one perfect PR
+- **The system is antifragile** - More agents mean more chaos but also more forward motion
 
-### CI is King
+### Core Beliefs
 
-CI is the source of truth. Period. If tests pass, the code can ship. If tests fail, the code doesn't ship. There's no "but the change looks right" or "I'm pretty sure it's fine." The automation decides.
+These aren't configuration options—they're baked into how the system works:
 
-Agents are forbidden from weakening CI to make their work pass. No skipping tests, no reducing coverage requirements, no "temporary" workarounds. If an agent can't pass CI, it asks for help or tries a different approach.
+1. **CI is King** - If tests pass, the code can ship. If tests fail, it doesn't. Agents never weaken CI to make work pass.
 
-### Forward Progress Over Perfection
+2. **Forward Progress Over Perfection** - Any incremental progress is good. A reviewable PR is progress. The only failure is an agent that doesn't push the ball forward at all.
 
-Any incremental progress is good. A reviewable PR is progress. A partial implementation with tests is progress. The only failure is an agent that doesn't push the ball forward at all.
+3. **Chaos is Expected** - Multiple agents will create conflicts and duplicate work. This is fine. Wasted work is cheap; blocked work is expensive.
 
-This means we'd rather have three okay PRs than wait for one perfect PR. We'd rather merge working code now and improve it later than block on getting everything right the first time. Small, frequent commits beat large, infrequent ones.
-
-### Chaos is Expected
-
-Multiple agents working simultaneously will create conflicts, duplicate work, and occasionally step on each other's toes. This is fine. This is the plan.
-
-Trying to perfectly coordinate agent work is both expensive and fragile. Instead, we let chaos happen and use CI as the ratchet that captures forward progress. Wasted work is cheap; blocked work is expensive.
-
-### Humans Approve, Agents Execute
-
-Agents do the work. Humans set the direction and approve the results. Agents should never make decisions that require human judgment—they should ask.
-
-This means agents create PRs for human review. Agents ask the supervisor when they're stuck. Agents don't bypass review requirements or merge without appropriate approval. The merge queue agent can auto-merge, but only when CI passes and review requirements are met.
-
-## Gastown and multiclaude
-
-multiclaude was developed independently but shares similar goals with [Gastown](https://github.com/steveyegge/gastown), Steve Yegge's multi-agent orchestrator for Claude Code released in January 2026.
-
-Both projects solve the same fundamental problem: coordinating multiple Claude Code instances working on a shared codebase. Both use Go, tmux for observability, and git worktrees for isolation. If you're evaluating multi-agent orchestrators, you should look at both.
-
-**Where they differ:**
-
-| Aspect | multiclaude | Gastown |
-|--------|-------------|---------|
-| Agent model | 3 roles: supervisor, worker, merge-queue | 7 roles: Mayor, Polecats, Refinery, Witness, Deacon, Dogs, Crew |
-| State persistence | JSON file + filesystem | Git-backed "hooks" for crash recovery |
-| Work tracking | Simple task descriptions | "Beads" framework for structured work units |
-| Communication | Filesystem-based messages | Built on Beads framework |
-| Philosophy | Minimal, Unix-style simplicity | Comprehensive orchestration system |
-| Maturity | Early development | More established, larger feature set |
-
-multiclaude aims to be a simpler, more lightweight alternative—the "worse is better" approach. If you need sophisticated orchestration features, work swarming, or built-in crash recovery, Gastown may be a better fit.
-
-### Remote-First: Software is an MMORPG
-
-The biggest philosophical difference: **multiclaude is designed for remote-first collaboration**.
-
-Gastown treats agents as NPCs in a single-player game. You're the player, agents are your minions. This works great for solo development where you want to parallelize your own work.
-
-multiclaude treats software engineering as an **MMORPG**. You're one player among many—some human, some AI. The workspace agent is your character, but other humans have their own workspaces. Workers are party members you spawn for quests. The supervisor coordinates the guild. The merge queue is the raid boss that decides what loot (code) makes it into the vault (main branch).
-
-This means:
-- **Your workspace persists**. It's your home base, not a temporary session.
-- **You interact with workers, not control them**. Spawn them with a task, check on them later.
-- **Other humans can have their own workspaces** on the same repo.
-- **The system keeps running when you're away**. Agents work, PRs merge, CI runs.
-
-The workspace is where you hop in to spawn agents, check on progress, review what landed, and plan the next sprint—then hop out and let the system work while you sleep.
+4. **Humans Approve, Agents Execute** - Agents create PRs for human review. They don't bypass review requirements or merge without appropriate approval.
 
 ## Quick Start
 
@@ -106,32 +103,92 @@ multiclaude work "Add unit tests for the auth module"
 tmux attach -t mc-repo
 ```
 
-## How It Works
+### What Happens
 
-multiclaude creates a tmux session for each repository with three types of agents:
+1. **`multiclaude start`** - Launches a background daemon that coordinates everything
+2. **`multiclaude init`** - Clones the repo, creates a tmux session, spawns supervisor and merge-queue agents
+3. **`multiclaude work`** - Creates a new worker agent with its own branch and worktree
+4. **`tmux attach`** - Connect to watch agents work (use `Ctrl-b n/p` to switch windows)
 
-1. **Supervisor** - Coordinates all agents, answers status questions, nudges stuck workers
-2. **Workers** - Execute specific tasks, create PRs when done
-3. **Merge Queue** - Monitors PRs, merges when CI passes, spawns fixup workers as needed
+## Architecture
 
-Agents communicate via a filesystem-based message system. The daemon routes messages and periodically nudges agents to keep work moving forward.
+### System Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     tmux session: mc-repo                   │
-├───────────────┬───────────────┬───────────────┬─────────────┤
-│  supervisor   │  merge-queue  │ happy-platypus│ clever-fox  │
-│   (Claude)    │   (Claude)    │   (Claude)    │  (Claude)   │
-│               │               │               │             │
-│ Coordinates   │ Merges PRs    │ Working on    │ Working on  │
-│ all agents    │ when CI green │ task #1       │ task #2     │
-└───────────────┴───────────────┴───────────────┴─────────────┘
-        │                │               │               │
-        └────────────────┴───────────────┴───────────────┘
-                    isolated git worktrees
+┌──────────────────────────────────────────────────────────────────┐
+│                         multiclaude daemon                        │
+│                                                                   │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
+│  │ Health Loop │  │ Message Loop│  │ Nudge Loop  │              │
+│  │  (2 min)    │  │   (2 min)   │  │  (2 min)    │              │
+│  └─────────────┘  └─────────────┘  └─────────────┘              │
+│                                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                     State Manager                           │ │
+│  │  repos, agents, messages, PIDs, worktrees                   │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                    Unix Socket Server                       │ │
+│  │  CLI commands → daemon → state updates → tmux management    │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
+              │                    │                    │
+              ▼                    ▼                    ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                    tmux: mc-<repo>                          │
+    │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
+    │  │supervisor│  │merge-queue│  │worker-1  │  │worker-2  │    │
+    │  │(Claude)  │  │(Claude)   │  │(Claude)  │  │(Claude)  │    │
+    │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘    │
+    └───────┼─────────────┼────────────┼────────────┼─────────────┘
+            │             │            │            │
+            ▼             ▼            ▼            ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                    Git Worktrees                            │
+    │  ~/.multiclaude/wts/<repo>/                                 │
+    │    supervisor/  merge-queue/  worker-1/  worker-2/          │
+    └─────────────────────────────────────────────────────────────┘
 ```
 
-## Commands
+### Design Principles
+
+| Principle | Description |
+|-----------|-------------|
+| **Observable** | All agent activity visible via tmux. Attach anytime to watch or intervene. |
+| **Isolated** | Each agent works in its own git worktree. No interference between tasks. |
+| **Recoverable** | State persists to disk. Daemon recovers gracefully from crashes. |
+| **Safe** | Agents never weaken CI or bypass checks without human approval. |
+| **Simple** | Filesystem for state, tmux for visibility, git for isolation. |
+
+### Directory Structure
+
+```
+~/.multiclaude/
+├── daemon.pid          # Daemon process ID
+├── daemon.sock         # Unix socket for CLI
+├── daemon.log          # Daemon logs
+├── state.json          # Persisted state
+├── repos/<repo>/       # Cloned repositories
+├── wts/<repo>/         # Git worktrees (supervisor, merge-queue, workers)
+├── messages/<repo>/    # Inter-agent messages
+└── claude-config/<repo>/<agent>/  # Per-agent Claude configuration
+```
+
+### Agent Communication
+
+Agents communicate via filesystem-based messaging. The daemon routes messages between agents every 2 minutes:
+
+```
+supervisor ─────message────▶ worker
+     ▲                          │
+     │                          │
+     └──────────reply───────────┘
+```
+
+Messages are JSON files in `~/.multiclaude/messages/<repo>/<agent>/` with status progression: `pending` → `delivered` → `acked`
+
+## Commands Reference
 
 ### Daemon
 
@@ -148,30 +205,23 @@ multiclaude stop-all --clean   # Stop and remove all state files
 
 ```bash
 multiclaude init <github-url>              # Initialize repository tracking
-multiclaude init <github-url> [path] [name] # With custom local path or name
+multiclaude init <github-url> [name]       # With custom name
 multiclaude list                           # List tracked repositories
 multiclaude repo rm <name>                 # Remove a tracked repository
 ```
 
 ### Workspaces
 
-Workspaces are persistent Claude sessions where you interact with the codebase, spawn workers, and manage your development flow. Each workspace has its own git worktree, tmux window, and Claude instance.
+Workspaces are persistent Claude sessions where you interact with the codebase and spawn workers.
 
 ```bash
 multiclaude workspace add <name>           # Create a new workspace
 multiclaude workspace add <name> --branch main  # Create from specific branch
 multiclaude workspace list                 # List all workspaces
 multiclaude workspace connect <name>       # Attach to a workspace
-multiclaude workspace rm <name>            # Remove workspace (warns if uncommitted work)
-multiclaude workspace                      # List workspaces (shorthand)
-multiclaude workspace <name>               # Connect to workspace (shorthand)
+multiclaude workspace rm <name>            # Remove workspace
+multiclaude workspace <name>               # Connect shorthand
 ```
-
-**Notes:**
-- Workspaces use the branch naming convention `workspace/<name>`
-- Workspace names follow git branch naming rules (no spaces, special characters, etc.)
-- A "default" workspace is created automatically when you run `multiclaude init`
-- Use `multiclaude attach <workspace-name>` as an alternative to `workspace connect`
 
 ### Workers
 
@@ -180,10 +230,8 @@ multiclaude work "task description"        # Create worker for task
 multiclaude work "task" --branch feature   # Start from specific branch
 multiclaude work "Fix tests" --branch origin/work/fox --push-to work/fox  # Iterate on existing PR
 multiclaude work list                      # List active workers
-multiclaude work rm <name>                 # Remove worker (warns if uncommitted work)
+multiclaude work rm <name>                 # Remove worker
 ```
-
-The `--push-to` flag creates a worker that pushes to an existing branch instead of creating a new PR. Use this when you want to iterate on an existing PR.
 
 ### Observing
 
@@ -191,19 +239,20 @@ The `--push-to` flag creates a worker that pushes to an existing branch instead 
 multiclaude attach <agent-name>            # Attach to agent's tmux window
 multiclaude attach <agent-name> --read-only # Observe without interaction
 tmux attach -t mc-<repo>                   # Attach to entire repo session
+multiclaude logs <agent-name>              # View agent output logs
+multiclaude logs <agent-name> -f           # Follow agent logs
 ```
 
-### Agent Commands (run from within Claude)
+### Agent Commands (from within Claude)
 
 ```bash
 multiclaude agent send-message <to> "msg"  # Send message to another agent
-multiclaude agent send-message --all "msg" # Broadcast to all agents
 multiclaude agent list-messages            # List incoming messages
 multiclaude agent ack-message <id>         # Acknowledge a message
 multiclaude agent complete                 # Signal task completion (workers)
 ```
 
-### Agent Slash Commands (available within Claude sessions)
+### Agent Slash Commands
 
 Agents have access to multiclaude-specific slash commands:
 
@@ -214,201 +263,59 @@ Agents have access to multiclaude-specific slash commands:
 
 ## Working with multiclaude
 
-### What the tmux Session Looks Like
+### Spawning Workers from Your Workspace
 
-When you attach to a repo's tmux session, you'll see multiple windows—one per agent:
+Connect to your workspace and spawn workers for parallel tasks:
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ mc-myrepo: supervisor | merge-queue | workspace | swift-eagle | calm-deer   │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  $ claude                                                                   │
-│                                                                             │
-│  ╭─────────────────────────────────────────────────────────────────────────╮│
-│  │ I'll check on the current workers and see if anyone needs help.        ││
-│  │                                                                         ││
-│  │ > multiclaude work list                                                 ││
-│  │ Workers (2):                                                            ││
-│  │   - swift-eagle: working on issue #44                                   ││
-│  │   - calm-deer: working on issue #24                                     ││
-│  │                                                                         ││
-│  │ Both workers are making progress. swift-eagle just pushed a commit.    ││
-│  │ I'll check back in a few minutes.                                       ││
-│  ╰─────────────────────────────────────────────────────────────────────────╯│
-│                                                                             │
-│  ─────────────────────────────────────────────────────────────────────────  │
-│  > What would you like to do?                                               │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+> Let's tackle issues #44 and #45 in parallel
+
+╭─────────────────────────────────────────────────────────────╮
+│ I'll spawn workers for both issues.                         │
+│                                                             │
+│ > multiclaude work "Implement rich list commands per #44"   │
+│ ✓ Worker created: swift-eagle (branch: work/swift-eagle)    │
+│                                                             │
+│ > multiclaude work "Improve error messages per #45"         │
+│ ✓ Worker created: calm-deer (branch: work/calm-deer)        │
+│                                                             │
+│ Both workers are now running. Check on them with:           │
+│   multiclaude work list                                     │
+│   multiclaude attach swift-eagle                            │
+╰─────────────────────────────────────────────────────────────╯
 ```
 
-Use standard tmux navigation:
+### Watching Agents Work
+
+Use tmux navigation to switch between agent windows:
+
 - `Ctrl-b n` / `Ctrl-b p` — Next/previous window
 - `Ctrl-b 0-9` — Jump to window by number
 - `Ctrl-b w` — Window picker
 - `Ctrl-b d` — Detach (agents keep running)
 
-### Workflow: Spawning Workers from Your Workspace
+### The Merge Queue in Action
 
-Your workspace is a persistent Claude session where you can spawn and manage workers:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ You (in workspace):                                                         │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  > Let's tackle issues #44 and #45 in parallel                              │
-│                                                                             │
-│  ╭─────────────────────────────────────────────────────────────────────────╮│
-│  │ I'll spawn workers for both issues.                                     ││
-│  │                                                                         ││
-│  │ > multiclaude work "Implement rich list commands per issue #44"         ││
-│  │ ✓ Worker created: swift-eagle (branch: work/swift-eagle)                ││
-│  │                                                                         ││
-│  │ > multiclaude work "Improve error messages per issue #45"               ││
-│  │ ✓ Worker created: calm-deer (branch: work/calm-deer)                    ││
-│  │                                                                         ││
-│  │ Both workers are now running. You can check on them with:               ││
-│  │   multiclaude work list                                                 ││
-│  │   multiclaude attach swift-eagle                                        ││
-│  ╰─────────────────────────────────────────────────────────────────────────╯│
-│                                                                             │
-│  > Great, let me know when they finish. I'm going to grab lunch.            │
-│                                                                             │
-│  ╭─────────────────────────────────────────────────────────────────────────╮│
-│  │ Will do! I'll get notified when they complete and can summarize         ││
-│  │ their PRs when you're back. The workers will keep running while         ││
-│  │ you're away.                                                            ││
-│  ╰─────────────────────────────────────────────────────────────────────────╯│
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-Later, when you return:
+The merge-queue agent automatically monitors and merges PRs:
 
 ```
-│  > I'm back. What happened while I was gone?                                │
-│                                                                             │
-│  ╭─────────────────────────────────────────────────────────────────────────╮│
-│  │ Welcome back! Here's the update:                                        ││
-│  │                                                                         ││
-│  │ ✓ swift-eagle completed - PR #47 created for rich list commands         ││
-│  │ ✓ calm-deer completed - PR #48 created for error messages               ││
-│  │                                                                         ││
-│  │ Both PRs are passing CI. The merge queue is monitoring them.            ││
-│  ╰─────────────────────────────────────────────────────────────────────────╯│
+╭─────────────────────────────────────────────────────────────╮
+│ Checking open PRs...                                        │
+│                                                             │
+│ > gh pr list --author @me                                   │
+│ #47  Add rich list commands      swift-eagle                │
+│ #48  Improve error messages      calm-deer                  │
+│                                                             │
+│ Checking CI status for #47...                               │
+│ ✓ All checks passed                                         │
+│                                                             │
+│ PR #47 is ready to merge!                                   │
+│ > gh pr merge 47 --squash --auto                            │
+│ ✓ Merged #47 into main                                      │
+╰─────────────────────────────────────────────────────────────╯
 ```
 
-### Watching the Supervisor
-
-The supervisor coordinates agents and provides status updates. Attach to watch it work:
-
-```bash
-multiclaude attach supervisor --read-only
-```
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Supervisor:                                                                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ╭─────────────────────────────────────────────────────────────────────────╮│
-│  │ [Periodic check - 14:32]                                                ││
-│  │                                                                         ││
-│  │ Checking agent status...                                                ││
-│  │                                                                         ││
-│  │ Agents:                                                                 ││
-│  │   supervisor: healthy (me)                                              ││
-│  │   merge-queue: healthy, monitoring 2 PRs                                ││
-│  │   workspace: healthy, user attached                                     ││
-│  │   swift-eagle: healthy, working on #44                                  ││
-│  │   calm-deer: needs attention - stuck on test failure                    ││
-│  │                                                                         ││
-│  │ Sending help to calm-deer...                                            ││
-│  │                                                                         ││
-│  │ > multiclaude agent send-message calm-deer "I see you're stuck on a     ││
-│  │   test failure. The flaky test in auth_test.go sometimes fails due to   ││
-│  │   timing. Try adding a retry or mocking the clock."                     ││
-│  ╰─────────────────────────────────────────────────────────────────────────╯│
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Watching the Merge Queue
-
-The merge queue monitors PRs and merges them when CI passes:
-
-```bash
-multiclaude attach merge-queue --read-only
-```
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Merge Queue:                                                                │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ╭─────────────────────────────────────────────────────────────────────────╮│
-│  │ [PR Check - 14:45]                                                      ││
-│  │                                                                         ││
-│  │ Checking open PRs...                                                    ││
-│  │                                                                         ││
-│  │ > gh pr list --author @me                                               ││
-│  │ #47  Add rich list commands      swift-eagle   work/swift-eagle         ││
-│  │ #48  Improve error messages      calm-deer     work/calm-deer           ││
-│  │                                                                         ││
-│  │ Checking CI status for #47...                                           ││
-│  │ > gh pr checks 47                                                       ││
-│  │ ✓ All checks passed                                                     ││
-│  │                                                                         ││
-│  │ PR #47 is ready to merge!                                               ││
-│  │ > gh pr merge 47 --squash --auto                                        ││
-│  │ ✓ Merged #47 into main                                                  ││
-│  │                                                                         ││
-│  │ Notifying supervisor of merge...                                        ││
-│  │ > multiclaude agent send-message supervisor "Merged PR #47: Add rich    ││
-│  │   list commands"                                                        ││
-│  ╰─────────────────────────────────────────────────────────────────────────╯│
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-When CI fails, the merge queue can spawn workers to fix it:
-
-```
-│  │ Checking CI status for #48...                                           ││
-│  │ ✗ Tests failed: 2 failures in error_test.go                             ││
-│  │                                                                         ││
-│  │ Spawning fixup worker for #48...                                        ││
-│  │ > multiclaude work "Fix test failures in PR #48" --branch work/calm-deer││
-│  │ ✓ Worker created: quick-fox                                             ││
-│  │                                                                         ││
-│  │ I'll check back on #48 after quick-fox pushes a fix.                    ││
-```
-
-## Architecture
-
-### Design Principles
-
-1. **Observable** - All agent activity visible via tmux. Attach anytime to watch or intervene.
-2. **Isolated** - Each agent works in its own git worktree. No interference between tasks.
-3. **Recoverable** - State persists to disk. Daemon recovers gracefully from crashes.
-4. **Safe** - Agents never weaken CI or bypass checks without human approval.
-5. **Simple** - Minimal abstractions. Filesystem for state, tmux for visibility, git for isolation.
-
-### Directory Structure
-
-```
-~/.multiclaude/
-├── daemon.pid          # Daemon process ID
-├── daemon.sock         # Unix socket for CLI
-├── daemon.log          # Daemon logs
-├── state.json          # Persisted state
-├── repos/<repo>/       # Cloned repositories
-├── wts/<repo>/         # Git worktrees (supervisor, merge-queue, workers)
-├── messages/<repo>/    # Inter-agent messages
-└── claude-config/<repo>/<agent>/  # Per-agent Claude configuration (slash commands)
-```
+When CI fails, the merge-queue spawns fixup workers automatically.
 
 ### Repository Configuration
 
@@ -424,7 +331,7 @@ Repositories can include optional configuration in `.multiclaude/`:
 
 ## Public Libraries
 
-multiclaude includes two reusable Go packages that can be used independently of the orchestrator:
+multiclaude includes two reusable Go packages:
 
 ### pkg/tmux - Programmatic tmux Interaction
 
@@ -432,15 +339,14 @@ multiclaude includes two reusable Go packages that can be used independently of 
 go get github.com/dlorenc/multiclaude/pkg/tmux
 ```
 
-Unlike existing Go tmux libraries ([gotmux](https://github.com/GianlucaP106/gotmux), [go-tmux](https://github.com/jubnzv/go-tmux)) that focus on workspace setup, this package provides features for **programmatic interaction with running CLI applications**:
-
-- **Multiline text via paste-buffer** - Send multi-line input atomically without triggering intermediate processing
-- **Pane PID extraction** - Monitor whether processes in panes are still alive
-- **pipe-pane output capture** - Capture all pane output to files for logging/analysis
+Features for programmatic interaction with running CLI applications:
+- Multiline text via paste-buffer (atomic input without triggering intermediate processing)
+- Pane PID extraction for process monitoring
+- pipe-pane output capture for logging
 
 ```go
 client := tmux.NewClient()
-client.SendKeysLiteral("session", "window", "multi\nline\ntext")  // Uses paste-buffer
+client.SendKeysLiteral("session", "window", "multi\nline\ntext")
 pid, _ := client.GetPanePID("session", "window")
 client.StartPipePane("session", "window", "/tmp/output.log")
 ```
@@ -453,12 +359,10 @@ client.StartPipePane("session", "window", "/tmp/output.log")
 go get github.com/dlorenc/multiclaude/pkg/claude
 ```
 
-A library for launching and interacting with Claude Code instances in terminals:
-
-- **Terminal abstraction** - Works with tmux or custom terminal implementations
-- **Session management** - Automatic UUID session IDs and process tracking
-- **Output capture** - Route Claude output to files
-- **Multiline support** - Properly handles multi-line messages to Claude
+A library for launching and managing Claude Code instances:
+- Terminal abstraction (works with tmux or custom implementations)
+- Session management with automatic UUID session IDs
+- Output capture and multiline message support
 
 ```go
 runner := claude.NewRunner(
@@ -492,6 +396,10 @@ go install ./cmd/multiclaude
 - tmux
 - git
 - GitHub CLI (`gh`) authenticated via `gh auth login`
+
+## Related Projects
+
+multiclaude shares similar goals with [Gastown](https://github.com/steveyegge/gastown), Steve Yegge's multi-agent orchestrator. Both coordinate multiple Claude Code instances using tmux and git worktrees. multiclaude aims to be a simpler, more lightweight alternative.
 
 ## License
 
