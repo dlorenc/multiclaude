@@ -97,10 +97,17 @@ type Repository struct {
 	MergeQueueConfig MergeQueueConfig   `json:"merge_queue_config,omitempty"`
 }
 
+// GlobalConfig holds global configuration settings
+type GlobalConfig struct {
+	// OAuthToken is the Claude Code OAuth token for authentication
+	OAuthToken string `json:"oauth_token,omitempty"`
+}
+
 // State represents the entire daemon state
 type State struct {
 	Repos       map[string]*Repository `json:"repos"`
 	CurrentRepo string                 `json:"current_repo,omitempty"`
+	Config      GlobalConfig           `json:"config,omitempty"`
 	mu          sync.RWMutex
 	path        string
 }
@@ -160,6 +167,21 @@ func (s *State) Save() error {
 	}
 
 	return nil
+}
+
+// GetOAuthToken returns the configured OAuth token
+func (s *State) GetOAuthToken() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Config.OAuthToken
+}
+
+// SetOAuthToken sets the OAuth token and persists state
+func (s *State) SetOAuthToken(token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Config.OAuthToken = token
+	return s.saveUnlocked()
 }
 
 // AddRepo adds a new repository to the state

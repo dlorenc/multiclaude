@@ -495,19 +495,7 @@ func TestBuildCommand(t *testing.T) {
 			},
 		},
 		{
-			name: "with claude config dir",
-			config: Config{
-				SessionID:       "test-session",
-				ClaudeConfigDir: "/home/user/.multiclaude/claude-config/repo/agent",
-			},
-			contains: []string{
-				"CLAUDE_CONFIG_DIR=/home/user/.multiclaude/claude-config/repo/agent",
-				"/path/to/claude",
-				"--session-id test-session",
-			},
-		},
-		{
-			name: "without claude config dir",
+			name: "excludes CLAUDE_CONFIG_DIR (no longer used)",
 			config: Config{
 				SessionID: "test-session",
 			},
@@ -527,16 +515,17 @@ func TestBuildCommand(t *testing.T) {
 			},
 		},
 		{
-			name: "with workdir and claude config dir",
+			name: "with workdir excludes CLAUDE_CONFIG_DIR",
 			config: Config{
-				SessionID:       "test-session",
-				WorkDir:         "/path/to/workdir",
-				ClaudeConfigDir: "/path/to/config",
+				SessionID: "test-session",
+				WorkDir:   "/path/to/workdir",
 			},
 			contains: []string{
 				"cd \"/path/to/workdir\" &&",
-				"CLAUDE_CONFIG_DIR=/path/to/config",
 				"/path/to/claude",
+			},
+			excludes: []string{
+				"CLAUDE_CONFIG_DIR",
 			},
 		},
 	}
@@ -582,61 +571,7 @@ func TestResolveBinaryPath(t *testing.T) {
 	}
 }
 
-func TestBuildCommandClaudeConfigDirPrepended(t *testing.T) {
-	runner := NewRunner(
-		WithBinaryPath("claude"),
-		WithPermissions(true),
-	)
-
-	cmd := runner.buildCommand("test-session", Config{
-		ClaudeConfigDir: "/tmp/config",
-	})
-
-	// Verify CLAUDE_CONFIG_DIR is prepended before the binary
-	if !strings.HasPrefix(cmd, "CLAUDE_CONFIG_DIR=/tmp/config claude") {
-		t.Errorf("expected CLAUDE_CONFIG_DIR to be prepended before binary, got %q", cmd)
-	}
-}
-
-func TestStartWithClaudeConfigDir(t *testing.T) {
-	ctx := context.Background()
-	terminal := &mockTerminal{
-		getPanePIDReturn: 12345,
-	}
-
-	runner := NewRunner(
-		WithTerminal(terminal),
-		WithBinaryPath("/path/to/claude"),
-		WithStartupDelay(0),
-	)
-
-	result, err := runner.Start(ctx, "my-session", "my-window", Config{
-		ClaudeConfigDir: "/home/user/.multiclaude/claude-config/repo/agent",
-	})
-
-	if err != nil {
-		t.Fatalf("Start() failed: %v", err)
-	}
-
-	if result.SessionID == "" {
-		t.Error("expected SessionID to be generated")
-	}
-
-	// Verify SendKeys was called
-	if len(terminal.sendKeysCalls) < 1 {
-		t.Fatalf("expected at least 1 SendKeys call, got %d", len(terminal.sendKeysCalls))
-	}
-
-	// First call is the actual command (no MOTD)
-	call := terminal.sendKeysCalls[0]
-
-	// Verify CLAUDE_CONFIG_DIR is included in command
-	if !strings.Contains(call.text, "CLAUDE_CONFIG_DIR=/home/user/.multiclaude/claude-config/repo/agent") {
-		t.Errorf("expected command to contain CLAUDE_CONFIG_DIR, got %q", call.text)
-	}
-
-	// Verify the env var is prepended (before the binary path)
-	if !strings.HasPrefix(call.text, "CLAUDE_CONFIG_DIR=/home/user/.multiclaude/claude-config/repo/agent /path/to/claude") {
-		t.Errorf("expected CLAUDE_CONFIG_DIR to be prepended before binary, got %q", call.text)
-	}
-}
+// Note: TestBuildCommandClaudeConfigDirPrepended and TestStartWithClaudeConfigDir
+// were removed because CLAUDE_CONFIG_DIR is no longer used. Claude Code only reads
+// credentials from ~/.claude/.credentials.json regardless of CLAUDE_CONFIG_DIR,
+// and slash commands are now embedded directly in agent prompts.

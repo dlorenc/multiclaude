@@ -19,7 +19,6 @@ import (
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/names"
 	"github.com/dlorenc/multiclaude/internal/prompts"
-	"github.com/dlorenc/multiclaude/internal/prompts/commands"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/internal/worktree"
@@ -512,7 +511,7 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["config"] = &Command{
 		Name:        "config",
 		Description: "View or modify repository configuration",
-		Usage:       "multiclaude config [repo] [--mq-enabled=true|false] [--mq-track=all|author|assigned]",
+		Usage:       "multiclaude config [repo] [--mq-enabled=true|false] [--mq-track=all|author|assigned] [--oauth-token=<token>]",
 		Run:         c.configRepo,
 	}
 
@@ -1341,6 +1340,11 @@ func (c *CLI) clearCurrentRepo(args []string) error {
 func (c *CLI) configRepo(args []string) error {
 	flags, posArgs := ParseFlags(args)
 
+	// Handle global --oauth-token flag (doesn't require repo)
+	if oauthToken, hasToken := flags["oauth-token"]; hasToken {
+		return c.setOAuthToken(oauthToken)
+	}
+
 	// Determine repository
 	var repoName string
 	if len(posArgs) >= 1 {
@@ -1478,6 +1482,29 @@ func (c *CLI) updateRepoConfig(repoName string, flags map[string]string) error {
 
 	// Show the updated config
 	return c.showRepoConfig(repoName)
+}
+
+func (c *CLI) setOAuthToken(token string) error {
+	// Load state directly (no daemon needed for this)
+	s, err := state.Load(c.paths.StateFile)
+	if err != nil {
+		return fmt.Errorf("failed to load state: %w", err)
+	}
+
+	if err := s.SetOAuthToken(token); err != nil {
+		return fmt.Errorf("failed to save OAuth token: %w", err)
+	}
+
+	// Mask token for display
+	maskedToken := token
+	if len(token) > 20 {
+		maskedToken = token[:10] + "..." + token[len(token)-10:]
+	}
+
+	fmt.Printf("OAuth token configured: %s\n", maskedToken)
+	fmt.Println("\nNote: Restart the daemon for the token to take effect:")
+	fmt.Println("  multiclaude daemon stop && multiclaude start")
+	return nil
 }
 
 func (c *CLI) createWorker(args []string) error {
@@ -4305,7 +4332,10 @@ func ParseFlags(args []string) (map[string]string, []string) {
 		if strings.HasPrefix(arg, "--") {
 			// Long flag
 			flag := strings.TrimPrefix(arg, "--")
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			// Handle --flag=value format
+			if idx := strings.Index(flag, "="); idx != -1 {
+				flags[flag[:idx]] = flag[idx+1:]
+			} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				flags[flag] = args[i+1]
 				i++
 			} else {
@@ -4314,7 +4344,10 @@ func ParseFlags(args []string) (map[string]string, []string) {
 		} else if strings.HasPrefix(arg, "-") {
 			// Short flag
 			flag := strings.TrimPrefix(arg, "-")
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			// Handle -f=value format
+			if idx := strings.Index(flag, "="); idx != -1 {
+				flags[flag[:idx]] = flag[idx+1:]
+			} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				flags[flag] = args[i+1]
 				i++
 			} else {
@@ -4450,16 +4483,8 @@ func (c *CLI) setupOutputCapture(tmuxSession, tmuxWindow, repoName, agentName, a
 // startClaudeInTmux starts Claude Code in a tmux window with the given configuration
 // Returns the PID of the Claude process
 func (c *CLI) startClaudeInTmux(binaryPath, tmuxSession, tmuxWindow, workDir, sessionID, promptFile, repoName string, initialMessage string) (int, error) {
-	// Set up per-agent Claude config directory with slash commands
-	agentConfigDir := c.paths.AgentClaudeConfigDir(repoName, tmuxWindow)
-	if err := commands.SetupAgentCommands(agentConfigDir); err != nil {
-		// Log warning but don't fail - slash commands are a nice-to-have
-		fmt.Printf("Warning: failed to setup agent commands: %v\n", err)
-	}
-
-	// Build Claude command using the full path to prevent version drift
-	// Set CLAUDE_CONFIG_DIR to inject per-agent slash commands
-	claudeCmd := fmt.Sprintf("CLAUDE_CONFIG_DIR=%s %s --session-id %s --dangerously-skip-permissions", agentConfigDir, binaryPath, sessionID)
+	// Build Claude command - uses global ~/.claude/ for auth and slash commands are embedded in prompts
+	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions", binaryPath, sessionID)
 
 	// Add prompt file if provided
 	if promptFile != "" {
@@ -4499,7 +4524,6 @@ func (c *CLI) startClaudeInTmux(binaryPath, tmuxSession, tmuxWindow, workDir, se
 
 	return pid, nil
 }
-
 
 // bugReport generates a diagnostic bug report with redacted sensitive information
 func (c *CLI) bugReport(args []string) error {

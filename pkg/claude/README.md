@@ -163,16 +163,6 @@ What improvements would you suggest?`
 runner.SendMessage(ctx, "session", "window", message)
 ```
 
-### Per-Agent Configuration
-
-Set `CLAUDE_CONFIG_DIR` for per-instance settings (slash commands, etc.):
-
-```go
-result, err := runner.Start(ctx, "session", "window", claude.Config{
-    ClaudeConfigDir: "/path/to/agent/config",
-})
-```
-
 ## Configuration Options
 
 ```go
@@ -204,7 +194,6 @@ runner := claude.NewRunner(
 | `SystemPromptFile` | Path to system prompt file |
 | `InitialMessage` | Optional message to send after startup |
 | `OutputFile` | Path to capture output via pipe-pane |
-| `ClaudeConfigDir` | Path for `CLAUDE_CONFIG_DIR` env var |
 | `MOTD` | Message to display before starting Claude |
 
 ## CLI Flags

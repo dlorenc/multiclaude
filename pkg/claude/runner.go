@@ -179,10 +179,6 @@ type Config struct {
 	// If non-empty, StartPipePane is called with this file.
 	OutputFile string
 
-	// ClaudeConfigDir is the path to set as CLAUDE_CONFIG_DIR environment variable.
-	// This enables per-agent slash commands. If empty, CLAUDE_CONFIG_DIR is not set.
-	ClaudeConfigDir string
-
 	// MOTD is an optional message of the day to display before starting Claude.
 	// This is useful for showing restart instructions or other information.
 	// If empty, no MOTD is displayed.
@@ -281,11 +277,9 @@ func (r *Runner) buildCommand(sessionID string, cfg Config) string {
 		cmd = fmt.Sprintf("cd %q && ", cfg.WorkDir)
 	}
 
-	// Prepend CLAUDE_CONFIG_DIR environment variable if set
-	// This enables per-agent slash commands
-	if cfg.ClaudeConfigDir != "" {
-		cmd += fmt.Sprintf("CLAUDE_CONFIG_DIR=%s ", cfg.ClaudeConfigDir)
-	}
+	// Note: CLAUDE_CONFIG_DIR and CLAUDE_CODE_OAUTH_TOKEN are not used because
+	// Claude Code only reads credentials from ~/.claude/.credentials.json
+	// regardless of CLAUDE_CONFIG_DIR setting. Slash commands go in ~/.claude/commands/.
 
 	cmd += r.BinaryPath
 

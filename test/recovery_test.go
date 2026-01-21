@@ -5,11 +5,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/dlorenc/multiclaude/internal/daemon"
 	"github.com/dlorenc/multiclaude/internal/messages"
+	"github.com/dlorenc/multiclaude/internal/prompts"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/internal/worktree"
 	"github.com/dlorenc/multiclaude/pkg/config"
@@ -573,139 +575,25 @@ func TestConcurrentStateAccess(t *testing.T) {
 	}
 }
 
-// TestDaemonRestartSetsUpClaudeConfigDir tests that daemon restart creates
-// CLAUDE_CONFIG_DIR with slash commands for agents
-func TestDaemonRestartSetsUpClaudeConfigDir(t *testing.T) {
-	tmuxClient := tmux.NewClient()
-	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping CLAUDE_CONFIG_DIR test")
-	}
+// TestSlashCommandsEmbeddedInPrompts verifies that slash commands are embedded
+// in agent prompts rather than via CLAUDE_CONFIG_DIR (which doesn't work for auth)
+func TestSlashCommandsEmbeddedInPrompts(t *testing.T) {
+	// Get the slash commands prompt
+	slashPrompt := prompts.GetSlashCommandsPrompt()
 
-	// Use os.MkdirTemp with a short prefix to avoid Unix socket path length limits
-	tmpDir, err := os.MkdirTemp("", "mc-cfg-")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	paths := &config.Paths{
-		Root:            tmpDir,
-		DaemonPID:       filepath.Join(tmpDir, "daemon.pid"),
-		DaemonSock:      filepath.Join(tmpDir, "daemon.sock"),
-		DaemonLog:       filepath.Join(tmpDir, "daemon.log"),
-		StateFile:       filepath.Join(tmpDir, "state.json"),
-		ReposDir:        filepath.Join(tmpDir, "repos"),
-		WorktreesDir:    filepath.Join(tmpDir, "wts"),
-		MessagesDir:     filepath.Join(tmpDir, "messages"),
-		OutputDir:       filepath.Join(tmpDir, "output"),
-		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
-	}
-
-	if err := paths.EnsureDirectories(); err != nil {
-		t.Fatalf("Failed to create directories: %v", err)
-	}
-
-	// Create tmux session for the test
-	sessionName := "mc-config-test"
-	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
-		t.Fatalf("Failed to create tmux session: %v", err)
-	}
-	defer tmuxClient.KillSession(context.Background(), sessionName)
-
-	// Create supervisor window for the agent
-	if err := tmuxClient.CreateWindow(context.Background(), sessionName, "supervisor"); err != nil {
-		t.Fatalf("Failed to create supervisor window: %v", err)
-	}
-
-	// Start first daemon and add state
-	d1, err := daemon.New(paths)
-	if err != nil {
-		t.Fatalf("Failed to create first daemon: %v", err)
-	}
-
-	if err := d1.Start(); err != nil {
-		t.Fatalf("Failed to start first daemon: %v", err)
-	}
-
-	// Add repo and agent to state
-	repoName := "test-repo"
-	agentName := "supervisor"
-	repo := &state.Repository{
-		GithubURL:   "https://github.com/test/repo",
-		TmuxSession: sessionName,
-		Agents:      make(map[string]state.Agent),
-	}
-	if err := d1.GetState().AddRepo(repoName, repo); err != nil {
-		t.Fatalf("Failed to add repo: %v", err)
-	}
-
-	agent := state.Agent{
-		Type:         state.AgentTypeSupervisor,
-		TmuxWindow:   agentName,
-		WorktreePath: filepath.Join(paths.WorktreesDir, repoName, agentName),
-		SessionID:    "test-session-id",
-		PID:          99999, // Dead PID to trigger restart
-		CreatedAt:    time.Now(),
-	}
-	if err := d1.GetState().AddAgent(repoName, agentName, agent); err != nil {
-		t.Fatalf("Failed to add agent: %v", err)
-	}
-
-	// Create the worktree directory so it exists
-	wtPath := filepath.Join(paths.WorktreesDir, repoName, agentName)
-	if err := os.MkdirAll(wtPath, 0755); err != nil {
-		t.Fatalf("Failed to create worktree directory: %v", err)
-	}
-
-	// Stop first daemon cleanly
-	if err := d1.Stop(); err != nil {
-		t.Fatalf("Failed to stop first daemon: %v", err)
-	}
-
-	// Clean up stale socket
-	os.Remove(paths.DaemonSock)
-	time.Sleep(100 * time.Millisecond)
-
-	// Start second daemon - this simulates daemon restart
-	d2, err := daemon.New(paths)
-	if err != nil {
-		t.Fatalf("Failed to create second daemon: %v", err)
-	}
-
-	if err := d2.Start(); err != nil {
-		t.Fatalf("Failed to start second daemon: %v", err)
-	}
-	defer d2.Stop()
-
-	// Wait for daemon to fully initialize and run health check
-	time.Sleep(200 * time.Millisecond)
-
-	// Trigger a health check which will attempt to restart dead agents
-	d2.TriggerHealthCheck()
-
-	// Give it time to process
-	time.Sleep(500 * time.Millisecond)
-
-	// Verify CLAUDE_CONFIG_DIR structure was created
-	agentConfigDir := paths.AgentClaudeConfigDir(repoName, agentName)
-	commandsDir := filepath.Join(agentConfigDir, "commands")
-
-	// Check config directory exists
-	if _, err := os.Stat(agentConfigDir); os.IsNotExist(err) {
-		t.Errorf("Expected CLAUDE_CONFIG_DIR to exist at %s", agentConfigDir)
-	}
-
-	// Check commands directory exists
-	if _, err := os.Stat(commandsDir); os.IsNotExist(err) {
-		t.Errorf("Expected commands directory to exist at %s", commandsDir)
-	}
-
-	// Check that slash command files were created
-	expectedCommands := []string{"refresh.md", "status.md", "workers.md", "messages.md"}
+	// Verify all expected commands are in the prompt
+	expectedCommands := []string{"/status", "/refresh", "/workers", "/messages"}
 	for _, cmd := range expectedCommands {
-		cmdPath := filepath.Join(commandsDir, cmd)
-		if _, err := os.Stat(cmdPath); os.IsNotExist(err) {
-			t.Errorf("Expected command file %s to exist", cmdPath)
+		if !strings.Contains(slashPrompt, cmd) {
+			t.Errorf("Expected slash commands prompt to contain %q", cmd)
+		}
+	}
+
+	// Verify multiclaude CLI commands are referenced
+	expectedCLICommands := []string{"multiclaude list", "multiclaude work list", "multiclaude agent list-messages"}
+	for _, cmd := range expectedCLICommands {
+		if !strings.Contains(slashPrompt, cmd) {
+			t.Errorf("Expected slash commands prompt to contain CLI command %q", cmd)
 		}
 	}
 }
