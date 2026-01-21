@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -254,7 +255,7 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["stop-all"] = &Command{
 		Name:        "stop-all",
 		Description: "Stop daemon and kill all multiclaude tmux sessions",
-		Usage:       "multiclaude stop-all [--clean]",
+		Usage:       "multiclaude stop-all [--clean] [--yes]",
 		Run:         c.stopAll,
 	}
 
@@ -632,8 +633,7 @@ func (c *CLI) daemonLogs(args []string) error {
 func (c *CLI) stopAll(args []string) error {
 	flags, _ := ParseFlags(args)
 	clean := flags["clean"] == "true"
-
-	fmt.Println("Stopping all multiclaude sessions...")
+	skipConfirm := flags["yes"] == "true"
 
 	// Get list of repos (try daemon first, then state file)
 	var repos []string
@@ -655,6 +655,40 @@ func (c *CLI) stopAll(args []string) error {
 			repos = st.ListRepos()
 		}
 	}
+
+	// If --clean is specified, require confirmation
+	if clean {
+		fmt.Println("WARNING: This will permanently delete:")
+		fmt.Println("  - All worktrees (~/.multiclaude/wts/)")
+		fmt.Println("  - All agent state (state.json agents section)")
+		fmt.Println("  - All message queues (~/.multiclaude/messages/)")
+		fmt.Println("  - All output logs (~/.multiclaude/output/)")
+		fmt.Println("  - All agent configs (~/.multiclaude/claude-config/)")
+		fmt.Println("  - All prompts (~/.multiclaude/prompts/)")
+		fmt.Println("  - Local branches (work/*, multiclaude/*)")
+		fmt.Println()
+		fmt.Println("The following will be PRESERVED:")
+		fmt.Println("  - Cloned repositories (~/.multiclaude/repos/)")
+		fmt.Println("  - Git credentials")
+		fmt.Println()
+
+		if !skipConfirm {
+			fmt.Print("Type 'NUKE' to confirm: ")
+			reader := bufio.NewReader(os.Stdin)
+			input, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("failed to read input: %w", err)
+			}
+			input = strings.TrimSpace(input)
+			if input != "NUKE" {
+				fmt.Println("Aborted.")
+				return nil
+			}
+			fmt.Println()
+		}
+	}
+
+	fmt.Println("Stopping all multiclaude sessions...")
 
 	// Kill all multiclaude tmux sessions
 	tmuxClient := tmux.NewClient()
@@ -702,32 +736,122 @@ func (c *CLI) stopAll(args []string) error {
 		fmt.Println("Daemon stopped")
 	}
 
-	// Clean up state if requested
+	// Full cleanup if --clean is specified
 	if clean {
-		fmt.Println("\nCleaning up state and data...")
-
-		// Remove state file
-		if err := os.Remove(c.paths.StateFile); err != nil && !os.IsNotExist(err) {
-			fmt.Printf("Warning: failed to remove state file: %v\n", err)
-		} else {
-			fmt.Println("Removed state file")
+		// Remove worktrees directory
+		fmt.Println("\nRemoving worktrees...")
+		if _, err := os.Stat(c.paths.WorktreesDir); err == nil {
+			if err := os.RemoveAll(c.paths.WorktreesDir); err != nil {
+				fmt.Printf("  Warning: failed to remove worktrees: %v\n", err)
+			} else {
+				fmt.Printf("  Removed %s\n", c.paths.WorktreesDir)
+			}
 		}
 
-		// Remove PID file
-		if err := os.Remove(c.paths.DaemonPID); err != nil && !os.IsNotExist(err) {
-			fmt.Printf("Warning: failed to remove PID file: %v\n", err)
+		// Remove messages directory
+		fmt.Println("Removing messages...")
+		if _, err := os.Stat(c.paths.MessagesDir); err == nil {
+			if err := os.RemoveAll(c.paths.MessagesDir); err != nil {
+				fmt.Printf("  Warning: failed to remove messages: %v\n", err)
+			} else {
+				fmt.Printf("  Removed %s\n", c.paths.MessagesDir)
+			}
 		}
 
-		// Remove socket file
-		if err := os.Remove(c.paths.DaemonSock); err != nil && !os.IsNotExist(err) {
-			fmt.Printf("Warning: failed to remove socket file: %v\n", err)
+		// Remove output logs
+		fmt.Println("Removing output logs...")
+		if _, err := os.Stat(c.paths.OutputDir); err == nil {
+			if err := os.RemoveAll(c.paths.OutputDir); err != nil {
+				fmt.Printf("  Warning: failed to remove output logs: %v\n", err)
+			} else {
+				fmt.Printf("  Removed %s\n", c.paths.OutputDir)
+			}
 		}
 
-		fmt.Println("\nNote: Repositories, worktrees, and messages are preserved.")
-		fmt.Println("To remove everything, manually delete: ~/.multiclaude/")
+		// Remove claude config (per-agent settings)
+		fmt.Println("Removing agent configs...")
+		if _, err := os.Stat(c.paths.ClaudeConfigDir); err == nil {
+			if err := os.RemoveAll(c.paths.ClaudeConfigDir); err != nil {
+				fmt.Printf("  Warning: failed to remove agent configs: %v\n", err)
+			} else {
+				fmt.Printf("  Removed %s\n", c.paths.ClaudeConfigDir)
+			}
+		}
+
+		// Remove prompts directory
+		fmt.Println("Removing prompts...")
+		promptsDir := filepath.Join(c.paths.Root, "prompts")
+		if _, err := os.Stat(promptsDir); err == nil {
+			if err := os.RemoveAll(promptsDir); err != nil {
+				fmt.Printf("  Warning: failed to remove prompts: %v\n", err)
+			} else {
+				fmt.Printf("  Removed %s\n", promptsDir)
+			}
+		}
+
+		// Clean up local branches in each repository
+		fmt.Println("\nCleaning up local branches...")
+		for _, repoName := range repos {
+			repoPath := c.paths.RepoDir(repoName)
+			if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+				continue
+			}
+
+			fmt.Printf("  Repository: %s\n", repoName)
+
+			// Delete work/* and multiclaude/* branches
+			wt := worktree.NewManager(repoPath)
+			for _, prefix := range []string{"work/", "multiclaude/"} {
+				branches, err := c.listBranchesWithPrefix(repoPath, prefix)
+				if err != nil {
+					fmt.Printf("    Warning: failed to list %s branches: %v\n", prefix, err)
+					continue
+				}
+				for _, branch := range branches {
+					// First remove any worktree associated with this branch
+					if err := wt.Remove(branch, true); err != nil {
+						// Ignore errors - worktree may not exist
+					}
+					// Delete the branch
+					if err := c.deleteBranch(repoPath, branch); err != nil {
+						fmt.Printf("    Warning: failed to delete branch %s: %v\n", branch, err)
+					} else {
+						fmt.Printf("    Deleted branch: %s\n", branch)
+					}
+				}
+			}
+
+			// Prune worktrees
+			if err := wt.Prune(); err != nil {
+				fmt.Printf("    Warning: failed to prune worktrees: %v\n", err)
+			}
+		}
+
+		// Clear agent state but preserve repository entries
+		fmt.Println("\nClearing agent state...")
+		st, err := state.Load(c.paths.StateFile)
+		if err == nil {
+			st.ClearAllAgents()
+			if err := st.Save(); err != nil {
+				fmt.Printf("  Warning: failed to save state: %v\n", err)
+			} else {
+				fmt.Println("  Cleared all agents from state")
+			}
+		}
+
+		// Remove daemon files (they'll be recreated on next start)
+		fmt.Println("Cleaning up daemon files...")
+		os.Remove(c.paths.DaemonPID)
+		os.Remove(c.paths.DaemonSock)
+		os.Remove(c.paths.DaemonLog)
+
+		fmt.Println("\n✓ Full cleanup complete! Multiclaude has been reset to a clean state.")
+		fmt.Println("Your repositories are preserved at:", c.paths.ReposDir)
+		fmt.Println("\nRun 'multiclaude start' to begin fresh.")
+	} else {
+		fmt.Println("\n✓ All multiclaude sessions stopped")
 	}
 
-	fmt.Println("\n✓ All multiclaude sessions stopped")
 	return nil
 }
 
@@ -4658,4 +4782,31 @@ func (c *CLI) bugReport(args []string) error {
 	// Print to stdout
 	fmt.Print(markdown)
 	return nil
+}
+
+// listBranchesWithPrefix returns all local branches with the given prefix
+func (c *CLI) listBranchesWithPrefix(repoPath, prefix string) ([]string, error) {
+	cmd := exec.Command("git", "branch", "--list", prefix+"*")
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var branches []string
+	for _, line := range strings.Split(string(output), "\n") {
+		branch := strings.TrimSpace(line)
+		branch = strings.TrimPrefix(branch, "* ") // Remove current branch marker
+		if branch != "" {
+			branches = append(branches, branch)
+		}
+	}
+	return branches, nil
+}
+
+// deleteBranch deletes a local git branch
+func (c *CLI) deleteBranch(repoPath, branch string) error {
+	cmd := exec.Command("git", "branch", "-D", branch)
+	cmd.Dir = repoPath
+	return cmd.Run()
 }

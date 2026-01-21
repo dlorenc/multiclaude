@@ -219,6 +219,18 @@ func (s *State) ListRepos() []string {
 	return repos
 }
 
+// ClearAllAgents removes all agents from all repositories
+// but preserves the repository entries themselves
+func (s *State) ClearAllAgents() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, repo := range s.Repos {
+		repo.Agents = make(map[string]Agent)
+	}
+	return s.saveUnlocked()
+}
+
 // SetCurrentRepo sets the current/default repository
 func (s *State) SetCurrentRepo(name string) error {
 	s.mu.Lock()
