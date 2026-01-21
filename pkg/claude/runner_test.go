@@ -640,3 +640,45 @@ func TestStartWithClaudeConfigDir(t *testing.T) {
 		t.Errorf("expected CLAUDE_CONFIG_DIR to be prepended before binary, got %q", call.text)
 	}
 }
+
+func TestStartWithoutClaudeConfigDir(t *testing.T) {
+	ctx := context.Background()
+	terminal := &mockTerminal{
+		getPanePIDReturn: 12345,
+	}
+
+	runner := NewRunner(
+		WithTerminal(terminal),
+		WithBinaryPath("/path/to/claude"),
+		WithStartupDelay(0),
+	)
+
+	// Start with empty Config (no ClaudeConfigDir set)
+	result, err := runner.Start(ctx, "my-session", "my-window", Config{})
+
+	if err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	if result.SessionID == "" {
+		t.Error("expected SessionID to be generated")
+	}
+
+	// Verify SendKeys was called
+	if len(terminal.sendKeysCalls) < 1 {
+		t.Fatalf("expected at least 1 SendKeys call, got %d", len(terminal.sendKeysCalls))
+	}
+
+	// First call is the actual command (no MOTD)
+	call := terminal.sendKeysCalls[0]
+
+	// Verify CLAUDE_CONFIG_DIR is NOT in the command
+	if strings.Contains(call.text, "CLAUDE_CONFIG_DIR") {
+		t.Errorf("expected command not to contain CLAUDE_CONFIG_DIR when not set, got %q", call.text)
+	}
+
+	// Verify the command starts directly with the binary path
+	if !strings.HasPrefix(call.text, "/path/to/claude") {
+		t.Errorf("expected command to start with binary path, got %q", call.text)
+	}
+}
