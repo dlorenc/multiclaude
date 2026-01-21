@@ -47,6 +47,27 @@ func DefaultMergeQueueConfig() MergeQueueConfig {
 	}
 }
 
+// UpstreamConfig holds configuration for syncing with an upstream repository
+type UpstreamConfig struct {
+	UpstreamURL  string        `json:"upstream_url"`
+	RemoteName   string        `json:"remote_name"`
+	SyncInterval time.Duration `json:"sync_interval"`
+	LastSyncTime time.Time     `json:"last_sync_time"`
+}
+
+// CILayerStatus represents CI status for a single layer (fork or upstream)
+type CILayerStatus struct {
+	Status      string    `json:"status"`
+	LastCheck   time.Time `json:"last_check"`
+	FailureInfo string    `json:"failure_info,omitempty"`
+}
+
+// DualCIStatus tracks CI status for both fork and upstream layers
+type DualCIStatus struct {
+	Fork     CILayerStatus `json:"fork"`
+	Upstream CILayerStatus `json:"upstream"`
+}
+
 // TaskStatus represents the status of a completed task
 type TaskStatus string
 
@@ -101,6 +122,8 @@ type Repository struct {
 	Agents           map[string]Agent   `json:"agents"`
 	TaskHistory      []TaskHistoryEntry `json:"task_history,omitempty"`
 	MergeQueueConfig MergeQueueConfig   `json:"merge_queue_config,omitempty"`
+	UpstreamConfig   *UpstreamConfig    `json:"upstream_config,omitempty"`
+	DualCIStatus     *DualCIStatus      `json:"dual_ci_status,omitempty"`
 }
 
 // State represents the entire daemon state
@@ -276,6 +299,8 @@ func (s *State) GetAllRepos() map[string]*Repository {
 			TmuxSession:      repo.TmuxSession,
 			Agents:           make(map[string]Agent, len(repo.Agents)),
 			MergeQueueConfig: repo.MergeQueueConfig,
+			UpstreamConfig:   repo.UpstreamConfig,
+			DualCIStatus:     repo.DualCIStatus,
 		}
 		// Copy agents
 		for agentName, agent := range repo.Agents {
