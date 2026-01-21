@@ -112,58 +112,12 @@ func GetPrompt(repoPath string, agentType AgentType, cliDocs string) (string, er
 		result += fmt.Sprintf("\n\n---\n\n%s", cliDocs)
 	}
 
-	// Add slash commands section
-	slashCommands := GetSlashCommandsPrompt()
-	if slashCommands != "" {
-		result += fmt.Sprintf("\n\n---\n\n%s", slashCommands)
-	}
-
 	// Add custom prompt if it exists
 	if customPrompt != "" {
 		result += fmt.Sprintf("\n\n---\n\nRepository-specific instructions:\n\n%s", customPrompt)
 	}
 
 	return result, nil
-}
-
-// GetSlashCommandsPrompt returns documentation for multiclaude slash commands
-// These are embedded in the prompt so agents can respond to /command requests
-func GetSlashCommandsPrompt() string {
-	return `## Multiclaude Slash Commands
-
-When the user types one of these commands, execute the corresponding actions:
-
-### /status - Show system status
-Run these commands and summarize the results:
-` + "```bash" + `
-multiclaude list              # Show tracked repos and agents
-git status                    # Show git status
-git log --oneline -5          # Show recent commits
-multiclaude agent list-messages  # Check for messages
-` + "```" + `
-
-### /refresh - Sync worktree with main branch
-` + "```bash" + `
-git fetch origin main
-git stash push -m "refresh-$(date +%s)" 2>/dev/null || true
-git rebase origin/main
-git stash pop 2>/dev/null || true
-` + "```" + `
-Report any conflicts if they occur.
-
-### /workers - List active workers
-` + "```bash" + `
-multiclaude work list
-` + "```" + `
-Show worker names, status, and current tasks.
-
-### /messages - Check inter-agent messages
-` + "```bash" + `
-multiclaude agent list-messages
-` + "```" + `
-If messages exist, offer to read or acknowledge them using:
-- ` + "`multiclaude agent read-message <id>`" + `
-- ` + "`multiclaude agent ack-message <id>`" + ``
 }
 
 // GenerateTrackingModePrompt generates prompt text explaining which PRs to track
