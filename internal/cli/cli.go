@@ -381,7 +381,7 @@ func (c *CLI) registerCommands() {
 	c.rootCmd.Subcommands["history"] = &Command{
 		Name:        "history",
 		Description: "Show task history for a repository",
-		Usage:       "multiclaude history [--repo <repo>] [-n <count>]",
+		Usage:       "multiclaude history [--repo <repo>] [-n <count>] [--status <status>] [--search <query>] [--full]",
 		Run:         c.showHistory,
 	}
 
@@ -1961,13 +1961,35 @@ func (c *CLI) showHistory(args []string) error {
 		}
 	}
 
+	// Get filter options
+	statusFilter := flags["status"]   // Filter by status (merged, open, closed, failed, no-pr)
+	searchQuery := flags["search"]    // Search in task descriptions
+	showFull := flags["full"] == "true"
+
+	// Validate status filter if provided
+	validStatuses := map[string]bool{
+		"merged": true, "open": true, "closed": true, "failed": true, "no-pr": true,
+	}
+	if statusFilter != "" && !validStatuses[statusFilter] {
+		return errors.InvalidUsage(fmt.Sprintf("invalid status filter: %s (valid values: merged, open, closed, failed, no-pr)", statusFilter))
+	}
+
+	// When filtering, fetch more history to ensure we get enough results
+	fetchLimit := limit
+	if statusFilter != "" || searchQuery != "" {
+		fetchLimit = limit * 10 // Fetch more to allow for filtering
+		if fetchLimit > 100 {
+			fetchLimit = 100
+		}
+	}
+
 	// Get task history from daemon
 	client := socket.NewClient(c.paths.DaemonSock)
 	resp, err := client.Send(socket.Request{
 		Command: "task_history",
 		Args: map[string]interface{}{
 			"repo":  repoName,
-			"limit": limit,
+			"limit": fetchLimit,
 		},
 	})
 	if err != nil {
@@ -1987,7 +2009,15 @@ func (c *CLI) showHistory(args []string) error {
 	// Query GitHub for PR status for each task with a branch
 	repoPath := c.paths.RepoDir(repoName)
 
-	format.Header("Task History for '%s' (last %d):", repoName, len(history))
+	// Build filtered header
+	headerParts := []string{fmt.Sprintf("Task History for '%s'", repoName)}
+	if statusFilter != "" {
+		headerParts = append(headerParts, fmt.Sprintf("status=%s", statusFilter))
+	}
+	if searchQuery != "" {
+		headerParts = append(headerParts, fmt.Sprintf("search=%q", searchQuery))
+	}
+	format.Header("%s:", strings.Join(headerParts, ", "))
 	fmt.Println()
 
 	// First pass: collect entries with details to show after table
@@ -1999,7 +2029,13 @@ func (c *CLI) showHistory(args []string) error {
 	var detailsToShow []entryDetails
 
 	table := format.NewColoredTable("NAME", "STATUS", "PR", "COMPLETED", "TASK")
+	displayedCount := 0
 	for _, item := range history {
+		// Stop once we've displayed enough
+		if displayedCount >= limit {
+			break
+		}
+
 		entry, ok := item.(map[string]interface{})
 		if !ok {
 			continue
@@ -2014,6 +2050,37 @@ func (c *CLI) showHistory(args []string) error {
 		failureReason, _ := entry["failure_reason"].(string)
 		storedStatus, _ := entry["status"].(string)
 
+		// Try to get PR status from GitHub if we have a branch
+		prStatus, prLink := c.getPRStatusForBranch(repoPath, branch, prURL)
+
+		// Use stored status if it indicates failure
+		if storedStatus == "failed" {
+			prStatus = "failed"
+		}
+
+		// Apply status filter
+		if statusFilter != "" {
+			effectiveStatus := prStatus
+			if effectiveStatus == "" {
+				effectiveStatus = "no-pr"
+			}
+			if effectiveStatus != statusFilter {
+				continue
+			}
+		}
+
+		// Apply search filter (case-insensitive)
+		if searchQuery != "" {
+			lowerQuery := strings.ToLower(searchQuery)
+			lowerTask := strings.ToLower(task)
+			lowerName := strings.ToLower(name)
+			if !strings.Contains(lowerTask, lowerQuery) && !strings.Contains(lowerName, lowerQuery) {
+				continue
+			}
+		}
+
+		displayedCount++
+
 		// Collect entries with summary or failure for detailed display
 		if summary != "" || failureReason != "" {
 			detailsToShow = append(detailsToShow, entryDetails{
@@ -2021,14 +2088,6 @@ func (c *CLI) showHistory(args []string) error {
 				summary:       summary,
 				failureReason: failureReason,
 			})
-		}
-
-		// Try to get PR status from GitHub if we have a branch
-		prStatus, prLink := c.getPRStatusForBranch(repoPath, branch, prURL)
-
-		// Use stored status if it indicates failure
-		if storedStatus == "failed" {
-			prStatus = "failed"
 		}
 
 		// Format status with color
@@ -2061,17 +2120,29 @@ func (c *CLI) showHistory(args []string) error {
 			}
 		}
 
-		// Truncate task (increased width from 35 to 50)
-		truncTask := format.Truncate(task, 50)
+		// Format task - show full or truncate
+		displayTask := task
+		if !showFull {
+			displayTask = format.Truncate(task, 50)
+		}
 
 		table.AddRow(
 			format.Cell(name),
 			statusCell,
 			prCell,
 			completedCell,
-			format.Cell(truncTask),
+			format.Cell(displayTask),
 		)
 	}
+
+	// Show message if no results after filtering
+	if displayedCount == 0 {
+		if statusFilter != "" || searchQuery != "" {
+			fmt.Printf("No tasks match the filter criteria\n")
+		}
+		return nil
+	}
+
 	table.Print()
 
 	// Print detailed summary/failure section if any entries have them
