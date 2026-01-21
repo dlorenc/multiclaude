@@ -1914,6 +1914,105 @@ func (d *Daemon) writePromptFile(repoName string, agentType prompts.AgentType, a
 	return promptPath, nil
 }
 
+// SpawnForkCIFixAgent spawns a worker agent to fix fork CI failures
+func (d *Daemon) SpawnForkCIFixAgent(repoName string) error {
+	d.logger.Info("Spawning fork CI fix agent for repo %s", repoName)
+
+	// Get repository info
+	repo, exists := d.state.GetRepo(repoName)
+	if !exists {
+		return fmt.Errorf("repository %s not found", repoName)
+	}
+
+	// Generate worker name
+	workerName := fmt.Sprintf("ci-fix-%d", time.Now().Unix())
+
+	// Get repository path
+	repoPath := d.paths.RepoDir(repoName)
+
+	// Create worktree
+	wtPath := d.paths.AgentWorktree(repoName, workerName)
+	wt := worktree.NewManager(repoPath)
+
+	// Fetch latest from origin
+	if err := wt.FetchRemote("origin"); err != nil {
+		d.logger.Warn("Failed to fetch from origin: %v", err)
+	}
+
+	// Create worktree from main branch
+	branchName := fmt.Sprintf("work/%s", workerName)
+	if err := wt.CreateNewBranch(wtPath, branchName, "origin/main"); err != nil {
+		return fmt.Errorf("failed to create worktree: %w", err)
+	}
+
+	d.logger.Info("Created worktree for fork CI fix agent at: %s", wtPath)
+
+	// Create tmux window
+	cmd := exec.Command("tmux", "new-window", "-d", "-t", repo.TmuxSession, "-n", workerName, "-c", wtPath)
+	if err := cmd.Run(); err != nil {
+		// Clean up worktree on failure
+		wt.Remove(wtPath, true)
+		return fmt.Errorf("failed to create tmux window: %w", err)
+	}
+
+	// Generate session ID
+	sessionID, err := claude.GenerateSessionID()
+	if err != nil {
+		return fmt.Errorf("failed to generate session ID: %w", err)
+	}
+
+	// Task description for the worker
+	task := "Fix fork CI failures - investigate test failures on fork/main and create PR with fixes"
+
+	// Write prompt file
+	promptFile, err := d.writePromptFile(repoName, prompts.TypeWorker, workerName)
+	if err != nil {
+		return fmt.Errorf("failed to write prompt file: %w", err)
+	}
+
+	// Copy hooks config
+	if err := hooks.CopyConfig(repoPath, wtPath); err != nil {
+		d.logger.Warn("Failed to copy hooks config: %v", err)
+	}
+
+	// Set up per-agent Claude config directory with slash commands
+	agentConfigDir := d.paths.AgentClaudeConfigDir(repoName, workerName)
+	if err := commands.SetupAgentCommands(agentConfigDir); err != nil {
+		d.logger.Warn("Failed to setup agent commands: %v", err)
+	}
+
+	// Start Claude in the tmux window
+	initialMessage := fmt.Sprintf("Task: %s", task)
+	result, err := d.claudeRunner.Start(d.ctx, repo.TmuxSession, workerName, claude.Config{
+		SessionID:        sessionID,
+		Resume:           false,
+		SystemPromptFile: promptFile,
+		ClaudeConfigDir:  agentConfigDir,
+		InitialMessage:   initialMessage,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to start Claude: %w", err)
+	}
+
+	// Register worker with state
+	agent := state.Agent{
+		Type:         state.AgentTypeWorker,
+		WorktreePath: wtPath,
+		TmuxWindow:   workerName,
+		SessionID:    sessionID,
+		PID:          result.PID,
+		Task:         task,
+		CreatedAt:    time.Now(),
+	}
+
+	if err := d.state.AddAgent(repoName, workerName, agent); err != nil {
+		return fmt.Errorf("failed to register agent: %w", err)
+	}
+
+	d.logger.Info("Successfully spawned fork CI fix agent: %s (PID: %d, branch: %s)", workerName, result.PID, branchName)
+	return nil
+}
+
 // isProcessAlive checks if a process is running
 func isProcessAlive(pid int) bool {
 	process, err := os.FindProcess(pid)
