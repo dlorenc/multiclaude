@@ -426,6 +426,13 @@ func (c *CLI) registerCommands() {
 		Run:         c.completeWorker,
 	}
 
+	agentCmd.Subcommands["restart"] = &Command{
+		Name:        "restart",
+		Description: "Restart a crashed or exited agent",
+		Usage:       "multiclaude agent restart <name> [--repo <repo>] [--force]",
+		Run:         c.restartAgentCmd,
+	}
+
 	c.rootCmd.Subcommands["agent"] = agentCmd
 
 	// Attach command
@@ -2998,6 +3005,61 @@ func (c *CLI) completeWorker(args []string) error {
 
 	fmt.Println("✓ Agent marked as complete")
 	fmt.Println("The daemon will clean up this agent's resources shortly.")
+	return nil
+}
+
+func (c *CLI) restartAgentCmd(args []string) error {
+	// Parse flags
+	flags, remaining := ParseFlags(args)
+
+	// Get agent name from args
+	if len(remaining) < 1 {
+		return errors.InvalidUsage("usage: multiclaude agent restart <name> [--repo <repo>] [--force]")
+	}
+	agentName := remaining[0]
+
+	// Get repo from flag or infer from cwd
+	repoName := flags["repo"]
+	if repoName == "" {
+		// Try to infer from cwd
+		inferred, err := c.inferRepoFromCwd()
+		if err != nil {
+			return errors.InvalidUsage("could not determine repository - use --repo flag or run from within a multiclaude worktree")
+		}
+		repoName = inferred
+	}
+
+	force := flags["force"] == "true"
+
+	fmt.Printf("Restarting agent '%s' in repository '%s'...\n", agentName, repoName)
+
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "restart_agent",
+		Args: map[string]interface{}{
+			"repo":  repoName,
+			"agent": agentName,
+			"force": force,
+		},
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("restarting agent", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to restart agent", fmt.Errorf("%s", resp.Error))
+	}
+
+	// Extract PID from response
+	if data, ok := resp.Data.(map[string]interface{}); ok {
+		if pid, ok := data["pid"].(float64); ok {
+			fmt.Printf("✓ Agent '%s' restarted successfully (PID: %d)\n", agentName, int(pid))
+		} else {
+			fmt.Printf("✓ Agent '%s' restarted successfully\n", agentName)
+		}
+	} else {
+		fmt.Printf("✓ Agent '%s' restarted successfully\n", agentName)
+	}
+
 	return nil
 }
 

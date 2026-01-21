@@ -495,6 +495,9 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	case "complete_agent":
 		return d.handleCompleteAgent(req)
 
+	case "restart_agent":
+		return d.handleRestartAgent(req)
+
 	case "trigger_cleanup":
 		return d.handleTriggerCleanup(req)
 
@@ -891,6 +894,70 @@ func (d *Daemon) handleCompleteAgent(req socket.Request) socket.Response {
 	go d.checkAgentHealth()
 
 	return socket.Response{Success: true}
+}
+
+// handleRestartAgent restarts an agent that has crashed or exited
+func (d *Daemon) handleRestartAgent(req socket.Request) socket.Response {
+	repoName, ok := req.Args["repo"].(string)
+	if !ok || repoName == "" {
+		return socket.Response{Success: false, Error: "missing 'repo': repository name is required"}
+	}
+
+	agentName, ok := req.Args["agent"].(string)
+	if !ok || agentName == "" {
+		return socket.Response{Success: false, Error: "missing 'agent': agent name is required"}
+	}
+
+	force, _ := req.Args["force"].(bool)
+
+	agent, exists := d.state.GetAgent(repoName, agentName)
+	if !exists {
+		return socket.Response{Success: false, Error: fmt.Sprintf("agent '%s' not found in repository '%s' - check available agents with: multiclaude work list --repo %s", agentName, repoName, repoName)}
+	}
+
+	// Check if agent is marked for cleanup (completed)
+	if agent.ReadyForCleanup {
+		return socket.Response{Success: false, Error: fmt.Sprintf("agent '%s' is marked as complete and pending cleanup - cannot restart a completed agent", agentName)}
+	}
+
+	// Check if tmux window exists
+	repo, exists := d.state.GetRepo(repoName)
+	if !exists {
+		return socket.Response{Success: false, Error: fmt.Sprintf("repository '%s' not found in state", repoName)}
+	}
+
+	hasWindow, err := d.tmux.HasWindow(d.ctx, repo.TmuxSession, agentName)
+	if err != nil {
+		return socket.Response{Success: false, Error: fmt.Sprintf("failed to check tmux window: %v", err)}
+	}
+	if !hasWindow {
+		return socket.Response{Success: false, Error: fmt.Sprintf("tmux window '%s' does not exist - the agent may need to be recreated", agentName)}
+	}
+
+	// Check if agent is already running
+	if agent.PID > 0 && isProcessAlive(agent.PID) {
+		if !force {
+			return socket.Response{Success: false, Error: fmt.Sprintf("agent '%s' is already running with PID %d - use --force to restart anyway", agentName, agent.PID)}
+		}
+		d.logger.Info("Force restarting agent %s (PID %d was still running)", agentName, agent.PID)
+	}
+
+	// Restart the agent
+	if err := d.restartAgent(repoName, agentName, agent, repo); err != nil {
+		return socket.Response{Success: false, Error: fmt.Sprintf("failed to restart agent: %v", err)}
+	}
+
+	// Get updated PID from state
+	updatedAgent, _ := d.state.GetAgent(repoName, agentName)
+	return socket.Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"agent":   agentName,
+			"repo":    repoName,
+			"pid":     updatedAgent.PID,
+			"message": fmt.Sprintf("Agent '%s' restarted successfully", agentName),
+		},
+	}
 }
 
 // handleTriggerCleanup manually triggers cleanup operations

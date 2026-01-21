@@ -260,6 +260,113 @@ func TestHandleCompleteAgent(t *testing.T) {
 	}
 }
 
+func TestHandleRestartAgent(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a test repository
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "test-session",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Add a test agent
+	agent := state.Agent{
+		Type:         state.AgentTypeWorker,
+		WorktreePath: "/tmp/test",
+		TmuxWindow:   "test-window",
+		SessionID:    "test-session-id",
+		PID:          0, // No running process
+		CreatedAt:    time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "test-agent", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	// Test missing repo argument
+	resp := d.handleRestartAgent(socket.Request{
+		Command: "restart_agent",
+		Args: map[string]interface{}{
+			"agent": "test-agent",
+		},
+	})
+	if resp.Success {
+		t.Error("Expected failure with missing repo")
+	}
+	if resp.Error != "missing 'repo': repository name is required" {
+		t.Errorf("Unexpected error message: %s", resp.Error)
+	}
+
+	// Test missing agent argument
+	resp = d.handleRestartAgent(socket.Request{
+		Command: "restart_agent",
+		Args: map[string]interface{}{
+			"repo": "test-repo",
+		},
+	})
+	if resp.Success {
+		t.Error("Expected failure with missing agent")
+	}
+	if resp.Error != "missing 'agent': agent name is required" {
+		t.Errorf("Unexpected error message: %s", resp.Error)
+	}
+
+	// Test non-existent agent
+	resp = d.handleRestartAgent(socket.Request{
+		Command: "restart_agent",
+		Args: map[string]interface{}{
+			"repo":  "test-repo",
+			"agent": "non-existent",
+		},
+	})
+	if resp.Success {
+		t.Error("Expected failure with non-existent agent")
+	}
+
+	// Test agent marked for cleanup (should fail)
+	markedAgent := state.Agent{
+		Type:            state.AgentTypeWorker,
+		WorktreePath:    "/tmp/test2",
+		TmuxWindow:      "test-window2",
+		SessionID:       "test-session-id2",
+		ReadyForCleanup: true,
+		CreatedAt:       time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "completed-agent", markedAgent); err != nil {
+		t.Fatalf("Failed to add completed agent: %v", err)
+	}
+
+	resp = d.handleRestartAgent(socket.Request{
+		Command: "restart_agent",
+		Args: map[string]interface{}{
+			"repo":  "test-repo",
+			"agent": "completed-agent",
+		},
+	})
+	if resp.Success {
+		t.Error("Expected failure for completed agent")
+	}
+	if resp.Error == "" || resp.Error != "agent 'completed-agent' is marked as complete and pending cleanup - cannot restart a completed agent" {
+		t.Errorf("Expected cleanup error, got: %s", resp.Error)
+	}
+
+	// Test non-existent repo
+	resp = d.handleRestartAgent(socket.Request{
+		Command: "restart_agent",
+		Args: map[string]interface{}{
+			"repo":  "non-existent-repo",
+			"agent": "test-agent",
+		},
+	})
+	if resp.Success {
+		t.Error("Expected failure with non-existent repo")
+	}
+}
+
 func TestIsProcessAlive(t *testing.T) {
 	// Test with PID 1 (init, should be alive on Unix systems)
 	// This is more reliable than testing our own process
