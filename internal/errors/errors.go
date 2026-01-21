@@ -337,3 +337,48 @@ func UnknownCommand(cmd string) *CLIError {
 		Suggestion: "multiclaude --help",
 	}
 }
+
+// NoRepositoriesFound creates an error for when no repositories are tracked
+func NoRepositoriesFound() *CLIError {
+	return &CLIError{
+		Category:   CategoryNotFound,
+		Message:    "no repositories found",
+		Suggestion: "multiclaude init <github-url>",
+	}
+}
+
+// NoWorkersFound creates an error for when no workers exist in a repository
+func NoWorkersFound(repo string) *CLIError {
+	return &CLIError{
+		Category:   CategoryNotFound,
+		Message:    fmt.Sprintf("no workers found in repo '%s'", repo),
+		Suggestion: fmt.Sprintf("multiclaude work \"<task>\" --repo %s", repo),
+	}
+}
+
+// NoWorkspacesFound creates an error for when no workspaces exist in a repository
+func NoWorkspacesFound(repo string) *CLIError {
+	return &CLIError{
+		Category:   CategoryNotFound,
+		Message:    fmt.Sprintf("no workspaces found in repo '%s'", repo),
+		Suggestion: fmt.Sprintf("multiclaude workspace add <name> --repo %s", repo),
+	}
+}
+
+// NoAgentsFound creates an error for when no agents exist in a repository
+func NoAgentsFound(repo string) *CLIError {
+	return &CLIError{
+		Category:   CategoryNotFound,
+		Message:    fmt.Sprintf("no agents found in repo '%s'", repo),
+		Suggestion: fmt.Sprintf("multiclaude work list --repo %s", repo),
+	}
+}
+
+// WorkspaceNotFound creates an error for when a workspace is not found
+func WorkspaceNotFound(name, repo string) *CLIError {
+	return &CLIError{
+		Category:   CategoryNotFound,
+		Message:    fmt.Sprintf("workspace '%s' not found in repo '%s'", name, repo),
+		Suggestion: fmt.Sprintf("multiclaude workspace list --repo %s", repo),
+	}
+}

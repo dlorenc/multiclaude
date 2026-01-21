@@ -470,3 +470,110 @@ func TestCategoryPrefix_DefaultCase(t *testing.T) {
 		t.Errorf("expected default 'Error:' prefix for unknown category, got: %s", formatted)
 	}
 }
+
+func TestNoRepositoriesFound(t *testing.T) {
+	err := NoRepositoriesFound()
+
+	if err.Category != CategoryNotFound {
+		t.Errorf("expected CategoryNotFound, got %v", err.Category)
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "no repositories found") {
+		t.Errorf("expected 'no repositories found' in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "multiclaude init") {
+		t.Errorf("expected init suggestion, got: %s", formatted)
+	}
+}
+
+func TestNoWorkersFound(t *testing.T) {
+	err := NoWorkersFound("my-repo")
+
+	if err.Category != CategoryNotFound {
+		t.Errorf("expected CategoryNotFound, got %v", err.Category)
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "no workers found") {
+		t.Errorf("expected 'no workers found' in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "my-repo") {
+		t.Errorf("expected repo name in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "multiclaude work") {
+		t.Errorf("expected work suggestion, got: %s", formatted)
+	}
+}
+
+func TestNoWorkspacesFound(t *testing.T) {
+	err := NoWorkspacesFound("my-repo")
+
+	if err.Category != CategoryNotFound {
+		t.Errorf("expected CategoryNotFound, got %v", err.Category)
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "no workspaces found") {
+		t.Errorf("expected 'no workspaces found' in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "my-repo") {
+		t.Errorf("expected repo name in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "multiclaude workspace add") {
+		t.Errorf("expected workspace add suggestion, got: %s", formatted)
+	}
+}
+
+func TestNoAgentsFound(t *testing.T) {
+	err := NoAgentsFound("my-repo")
+
+	if err.Category != CategoryNotFound {
+		t.Errorf("expected CategoryNotFound, got %v", err.Category)
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "no agents found") {
+		t.Errorf("expected 'no agents found' in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "my-repo") {
+		t.Errorf("expected repo name in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "multiclaude work list") {
+		t.Errorf("expected work list suggestion, got: %s", formatted)
+	}
+}
+
+func TestWorkspaceNotFound(t *testing.T) {
+	err := WorkspaceNotFound("my-workspace", "my-repo")
+
+	if err.Category != CategoryNotFound {
+		t.Errorf("expected CategoryNotFound, got %v", err.Category)
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "my-workspace") {
+		t.Errorf("expected workspace name in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "my-repo") {
+		t.Errorf("expected repo name in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "multiclaude workspace list") {
+		t.Errorf("expected workspace list suggestion, got: %s", formatted)
+	}
+}

@@ -1151,7 +1151,7 @@ func (c *CLI) removeRepo(args []string) error {
 		repos, _ := resp.Data.([]interface{})
 		items := reposToSelectableItems(repos)
 		if len(items) == 0 {
-			return fmt.Errorf("no repositories found")
+			return errors.NoRepositoriesFound()
 		}
 		selected, err := SelectFromList("Select repository to remove:", items)
 		if err != nil {
@@ -2004,7 +2004,7 @@ func (c *CLI) removeWorker(args []string) error {
 		// Interactive selection
 		items := agentsToSelectableItems(agents, []string{"worker"})
 		if len(items) == 0 {
-			return fmt.Errorf("no workers found in repo '%s'", repoName)
+			return errors.NoWorkersFound(repoName)
 		}
 		selected, err := SelectFromList("Select worker to remove:", items)
 		if err != nil {
@@ -2322,7 +2322,7 @@ func (c *CLI) removeWorkspace(args []string) error {
 		// Interactive selection
 		items := agentsToSelectableItems(agents, []string{"workspace"})
 		if len(items) == 0 {
-			return fmt.Errorf("no workspaces found in repo '%s'", repoName)
+			return errors.NoWorkspacesFound(repoName)
 		}
 		selected, err := SelectFromList("Select workspace to remove:", items)
 		if err != nil {
@@ -2555,7 +2555,7 @@ func (c *CLI) connectWorkspace(args []string) error {
 		// Interactive selection
 		items := agentsToSelectableItems(agents, []string{"workspace"})
 		if len(items) == 0 {
-			return fmt.Errorf("no workspaces found in repo '%s'", repoName)
+			return errors.NoWorkspacesFound(repoName)
 		}
 		selected, err := SelectFromList("Select workspace to connect:", items)
 		if err != nil {
@@ -2582,7 +2582,7 @@ func (c *CLI) connectWorkspace(args []string) error {
 	}
 
 	if workspaceInfo == nil {
-		return fmt.Errorf("workspace '%s' not found in repo '%s'", workspaceName, repoName)
+		return errors.WorkspaceNotFound(workspaceName, repoName)
 	}
 
 	// Get tmux session and window
@@ -3472,7 +3472,7 @@ func (c *CLI) attachAgent(args []string) error {
 		// Interactive selection - all agent types
 		items := agentsToSelectableItems(agents, nil)
 		if len(items) == 0 {
-			return fmt.Errorf("no agents found in repo '%s'", repoName)
+			return errors.NoAgentsFound(repoName)
 		}
 		selected, err := SelectFromList("Select agent to attach:", items)
 		if err != nil {
@@ -3497,7 +3497,7 @@ func (c *CLI) attachAgent(args []string) error {
 	}
 
 	if agentInfo == nil {
-		return fmt.Errorf("agent '%s' not found in repo '%s'", agentName, repoName)
+		return errors.AgentNotFound("agent", agentName, repoName)
 	}
 
 	// Get tmux session and window
