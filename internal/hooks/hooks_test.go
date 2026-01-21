@@ -98,4 +98,64 @@ func TestCopyConfig(t *testing.T) {
 			t.Errorf("CopyConfig() error = %v, want nil", err)
 		}
 	})
+
+	t.Run("unreadable hooks config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		repoPath := filepath.Join(tmpDir, "repo")
+		workDir := filepath.Join(tmpDir, "workdir")
+
+		// Create repo with hooks config that's unreadable
+		hooksDir := filepath.Join(repoPath, ".multiclaude")
+		if err := os.MkdirAll(hooksDir, 0755); err != nil {
+			t.Fatalf("Failed to create hooks dir: %v", err)
+		}
+		if err := os.MkdirAll(workDir, 0755); err != nil {
+			t.Fatalf("Failed to create work dir: %v", err)
+		}
+
+		// Write hooks config with no read permissions
+		hooksPath := filepath.Join(hooksDir, "hooks.json")
+		if err := os.WriteFile(hooksPath, []byte(`{"test": true}`), 0000); err != nil {
+			t.Fatalf("Failed to write hooks config: %v", err)
+		}
+		// Ensure cleanup can work
+		defer os.Chmod(hooksPath, 0644)
+
+		// Should fail to read
+		err := CopyConfig(repoPath, workDir)
+		if err == nil {
+			t.Error("CopyConfig() should have failed with unreadable file")
+		}
+	})
+
+	t.Run("unwritable workdir", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		repoPath := filepath.Join(tmpDir, "repo")
+		workDir := filepath.Join(tmpDir, "workdir")
+
+		// Create repo with hooks config
+		hooksDir := filepath.Join(repoPath, ".multiclaude")
+		if err := os.MkdirAll(hooksDir, 0755); err != nil {
+			t.Fatalf("Failed to create hooks dir: %v", err)
+		}
+
+		// Create workdir but make it unwritable
+		if err := os.MkdirAll(workDir, 0555); err != nil {
+			t.Fatalf("Failed to create work dir: %v", err)
+		}
+		// Ensure cleanup can work
+		defer os.Chmod(workDir, 0755)
+
+		// Write hooks config
+		hooksPath := filepath.Join(hooksDir, "hooks.json")
+		if err := os.WriteFile(hooksPath, []byte(`{"test": true}`), 0644); err != nil {
+			t.Fatalf("Failed to write hooks config: %v", err)
+		}
+
+		// Should fail to create .claude directory
+		err := CopyConfig(repoPath, workDir)
+		if err == nil {
+			t.Error("CopyConfig() should have failed with unwritable workdir")
+		}
+	})
 }
