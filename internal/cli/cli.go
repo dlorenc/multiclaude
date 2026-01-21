@@ -311,6 +311,14 @@ func (c *CLI) registerCommands() {
 
 	c.rootCmd.Subcommands["repo"] = repoCmd
 
+	// Sync command
+	c.rootCmd.Subcommands["sync"] = &Command{
+		Name:        "sync",
+		Description: "Sync fork with upstream",
+		Usage:       "multiclaude sync [--repo <repo>]",
+		Run:         c.syncRepo,
+	}
+
 	// Worker commands
 	workCmd := &Command{
 		Name:        "work",
@@ -1466,6 +1474,88 @@ func (c *CLI) clearCurrentRepo(args []string) error {
 	}
 
 	fmt.Println("Current repository cleared")
+	return nil
+}
+
+func (c *CLI) syncRepo(args []string) error {
+	flags, _ := ParseFlags(args)
+
+	// Determine repository to sync
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return err
+	}
+
+	repoPath := c.paths.RepoDir(repoName)
+
+	fmt.Printf("Syncing repository: %s\n", repoName)
+
+	// Step 1: Fetch from upstream remote
+	fmt.Println("\n1. Fetching from upstream...")
+	fetchCmd := exec.Command("git", "fetch", "upstream")
+	fetchCmd.Dir = repoPath
+	fetchCmd.Stdout = os.Stdout
+	fetchCmd.Stderr = os.Stderr
+	if err := fetchCmd.Run(); err != nil {
+		// Try to add upstream remote if it doesn't exist
+		fmt.Println("Upstream remote not found. Checking origin...")
+
+		// Get the origin URL to determine upstream
+		getOriginCmd := exec.Command("git", "remote", "get-url", "origin")
+		getOriginCmd.Dir = repoPath
+		originURL, err := getOriginCmd.Output()
+		if err != nil {
+			return errors.GitOperationFailed("get origin URL", err)
+		}
+
+		// For a fork, we need to determine the upstream URL
+		// This is a simple heuristic - you may need to configure upstream manually
+		fmt.Printf("Origin URL: %s", string(originURL))
+		fmt.Println("\nPlease add an 'upstream' remote manually:")
+		fmt.Println("  git remote add upstream <upstream-repo-url>")
+		return errors.GitOperationFailed("fetch from upstream", fmt.Errorf("upstream remote not configured"))
+	}
+
+	// Step 2: Merge to main
+	fmt.Println("\n2. Merging upstream/main to local main...")
+
+	// First, checkout main
+	checkoutCmd := exec.Command("git", "checkout", "main")
+	checkoutCmd.Dir = repoPath
+	checkoutCmd.Stdout = os.Stdout
+	checkoutCmd.Stderr = os.Stderr
+	if err := checkoutCmd.Run(); err != nil {
+		return errors.GitOperationFailed("checkout main", err)
+	}
+
+	// Merge upstream/main
+	mergeCmd := exec.Command("git", "merge", "upstream/main")
+	mergeCmd.Dir = repoPath
+	mergeCmd.Stdout = os.Stdout
+	mergeCmd.Stderr = os.Stderr
+	if err := mergeCmd.Run(); err != nil {
+		return errors.GitOperationFailed("merge upstream/main", err)
+	}
+
+	// Step 3: Run tests
+	fmt.Println("\n3. Running tests...")
+	testCmd := exec.Command("go", "test", "./...")
+	testCmd.Dir = repoPath
+	testCmd.Stdout = os.Stdout
+	testCmd.Stderr = os.Stderr
+	if err := testCmd.Run(); err != nil {
+		fmt.Println("\n✗ Tests failed!")
+		return fmt.Errorf("tests failed: %w", err)
+	}
+
+	// Step 4: Report status
+	fmt.Println("\n✓ Sync completed successfully!")
+	fmt.Println("  • Fetched from upstream")
+	fmt.Println("  • Merged upstream/main to main")
+	fmt.Println("  • All tests passed")
+	fmt.Println("\nYou can now push to your fork:")
+	fmt.Println("  git push origin main")
+
 	return nil
 }
 
