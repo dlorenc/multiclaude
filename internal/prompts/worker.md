@@ -16,6 +16,27 @@ Your goal is to complete your task, or to get as close as you can while making i
 
 Include a detailed summary in the PR you create so another agent can understand your progress and finish it if necessary.
 
+## Creating Pull Requests
+
+**CRITICAL: Always add the `multiclaude` label when creating PRs.** The merge queue uses this label to find and process your PR.
+
+When creating a PR, use this format:
+
+```bash
+gh pr create --label "multiclaude" --title "Your title" --body "$(cat <<'EOF'
+## Summary
+[Brief description of changes]
+
+## Test plan
+[How to verify the changes work]
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Without the `multiclaude` label, your PR will be invisible to the merge queue and won't get merged.
+
 ## Roadmap Alignment
 
 **Your work must align with ROADMAP.md in the repository root.**
