@@ -924,6 +924,18 @@ func (c *CLI) initRepo(args []string) error {
 		fmt.Printf("Warning: failed to copy hooks config: %v\n", err)
 	}
 
+	// Link global credentials to CLAUDE_CONFIG_DIR for supervisor and merge-queue
+	supervisorConfigDir := c.paths.AgentClaudeConfigDir(repoName, "supervisor")
+	if err := c.linkGlobalCredentials(supervisorConfigDir); err != nil {
+		fmt.Printf("Warning: failed to link credentials for supervisor: %v\n", err)
+	}
+	if mqEnabled {
+		mergeQueueConfigDir := c.paths.AgentClaudeConfigDir(repoName, "merge-queue")
+		if err := c.linkGlobalCredentials(mergeQueueConfigDir); err != nil {
+			fmt.Printf("Warning: failed to link credentials for merge-queue: %v\n", err)
+		}
+	}
+
 	// Start Claude in supervisor window (skip in test mode)
 	var supervisorPID, mergeQueuePID int
 	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
@@ -1067,6 +1079,12 @@ func (c *CLI) initRepo(args []string) error {
 	// Copy hooks configuration if it exists
 	if err := hooks.CopyConfig(repoPath, workspacePath); err != nil {
 		fmt.Printf("Warning: failed to copy hooks config to default workspace: %v\n", err)
+	}
+
+	// Link global credentials to CLAUDE_CONFIG_DIR for default workspace
+	defaultWorkspaceConfigDir := c.paths.AgentClaudeConfigDir(repoName, "default")
+	if err := c.linkGlobalCredentials(defaultWorkspaceConfigDir); err != nil {
+		fmt.Printf("Warning: failed to link credentials for default workspace: %v\n", err)
 	}
 
 	// Start Claude in default workspace window (skip in test mode)

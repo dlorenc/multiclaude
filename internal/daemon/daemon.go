@@ -983,6 +983,15 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 		}
 	}
 
+	// Repair missing credential symlinks
+	credFixed, err := d.repairCredentials()
+	if err != nil {
+		d.logger.Warn("Credential repair failed: %v", err)
+	} else if credFixed > 0 {
+		d.logger.Info("Repaired credentials in %d agent config(s)", credFixed)
+		issuesFixed += credFixed
+	}
+
 	d.logger.Info("State repair completed: %d agents removed, %d issues fixed", agentsRemoved, issuesFixed)
 
 	return socket.Response{
@@ -1913,6 +1922,76 @@ func (d *Daemon) linkGlobalCredentials(claudeConfigDir string) error {
 	}
 
 	return nil
+}
+
+// repairCredentials fixes CLAUDE_CONFIG_DIR directories that are missing credential symlinks
+func (d *Daemon) repairCredentials() (int, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	globalCredFile := filepath.Join(home, ".claude", ".credentials.json")
+
+	// Check if global credentials exist
+	if _, err := os.Stat(globalCredFile); os.IsNotExist(err) {
+		// No global credentials - user might be using API key
+		return 0, nil
+	}
+
+	fixed := 0
+	for _, repoName := range d.state.ListRepos() {
+		// Walk CLAUDE_CONFIG_DIR directories for this repo
+		repoConfigDir := filepath.Join(d.paths.ClaudeConfigDir, repoName)
+
+		// Skip if config directory doesn't exist
+		if _, err := os.Stat(repoConfigDir); os.IsNotExist(err) {
+			continue
+		}
+
+		entries, err := os.ReadDir(repoConfigDir)
+		if err != nil {
+			d.logger.Warn("Failed to read config dir for %s: %v", repoName, err)
+			continue
+		}
+
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+
+			agentConfigDir := filepath.Join(repoConfigDir, entry.Name())
+			localCredFile := filepath.Join(agentConfigDir, ".credentials.json")
+
+			// Check if credentials already exist and are a valid symlink
+			if linkTarget, err := os.Readlink(localCredFile); err == nil {
+				if linkTarget == globalCredFile {
+					// Already correctly linked
+					continue
+				}
+				// Invalid symlink, will be recreated below
+				os.Remove(localCredFile)
+			} else if _, err := os.Stat(localCredFile); err == nil {
+				// File exists but is not a symlink, remove it
+				d.logger.Debug("Removing non-symlink credential file in %s/%s", repoName, entry.Name())
+				os.Remove(localCredFile)
+			} else if !os.IsNotExist(err) {
+				// Some other error
+				d.logger.Warn("Failed to check credentials in %s/%s: %v", repoName, entry.Name(), err)
+				continue
+			}
+
+			// Create or recreate symlink
+			if err := os.Symlink(globalCredFile, localCredFile); err != nil {
+				d.logger.Warn("Failed to link credentials in %s/%s: %v", repoName, entry.Name(), err)
+			} else {
+				d.logger.Debug("Linked credentials in %s/%s", repoName, entry.Name())
+				fixed++
+			}
+		}
+	}
+
+	return fixed, nil
 }
 
 // updateCheckLoop periodically checks for available updates (every 30 minutes)
