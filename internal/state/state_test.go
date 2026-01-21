@@ -210,6 +210,87 @@ func TestListRepos(t *testing.T) {
 	}
 }
 
+func TestClearAllAgents(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Add repos with agents
+	for _, name := range []string{"repo1", "repo2"} {
+		repo := &Repository{
+			GithubURL:   "https://github.com/test/" + name,
+			TmuxSession: "multiclaude-" + name,
+			Agents:      make(map[string]Agent),
+		}
+		if err := s.AddRepo(name, repo); err != nil {
+			t.Fatalf("AddRepo() failed: %v", err)
+		}
+
+		// Add agents to each repo
+		agent := Agent{
+			Type:         AgentTypeSupervisor,
+			WorktreePath: "/path/to/worktree",
+			TmuxWindow:   "supervisor",
+			SessionID:    "test-session",
+			PID:          12345,
+			CreatedAt:    time.Now(),
+		}
+		if err := s.AddAgent(name, "supervisor", agent); err != nil {
+			t.Fatalf("AddAgent() failed: %v", err)
+		}
+
+		worker := Agent{
+			Type:         AgentTypeWorker,
+			WorktreePath: "/path/to/worker",
+			TmuxWindow:   "worker-1",
+			SessionID:    "test-session",
+			PID:          12346,
+			Task:         "Test task",
+			CreatedAt:    time.Now(),
+		}
+		if err := s.AddAgent(name, "worker-1", worker); err != nil {
+			t.Fatalf("AddAgent() failed: %v", err)
+		}
+	}
+
+	// Verify agents exist
+	agents1, _ := s.ListAgents("repo1")
+	agents2, _ := s.ListAgents("repo2")
+	if len(agents1) != 2 || len(agents2) != 2 {
+		t.Fatalf("Expected 2 agents per repo, got %d and %d", len(agents1), len(agents2))
+	}
+
+	// Clear all agents
+	if err := s.ClearAllAgents(); err != nil {
+		t.Fatalf("ClearAllAgents() failed: %v", err)
+	}
+
+	// Verify agents are cleared but repos remain
+	repos := s.ListRepos()
+	if len(repos) != 2 {
+		t.Errorf("ClearAllAgents() removed repos, got %d want 2", len(repos))
+	}
+
+	agents1, _ = s.ListAgents("repo1")
+	agents2, _ = s.ListAgents("repo2")
+	if len(agents1) != 0 || len(agents2) != 0 {
+		t.Errorf("ClearAllAgents() did not clear agents, got %d and %d", len(agents1), len(agents2))
+	}
+
+	// Verify state was persisted
+	loaded, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	loadedAgents1, _ := loaded.ListAgents("repo1")
+	loadedAgents2, _ := loaded.ListAgents("repo2")
+	if len(loadedAgents1) != 0 || len(loadedAgents2) != 0 {
+		t.Errorf("ClearAllAgents() did not persist, got %d and %d agents", len(loadedAgents1), len(loadedAgents2))
+	}
+}
+
 func TestAddAgentNonExistentRepo(t *testing.T) {
 	tmpDir := t.TempDir()
 	statePath := filepath.Join(tmpDir, "state.json")
