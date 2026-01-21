@@ -309,3 +309,179 @@ func TestGetPrompt(t *testing.T) {
 		}
 	})
 }
+
+// TestGetSlashCommandsPromptContainsAllCommands verifies that GetSlashCommandsPrompt()
+// includes all expected slash commands.
+func TestGetSlashCommandsPromptContainsAllCommands(t *testing.T) {
+	prompt := GetSlashCommandsPrompt()
+
+	expectedCommands := []string{
+		"/status",
+		"/refresh",
+		"/workers",
+		"/messages",
+	}
+
+	for _, cmd := range expectedCommands {
+		if !strings.Contains(prompt, cmd) {
+			t.Errorf("GetSlashCommandsPrompt() should contain %q", cmd)
+		}
+	}
+}
+
+// TestGetSlashCommandsPromptContainsCLICommands verifies that GetSlashCommandsPrompt()
+// contains the actual CLI commands that should be run for each slash command.
+func TestGetSlashCommandsPromptContainsCLICommands(t *testing.T) {
+	prompt := GetSlashCommandsPrompt()
+
+	// Commands expected in /status
+	statusCommands := []struct {
+		command     string
+		description string
+	}{
+		{"multiclaude daemon status", "/status should include daemon status check"},
+		{"git status", "/status should include git status"},
+	}
+
+	// Commands expected in /refresh
+	refreshCommands := []struct {
+		command     string
+		description string
+	}{
+		{"git fetch origin main", "/refresh should include fetch from origin/main"},
+		{"git rebase origin/main", "/refresh should include rebase onto origin/main"},
+	}
+
+	// Commands expected in /workers
+	workersCommands := []struct {
+		command     string
+		description string
+	}{
+		{"multiclaude work list", "/workers should include work list command"},
+	}
+
+	// Commands expected in /messages
+	messagesCommands := []struct {
+		command     string
+		description string
+	}{
+		{"multiclaude agent list-messages", "/messages should include list-messages command"},
+	}
+
+	allCommands := [][]struct {
+		command     string
+		description string
+	}{
+		statusCommands,
+		refreshCommands,
+		workersCommands,
+		messagesCommands,
+	}
+
+	for _, cmdGroup := range allCommands {
+		for _, cmd := range cmdGroup {
+			if !strings.Contains(prompt, cmd.command) {
+				t.Errorf("GetSlashCommandsPrompt(): %s (expected command: %q)", cmd.description, cmd.command)
+			}
+		}
+	}
+}
+
+// TestGetPromptIncludesSlashCommandsForAllAgentTypes verifies that GetPrompt()
+// includes the slash commands section for every agent type.
+func TestGetPromptIncludesSlashCommandsForAllAgentTypes(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "multiclaude-prompts-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	agentTypes := []AgentType{
+		TypeWorker,
+		TypeSupervisor,
+		TypeMergeQueue,
+		TypeWorkspace,
+		TypeReview,
+	}
+
+	for _, agentType := range agentTypes {
+		t.Run(string(agentType), func(t *testing.T) {
+			prompt, err := GetPrompt(tmpDir, agentType, "")
+			if err != nil {
+				t.Fatalf("GetPrompt failed for %s: %v", agentType, err)
+			}
+
+			// Verify slash commands section header is present
+			if !strings.Contains(prompt, "## Slash Commands") {
+				t.Errorf("GetPrompt(%s) should contain slash commands section header", agentType)
+			}
+
+			// Verify all slash commands are present
+			expectedCommands := []string{"/status", "/refresh", "/workers", "/messages"}
+			for _, cmd := range expectedCommands {
+				if !strings.Contains(prompt, cmd) {
+					t.Errorf("GetPrompt(%s) should contain slash command %q", agentType, cmd)
+				}
+			}
+		})
+	}
+}
+
+// TestGetSlashCommandsPromptFormatting verifies that the slash commands section
+// is properly formatted with headers, code blocks, etc.
+func TestGetSlashCommandsPromptFormatting(t *testing.T) {
+	prompt := GetSlashCommandsPrompt()
+
+	// Check for main section header
+	if !strings.Contains(prompt, "## Slash Commands") {
+		t.Error("GetSlashCommandsPrompt() should have '## Slash Commands' header")
+	}
+
+	// Check for introductory text
+	if !strings.Contains(prompt, "The following slash commands are available") {
+		t.Error("GetSlashCommandsPrompt() should have introductory text")
+	}
+
+	// Check for code block markers (bash code blocks in command files)
+	if !strings.Contains(prompt, "```bash") {
+		t.Error("GetSlashCommandsPrompt() should contain bash code blocks")
+	}
+
+	// Check for section separators
+	if !strings.Contains(prompt, "---") {
+		t.Error("GetSlashCommandsPrompt() should contain section separators between commands")
+	}
+
+	// Check that each command has a header (# /command format)
+	commandHeaders := []string{
+		"# /status",
+		"# /refresh",
+		"# /workers",
+		"# /messages",
+	}
+	for _, header := range commandHeaders {
+		if !strings.Contains(prompt, header) {
+			t.Errorf("GetSlashCommandsPrompt() should contain command header %q", header)
+		}
+	}
+
+	// Check for instructions sections
+	if !strings.Contains(prompt, "## Instructions") {
+		t.Error("GetSlashCommandsPrompt() should contain instruction headers")
+	}
+}
+
+// TestGetSlashCommandsPromptNonEmpty verifies that GetSlashCommandsPrompt()
+// returns a non-empty result.
+func TestGetSlashCommandsPromptNonEmpty(t *testing.T) {
+	prompt := GetSlashCommandsPrompt()
+
+	if prompt == "" {
+		t.Error("GetSlashCommandsPrompt() should not return empty string")
+	}
+
+	// Should be substantial content (at least include all 4 commands with descriptions)
+	if len(prompt) < 500 {
+		t.Errorf("GetSlashCommandsPrompt() seems too short (got %d bytes), expected substantial content", len(prompt))
+	}
+}
