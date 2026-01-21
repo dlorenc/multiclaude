@@ -153,7 +153,7 @@ func TestOrphanedTmuxSessionCleanup(t *testing.T) {
 	}
 
 	// Create daemon and state (without the orphan)
-	d, err := daemon.New(paths, "test")
+	d, err := daemon.New(paths)
 	if err != nil {
 		t.Fatalf("Failed to create daemon: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestStaleSocketCleanup(t *testing.T) {
 	}
 
 	// Try to start a new daemon - it should handle the stale files
-	d, err := daemon.New(paths, "test")
+	d, err := daemon.New(paths)
 	if err != nil {
 		t.Fatalf("Failed to create daemon: %v", err)
 	}
@@ -401,7 +401,7 @@ func TestDaemonCrashRecovery(t *testing.T) {
 	}
 
 	// Start daemon, add state, then simulate crash
-	d1, err := daemon.New(paths, "test")
+	d1, err := daemon.New(paths)
 	if err != nil {
 		t.Fatalf("Failed to create first daemon: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestDaemonCrashRecovery(t *testing.T) {
 	// Start new daemon - should recover state from disk
 	// Because the tmux session exists, restoreTrackedRepos() will skip restoration
 	// and the state will be preserved.
-	d2, err := daemon.New(paths, "test")
+	d2, err := daemon.New(paths)
 	if err != nil {
 		t.Fatalf("Failed to create second daemon: %v", err)
 	}
@@ -618,7 +618,7 @@ func TestDaemonRestartSetsUpClaudeConfigDir(t *testing.T) {
 	}
 
 	// Start first daemon and add state
-	d1, err := daemon.New(paths, "test")
+	d1, err := daemon.New(paths)
 	if err != nil {
 		t.Fatalf("Failed to create first daemon: %v", err)
 	}
@@ -667,7 +667,7 @@ func TestDaemonRestartSetsUpClaudeConfigDir(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Start second daemon - this simulates daemon restart
-	d2, err := daemon.New(paths, "test")
+	d2, err := daemon.New(paths)
 	if err != nil {
 		t.Fatalf("Failed to create second daemon: %v", err)
 	}
