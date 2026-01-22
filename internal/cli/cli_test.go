@@ -2195,3 +2195,340 @@ func TestSanitizeTmuxSessionName(t *testing.T) {
 	}
 }
 
+func TestNormalizeGitHubURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{
+			name: "SSH format",
+			url:  "git@github.com:user/repo.git",
+			want: "github.com/user/repo",
+		},
+		{
+			name: "SSH format without .git",
+			url:  "git@github.com:user/repo",
+			want: "github.com/user/repo",
+		},
+		{
+			name: "HTTPS format",
+			url:  "https://github.com/user/repo",
+			want: "github.com/user/repo",
+		},
+		{
+			name: "HTTPS format with .git",
+			url:  "https://github.com/user/repo.git",
+			want: "github.com/user/repo",
+		},
+		{
+			name: "HTTP format",
+			url:  "http://github.com/user/repo",
+			want: "github.com/user/repo",
+		},
+		{
+			name: "git:// protocol",
+			url:  "git://github.com/user/repo.git",
+			want: "github.com/user/repo",
+		},
+		{
+			name: "mixed case",
+			url:  "https://GitHub.com/User/Repo",
+			want: "github.com/user/repo",
+		},
+		{
+			name: "whitespace trimmed",
+			url:  "  https://github.com/user/repo  ",
+			want: "github.com/user/repo",
+		},
+		{
+			name: "non-GitHub URL",
+			url:  "https://gitlab.com/user/repo",
+			want: "",
+		},
+		{
+			name: "empty string",
+			url:  "",
+			want: "",
+		},
+		{
+			name: "organization repo SSH",
+			url:  "git@github.com:myorg/myproject.git",
+			want: "github.com/myorg/myproject",
+		},
+		{
+			name: "nested path SSH",
+			url:  "git@github.com:user/nested/path.git",
+			want: "github.com/user/nested/path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeGitHubURL(tt.url)
+			if got != tt.want {
+				t.Errorf("normalizeGitHubURL(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFindRepoFromGitRemote(t *testing.T) {
+	// Save original working directory
+	origWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get original working directory: %v", err)
+	}
+	defer os.Chdir(origWd)
+
+	t.Run("matches HTTPS URL in state with SSH remote", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		stateFile := filepath.Join(tmpDir, "state.json")
+
+		// Create state with HTTPS URL
+		st := state.New(stateFile)
+		st.AddRepo("my-repo", &state.Repository{
+			GithubURL:   "https://github.com/myuser/myrepo",
+			TmuxSession: "mc-my-repo",
+			Agents:      make(map[string]state.Agent),
+		})
+
+		// Create a git repo with SSH remote
+		gitDir := filepath.Join(tmpDir, "git-test")
+		if err := os.MkdirAll(gitDir, 0755); err != nil {
+			t.Fatalf("failed to create git dir: %v", err)
+		}
+		if err := os.Chdir(gitDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+
+		// Initialize git repo and set remote
+		if err := exec.Command("git", "init").Run(); err != nil {
+			t.Fatalf("failed to init git: %v", err)
+		}
+		if err := exec.Command("git", "remote", "add", "origin", "git@github.com:myuser/myrepo.git").Run(); err != nil {
+			t.Fatalf("failed to add remote: %v", err)
+		}
+
+		cli := &CLI{
+			paths: &config.Paths{
+				StateFile: stateFile,
+			},
+		}
+
+		repoName, err := cli.findRepoFromGitRemote()
+		if err != nil {
+			t.Fatalf("findRepoFromGitRemote() error: %v", err)
+		}
+		if repoName != "my-repo" {
+			t.Errorf("findRepoFromGitRemote() = %q, want %q", repoName, "my-repo")
+		}
+	})
+
+	t.Run("matches SSH URL in state with HTTPS remote", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		stateFile := filepath.Join(tmpDir, "state.json")
+
+		// Create state with SSH URL
+		st := state.New(stateFile)
+		st.AddRepo("another-repo", &state.Repository{
+			GithubURL:   "git@github.com:anotheruser/anotherrepo.git",
+			TmuxSession: "mc-another-repo",
+			Agents:      make(map[string]state.Agent),
+		})
+
+		// Create a git repo with HTTPS remote
+		gitDir := filepath.Join(tmpDir, "git-test")
+		if err := os.MkdirAll(gitDir, 0755); err != nil {
+			t.Fatalf("failed to create git dir: %v", err)
+		}
+		if err := os.Chdir(gitDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+
+		// Initialize git repo and set remote
+		if err := exec.Command("git", "init").Run(); err != nil {
+			t.Fatalf("failed to init git: %v", err)
+		}
+		if err := exec.Command("git", "remote", "add", "origin", "https://github.com/anotheruser/anotherrepo").Run(); err != nil {
+			t.Fatalf("failed to add remote: %v", err)
+		}
+
+		cli := &CLI{
+			paths: &config.Paths{
+				StateFile: stateFile,
+			},
+		}
+
+		repoName, err := cli.findRepoFromGitRemote()
+		if err != nil {
+			t.Fatalf("findRepoFromGitRemote() error: %v", err)
+		}
+		if repoName != "another-repo" {
+			t.Errorf("findRepoFromGitRemote() = %q, want %q", repoName, "another-repo")
+		}
+	})
+
+	t.Run("no match returns error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		stateFile := filepath.Join(tmpDir, "state.json")
+
+		// Create state with different URL
+		st := state.New(stateFile)
+		st.AddRepo("other-repo", &state.Repository{
+			GithubURL:   "https://github.com/different/repo",
+			TmuxSession: "mc-other-repo",
+			Agents:      make(map[string]state.Agent),
+		})
+
+		// Create a git repo with non-matching remote
+		gitDir := filepath.Join(tmpDir, "git-test")
+		if err := os.MkdirAll(gitDir, 0755); err != nil {
+			t.Fatalf("failed to create git dir: %v", err)
+		}
+		if err := os.Chdir(gitDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+
+		// Initialize git repo and set remote
+		if err := exec.Command("git", "init").Run(); err != nil {
+			t.Fatalf("failed to init git: %v", err)
+		}
+		if err := exec.Command("git", "remote", "add", "origin", "git@github.com:nomatch/norepo.git").Run(); err != nil {
+			t.Fatalf("failed to add remote: %v", err)
+		}
+
+		cli := &CLI{
+			paths: &config.Paths{
+				StateFile: stateFile,
+			},
+		}
+
+		_, err := cli.findRepoFromGitRemote()
+		if err == nil {
+			t.Error("findRepoFromGitRemote() expected error for non-matching remote")
+		}
+	})
+
+	t.Run("not in git repo returns error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		stateFile := filepath.Join(tmpDir, "state.json")
+
+		// Create empty state
+		_ = state.New(stateFile)
+
+		// Not a git directory
+		if err := os.Chdir(tmpDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+
+		cli := &CLI{
+			paths: &config.Paths{
+				StateFile: stateFile,
+			},
+		}
+
+		_, err := cli.findRepoFromGitRemote()
+		if err == nil {
+			t.Error("findRepoFromGitRemote() expected error when not in git repo")
+		}
+	})
+
+	t.Run("case insensitive matching", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		stateFile := filepath.Join(tmpDir, "state.json")
+
+		// Create state with mixed case URL
+		st := state.New(stateFile)
+		st.AddRepo("case-test", &state.Repository{
+			GithubURL:   "https://GitHub.com/MyUser/MyRepo",
+			TmuxSession: "mc-case-test",
+			Agents:      make(map[string]state.Agent),
+		})
+
+		// Create a git repo with different case remote
+		gitDir := filepath.Join(tmpDir, "git-test")
+		if err := os.MkdirAll(gitDir, 0755); err != nil {
+			t.Fatalf("failed to create git dir: %v", err)
+		}
+		if err := os.Chdir(gitDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+
+		// Initialize git repo and set remote with different case
+		if err := exec.Command("git", "init").Run(); err != nil {
+			t.Fatalf("failed to init git: %v", err)
+		}
+		if err := exec.Command("git", "remote", "add", "origin", "git@github.com:myuser/myrepo.git").Run(); err != nil {
+			t.Fatalf("failed to add remote: %v", err)
+		}
+
+		cli := &CLI{
+			paths: &config.Paths{
+				StateFile: stateFile,
+			},
+		}
+
+		repoName, err := cli.findRepoFromGitRemote()
+		if err != nil {
+			t.Fatalf("findRepoFromGitRemote() error: %v", err)
+		}
+		if repoName != "case-test" {
+			t.Errorf("findRepoFromGitRemote() = %q, want %q", repoName, "case-test")
+		}
+	})
+
+	t.Run("multiple repos selects correct one", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		stateFile := filepath.Join(tmpDir, "state.json")
+
+		// Create state with multiple repos
+		st := state.New(stateFile)
+		st.AddRepo("repo-a", &state.Repository{
+			GithubURL:   "https://github.com/user/repo-a",
+			TmuxSession: "mc-repo-a",
+			Agents:      make(map[string]state.Agent),
+		})
+		st.AddRepo("repo-b", &state.Repository{
+			GithubURL:   "https://github.com/user/repo-b",
+			TmuxSession: "mc-repo-b",
+			Agents:      make(map[string]state.Agent),
+		})
+		st.AddRepo("repo-c", &state.Repository{
+			GithubURL:   "https://github.com/user/repo-c",
+			TmuxSession: "mc-repo-c",
+			Agents:      make(map[string]state.Agent),
+		})
+
+		// Create a git repo pointing to repo-b
+		gitDir := filepath.Join(tmpDir, "git-test")
+		if err := os.MkdirAll(gitDir, 0755); err != nil {
+			t.Fatalf("failed to create git dir: %v", err)
+		}
+		if err := os.Chdir(gitDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+
+		// Initialize git repo and set remote
+		if err := exec.Command("git", "init").Run(); err != nil {
+			t.Fatalf("failed to init git: %v", err)
+		}
+		if err := exec.Command("git", "remote", "add", "origin", "git@github.com:user/repo-b.git").Run(); err != nil {
+			t.Fatalf("failed to add remote: %v", err)
+		}
+
+		cli := &CLI{
+			paths: &config.Paths{
+				StateFile: stateFile,
+			},
+		}
+
+		repoName, err := cli.findRepoFromGitRemote()
+		if err != nil {
+			t.Fatalf("findRepoFromGitRemote() error: %v", err)
+		}
+		if repoName != "repo-b" {
+			t.Errorf("findRepoFromGitRemote() = %q, want %q", repoName, "repo-b")
+		}
+	})
+}

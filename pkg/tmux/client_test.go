@@ -1071,3 +1071,137 @@ func BenchmarkSendKeysMultiline(b *testing.B) {
 		client.SendKeysLiteral(ctx, sessionName, windowName, multilineText)
 	}
 }
+
+func TestKillSessionNonExistent(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient()
+
+	// Killing a non-existent session should return an error
+	err := client.KillSession(ctx, "nonexistent-session-kill-test")
+	if err == nil {
+		t.Error("KillSession on non-existent session should fail")
+	}
+
+	// Verify it's a CommandError
+	if _, ok := err.(*CommandError); !ok {
+		t.Errorf("Expected CommandError, got %T: %v", err, err)
+	}
+}
+
+func TestSendKeysOnNonExistentSession(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient()
+
+	// SendKeys on non-existent session should return an error
+	err := client.SendKeys(ctx, "nonexistent-session-sendkeys-test", "window", "test")
+	if err == nil {
+		t.Error("SendKeys on non-existent session should fail")
+	}
+
+	// Verify it's a CommandError
+	if _, ok := err.(*CommandError); !ok {
+		t.Errorf("Expected CommandError, got %T: %v", err, err)
+	}
+}
+
+func TestSendKeysLiteralOnNonExistentSession(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient()
+
+	// SendKeysLiteral on non-existent session should return an error
+	err := client.SendKeysLiteral(ctx, "nonexistent-session-literal-test", "window", "test")
+	if err == nil {
+		t.Error("SendKeysLiteral on non-existent session should fail")
+	}
+
+	// Verify it's a CommandError
+	if _, ok := err.(*CommandError); !ok {
+		t.Errorf("Expected CommandError, got %T: %v", err, err)
+	}
+}
+
+func TestSendEnterOnNonExistentSession(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient()
+
+	// SendEnter on non-existent session should return an error
+	err := client.SendEnter(ctx, "nonexistent-session-enter-test", "window")
+	if err == nil {
+		t.Error("SendEnter on non-existent session should fail")
+	}
+
+	// Verify it's a CommandError
+	if _, ok := err.(*CommandError); !ok {
+		t.Errorf("Expected CommandError, got %T: %v", err, err)
+	}
+}
+
+func TestSendKeysLiteralWithEnterOnNonExistentSession(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient()
+
+	// SendKeysLiteralWithEnter on non-existent session should return an error
+	err := client.SendKeysLiteralWithEnter(ctx, "nonexistent-session-atomic-test", "window", "test")
+	if err == nil {
+		t.Error("SendKeysLiteralWithEnter on non-existent session should fail")
+	}
+
+	// Verify it's a CommandError
+	if _, ok := err.(*CommandError); !ok {
+		t.Errorf("Expected CommandError, got %T: %v", err, err)
+	}
+}
+
+func TestHasWindowOnNonExistentSession(t *testing.T) {
+	ctx := context.Background()
+	client := NewClient()
+
+	// HasWindow on non-existent session should return an error
+	_, err := client.HasWindow(ctx, "nonexistent-session-haswindow-test", "window")
+	if err == nil {
+		t.Error("HasWindow on non-existent session should fail")
+	}
+
+	// Verify it's a CommandError
+	if _, ok := err.(*CommandError); !ok {
+		t.Errorf("Expected CommandError, got %T: %v", err, err)
+	}
+}
+
+func TestListSessionsNoSessions(t *testing.T) {
+	// This test verifies behavior when listing sessions and no sessions exist
+	// Since we need at least one session for the test framework, we can't easily
+	// test the "no sessions" case, but we test that the exit code 1 case is handled
+	ctx := context.Background()
+	client := NewClient()
+
+	// Create and immediately kill a session to ensure we're in a state
+	// where we know what sessions exist
+	sessionName := uniqueSessionName()
+	if err := client.CreateSession(ctx, sessionName, true); err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// Kill session
+	if err := client.KillSession(ctx, sessionName); err != nil {
+		t.Fatalf("Failed to kill session: %v", err)
+	}
+
+	// Wait for session to be gone
+	if err := waitForNoSession(ctx, client, sessionName, 2*time.Second); err != nil {
+		t.Fatalf("Session still visible after killing: %v", err)
+	}
+
+	// List sessions should work (might have 0 or more sessions from other tests)
+	sessions, err := client.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+
+	// The killed session should not be in the list
+	for _, s := range sessions {
+		if s == sessionName {
+			t.Errorf("Killed session %s should not be in session list", sessionName)
+		}
+	}
+}
