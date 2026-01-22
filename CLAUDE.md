@@ -23,6 +23,11 @@ This project embraces controlled chaos: multiple agents work simultaneously, pot
 go build ./cmd/multiclaude         # Build binary
 go install ./cmd/multiclaude       # Install to $GOPATH/bin
 
+# CI Guard Rails (run before pushing)
+make pre-commit                    # Fast checks: build + unit tests + verify docs
+make check-all                     # Full CI: all checks that GitHub CI runs
+make install-hooks                 # Install git pre-commit hook
+
 # Test
 go test ./...                      # All tests
 go test ./internal/daemon          # Single package
