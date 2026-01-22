@@ -15,6 +15,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/hooks"
 	"github.com/dlorenc/multiclaude/internal/logging"
 	"github.com/dlorenc/multiclaude/internal/messages"
+	"github.com/dlorenc/multiclaude/internal/names"
 	"github.com/dlorenc/multiclaude/internal/prompts"
 	"github.com/dlorenc/multiclaude/internal/prompts/commands"
 	"github.com/dlorenc/multiclaude/internal/socket"
@@ -1912,6 +1913,165 @@ func (d *Daemon) writePromptFile(repoName string, agentType prompts.AgentType, a
 	}
 
 	return promptPath, nil
+}
+
+// SpawnSyncAgent checks if a fork is >5 commits diverged from upstream.
+// If so, it spawns a worker to sync the fork with upstream.
+func (d *Daemon) SpawnSyncAgent(repoName string, repo *state.Repository) error {
+	repoPath := d.paths.RepoDir(repoName)
+
+	// Check if repo path exists
+	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+		return fmt.Errorf("repository path does not exist: %s", repoPath)
+	}
+
+	wt := worktree.NewManager(repoPath)
+
+	// Get the upstream remote (prefers "upstream", falls back to "origin")
+	remote, err := wt.GetUpstreamRemote()
+	if err != nil {
+		d.logger.Debug("Could not get upstream remote for %s: %v", repoName, err)
+		return nil // Not an error - repo might not have upstream configured
+	}
+
+	// Only proceed if we have an actual "upstream" remote (not just "origin")
+	if remote != "upstream" {
+		d.logger.Debug("Skipping sync check for %s - no upstream remote configured", repoName)
+		return nil
+	}
+
+	mainBranch, err := wt.GetDefaultBranch(remote)
+	if err != nil {
+		d.logger.Debug("Could not get default branch for %s: %v", repoName, err)
+		return nil
+	}
+
+	// Fetch from upstream to have latest state
+	if err := wt.FetchRemote(remote); err != nil {
+		d.logger.Debug("Could not fetch from upstream for %s: %v", repoName, err)
+		return nil
+	}
+
+	// Also fetch from origin to check our fork's main branch
+	if err := wt.FetchRemote("origin"); err != nil {
+		d.logger.Debug("Could not fetch from origin for %s: %v", repoName, err)
+		return nil
+	}
+
+	// Check divergence between origin/main and upstream/main
+	// Use git rev-list --left-right --count to get commits behind and ahead
+	cmd := exec.Command("git", "rev-list", "--left-right", "--count",
+		fmt.Sprintf("%s/%s...origin/%s", remote, mainBranch, mainBranch))
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		d.logger.Debug("Could not check divergence for %s: %v", repoName, err)
+		return nil
+	}
+
+	// Parse output like "6\t2" (behind\tahead)
+	var commitsBehind, commitsAhead int
+	parts := strings.Fields(strings.TrimSpace(string(output)))
+	if len(parts) == 2 {
+		fmt.Sscanf(parts[0], "%d", &commitsBehind)
+		fmt.Sscanf(parts[1], "%d", &commitsAhead)
+	}
+
+	// If fork is >5 commits behind upstream, spawn sync worker
+	if commitsBehind > 5 {
+		d.logger.Info("Fork %s is %d commits behind upstream/%s, spawning sync worker", repoName, commitsBehind, mainBranch)
+
+		// Check if a sync worker already exists
+		agents, _ := d.state.ListAgents(repoName)
+		for _, agentName := range agents {
+			agent, exists := d.state.GetAgent(repoName, agentName)
+			if exists && agent.Type == state.AgentTypeWorker && strings.Contains(agent.Task, "Sync fork with upstream") {
+				d.logger.Debug("Sync worker already exists for %s, skipping spawn", repoName)
+				return nil
+			}
+		}
+
+		// Generate worker name
+		workerName := "sync-" + names.Generate()
+
+		// Create task description
+		task := fmt.Sprintf("Sync fork with upstream - fetch upstream/%s, merge to origin/%s, run tests, create PR if needed", mainBranch, mainBranch)
+
+		// Create worktree for sync worker
+		wtPath := d.paths.AgentWorktree(repoName, workerName)
+		branchName := fmt.Sprintf("work/%s", workerName)
+
+		// Create worktree with new branch starting from origin/main
+		if err := wt.CreateNewBranch(wtPath, branchName, fmt.Sprintf("origin/%s", mainBranch)); err != nil {
+			d.logger.Error("Failed to create sync worker worktree for %s: %v", repoName, err)
+			return fmt.Errorf("failed to create sync worker worktree: %w", err)
+		}
+
+		// Create tmux window for worker
+		cmd := exec.Command("tmux", "new-window", "-d", "-t", repo.TmuxSession, "-n", workerName, "-c", wtPath)
+		if err := cmd.Run(); err != nil {
+			d.logger.Error("Failed to create sync worker tmux window for %s: %v", repoName, err)
+			return fmt.Errorf("failed to create sync worker tmux window: %w", err)
+		}
+
+		// Generate session ID
+		sessionID, err := claude.GenerateSessionID()
+		if err != nil {
+			d.logger.Error("Failed to generate session ID for sync worker: %v", err)
+			return fmt.Errorf("failed to generate session ID: %w", err)
+		}
+
+		// Write worker prompt file
+		promptFile, err := d.writePromptFile(repoName, prompts.TypeWorker, workerName)
+		if err != nil {
+			d.logger.Error("Failed to write prompt file for sync worker: %v", err)
+			return fmt.Errorf("failed to write prompt file: %w", err)
+		}
+
+		// Copy hooks config
+		if err := hooks.CopyConfig(repoPath, wtPath); err != nil {
+			d.logger.Warn("Failed to copy hooks config for sync worker: %v", err)
+		}
+
+		// Set up per-agent Claude config directory with slash commands
+		agentConfigDir := d.paths.AgentClaudeConfigDir(repoName, workerName)
+		if err := commands.SetupAgentCommands(agentConfigDir); err != nil {
+			d.logger.Warn("Failed to setup agent commands for sync worker: %v", err)
+		}
+
+		// Start Claude in the worker window with the task
+		result, err := d.claudeRunner.Start(d.ctx, repo.TmuxSession, workerName, claude.Config{
+			SessionID:        sessionID,
+			Resume:           false,
+			SystemPromptFile: promptFile,
+			ClaudeConfigDir:  agentConfigDir,
+			InitialMessage:   fmt.Sprintf("Task: %s", task),
+		})
+		if err != nil {
+			d.logger.Error("Failed to start Claude for sync worker: %v", err)
+			return fmt.Errorf("failed to start Claude: %w", err)
+		}
+
+		// Register worker with state
+		agent := state.Agent{
+			Type:         state.AgentTypeWorker,
+			WorktreePath: wtPath,
+			TmuxWindow:   workerName,
+			SessionID:    sessionID,
+			PID:          result.PID,
+			Task:         task,
+			CreatedAt:    time.Now(),
+		}
+
+		if err := d.state.AddAgent(repoName, workerName, agent); err != nil {
+			d.logger.Error("Failed to register sync worker: %v", err)
+			return fmt.Errorf("failed to register sync worker: %w", err)
+		}
+
+		d.logger.Info("Spawned sync worker '%s' for repo %s (fork is %d commits behind)", workerName, repoName, commitsBehind)
+	}
+
+	return nil
 }
 
 // isProcessAlive checks if a process is running
