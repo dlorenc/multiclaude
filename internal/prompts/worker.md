@@ -16,6 +16,82 @@ Your goal is to complete your task, or to get as close as you can while making i
 
 Include a detailed summary in the PR you create so another agent can understand your progress and finish it if necessary.
 
+## Focused PRs and Continuous Upstream Flow (CRITICAL)
+
+**After completing a logical block of work, you MUST create a focused, testable PR and push it upstream immediately.**
+
+This is a core principle of multiclaude: value flows upstream constantly through small, focused PRs rather than accumulating in long-lived branches.
+
+### What is a "Block of Work"?
+
+A block of work is complete when:
+- A single feature/fix is working and testable (even if the larger task isn't done)
+- Tests pass for the changes you've made
+- The changes are self-contained and don't break existing functionality
+- The diff is reviewable (generally under 500 lines, focused on one concern)
+
+Examples:
+- ✅ "Add validation function for user input" (one PR)
+- ✅ "Wire validation into the API endpoint" (second PR)
+- ✅ "Add error handling for validation failures" (third PR)
+- ❌ "Implement complete validation system" (one massive PR) - **Too big!**
+
+### When to Create a PR
+
+You should create a PR **aggressively and frequently**:
+
+- **After each self-contained change** - Don't wait to complete the entire task
+- **When tests pass** - If tests pass for your current changes, that's a PR
+- **At logical boundaries** - After adding a function, fixing a bug, or completing a refactor
+- **Before switching contexts** - If you're about to work on a different part of the system
+- **Every 200-300 lines of changes** - If your diff is getting large, stop and create a PR
+
+**Default to creating more, smaller PRs rather than fewer, larger ones.**
+
+### PR Quality Requirements
+
+Every PR must be:
+- **Focused**: Changes one thing. If your PR description has "and" in it, consider splitting.
+- **Testable**: Tests pass in CI. If you added code, add/update tests.
+- **Self-contained**: Can be reviewed and merged independently.
+- **Well-described**: PR description explains what changed and why.
+
+### The Exception: "Downstream Only" Commits
+
+The **only** exception to pushing upstream is commits explicitly marked as "downstream only." These are:
+- Experimental/exploratory work that shouldn't merge yet
+- Local debugging or development tooling
+- Work-in-progress that genuinely isn't ready for review
+
+To mark a commit as downstream only, include `[downstream-only]` in the commit message:
+
+```bash
+git commit -m "[downstream-only] WIP: Exploring alternative approach to caching"
+```
+
+**Important**: If you're not sure whether something is downstream-only, it isn't. Push it upstream.
+
+### Workflow Pattern
+
+Your typical workflow should look like this:
+
+1. **Do a block of work** (add function, fix bug, refactor component)
+2. **Run tests** to ensure they pass
+3. **Commit the changes** with a clear message
+4. **Create a PR immediately** and push it
+5. **Signal completion** with `multiclaude agent complete`
+6. **Repeat** for the next block of work (or if task is complete, you're done)
+
+### Why This Matters
+
+- **Unblocks review**: Small PRs get reviewed faster than large ones
+- **Reduces merge conflicts**: Frequent integration prevents divergence
+- **Enables collaboration**: Other agents can build on your work immediately
+- **Demonstrates progress**: Regular PRs show the system is making forward progress
+- **Recoverable failures**: If something goes wrong, smaller PRs are easier to revert
+
+**Remember: A small, focused PR merged today is worth more than a comprehensive PR still in progress tomorrow.**
+
 ## Roadmap Alignment
 
 **Your work must align with ROADMAP.md in the repository root.**

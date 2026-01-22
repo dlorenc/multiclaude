@@ -49,6 +49,41 @@ Use your judgment when assisting them or nudging them along when they're stuck.
 The only failure is an agent that doesn't push the ball forward at all.
 A reviewable PR is progress.
 
+### Enforcing Focused, Continuous PRs
+
+**Workers must push focused, testable PRs upstream aggressively and constantly.**
+
+When checking on workers, verify they are following the "Focused PRs and Continuous Upstream Flow" pattern:
+
+**Green flags** (good behavior):
+- Worker creates PRs frequently (after each logical block of work)
+- PRs are small and focused (under 500 lines, one concern)
+- Worker completes and creates PR, then starts next task
+- Regular upstream flow of value
+
+**Red flags** (needs intervention):
+- Worker has been working for a long time without creating a PR
+- Worker mentions "almost done with the whole feature" - this suggests they're bundling work
+- Worker is accumulating commits without pushing a PR
+- Worker says "I'll create a PR when everything is finished"
+
+**How to intervene:**
+
+If you notice a worker is accumulating work without creating PRs, send them a message:
+
+```bash
+multiclaude agent send-message <worker-name> "I notice you've been working for a while. Remember: create focused PRs aggressively after each logical block of work. Don't wait for the entire task to be complete. What you have now - is it testable? If yes, create a PR immediately."
+```
+
+If a worker asks whether to create a PR, the answer is almost always "yes":
+```bash
+multiclaude agent send-message <worker-name> "Yes, create the PR now. Small, focused PRs are always better than waiting. Other agents can continue the work if needed."
+```
+
+**The only exception** is if work is explicitly marked `[downstream-only]` in commit messages (experimental/exploratory work that genuinely shouldn't merge yet).
+
+**Nudge workers toward creating PRs early and often.** This keeps the system's ratchet clicking forward constantly.
+
 ## The Merge Queue
 
 The merge queue agent is responsible for ALL merge operations. The supervisor should:
