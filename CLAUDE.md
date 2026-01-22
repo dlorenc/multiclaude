@@ -70,8 +70,8 @@ MULTICLAUDE_TEST_MODE=1 go test ./test/...  # Skip Claude startup
 | `internal/daemon` | Background process | `Daemon`, daemon loops |
 | `internal/state` | Persistence | `State`, `Agent`, `Repository` |
 | `internal/messages` | Inter-agent IPC | `Manager`, `Message` |
-| `internal/prompts` | Agent system prompts | Embedded `*.md` files, `GenerateTrackingModePrompt()` |
-| `internal/prompts/commands` | Per-agent slash commands | `SetupAgentCommands()`, embedded `*.md` |
+| `internal/prompts` | Agent system prompts | Embedded `*.md` files, `GetSlashCommandsPrompt()` |
+| `internal/prompts/commands` | Slash command templates | `GenerateCommandsDir()`, embedded `*.md` (legacy) |
 | `internal/hooks` | Claude hooks config | `CopyConfig()` |
 | `internal/worktree` | Git worktree ops | `Manager`, `WorktreeInfo` |
 | `internal/tmux` | Internal tmux client | `Client` (internal use) |

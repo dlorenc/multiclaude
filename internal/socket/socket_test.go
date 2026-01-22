@@ -1,6 +1,8 @@
 package socket
 
 import (
+	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -245,4 +247,102 @@ func TestServerStaleSocket(t *testing.T) {
 		t.Fatalf("Start() failed with stale socket: %v", err)
 	}
 	defer server.Stop()
+}
+
+func TestServerInvalidJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "test.sock")
+
+	// Create handler
+	handler := HandlerFunc(func(req Request) Response {
+		return Response{Success: true}
+	})
+
+	// Start server
+	server := NewServer(sockPath, handler)
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	defer server.Stop()
+
+	go server.Serve()
+	time.Sleep(100 * time.Millisecond)
+
+	// Send invalid JSON directly
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	// Send invalid JSON
+	_, err = conn.Write([]byte("not valid json\n"))
+	if err != nil {
+		t.Fatalf("Failed to write: %v", err)
+	}
+
+	// Read response - server should return error response
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Failed to read response: %v", err)
+	}
+
+	var resp Response
+	if err := json.Unmarshal(buf[:n], &resp); err != nil {
+		t.Fatalf("Failed to parse error response: %v", err)
+	}
+
+	if resp.Success {
+		t.Error("Expected error response for invalid JSON")
+	}
+
+	if resp.Error == "" {
+		t.Error("Expected error message in response")
+	}
+}
+
+func TestServerStopWithNilListener(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "test.sock")
+
+	handler := HandlerFunc(func(req Request) Response {
+		return Response{Success: true}
+	})
+
+	// Create server but don't start it
+	server := NewServer(sockPath, handler)
+
+	// Stop should not fail with nil listener
+	if err := server.Stop(); err != nil {
+		t.Errorf("Stop() failed with nil listener: %v", err)
+	}
+}
+
+func TestServerStopRemovesSocket(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "test.sock")
+
+	handler := HandlerFunc(func(req Request) Response {
+		return Response{Success: true}
+	})
+
+	server := NewServer(sockPath, handler)
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	// Verify socket file exists
+	if _, err := os.Stat(sockPath); os.IsNotExist(err) {
+		t.Fatal("Socket file should exist after Start()")
+	}
+
+	// Stop and verify socket file is removed
+	if err := server.Stop(); err != nil {
+		t.Fatalf("Stop() failed: %v", err)
+	}
+
+	if _, err := os.Stat(sockPath); !os.IsNotExist(err) {
+		t.Error("Socket file should be removed after Stop()")
+	}
 }

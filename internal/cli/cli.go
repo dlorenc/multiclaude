@@ -20,7 +20,6 @@ import (
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/names"
 	"github.com/dlorenc/multiclaude/internal/prompts"
-	"github.com/dlorenc/multiclaude/internal/prompts/commands"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/internal/worktree"
@@ -98,6 +97,15 @@ func (c *CLI) getClaudeBinary() (string, error) {
 		return "", errors.ClaudeNotFound(err)
 	}
 	return binaryPath, nil
+}
+
+// loadState loads the state file, wrapping errors with context
+func (c *CLI) loadState() (*state.State, error) {
+	st, err := state.Load(c.paths.StateFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load state: %w", err)
+	}
+	return st, nil
 }
 
 // tmuxSanitizer replaces problematic characters with hyphens for tmux session names.
@@ -3093,22 +3101,109 @@ func (c *CLI) inferRepoFromCwd() (string, error) {
 	return "", fmt.Errorf("not in a multiclaude directory")
 }
 
+// normalizeGitHubURL normalizes GitHub URLs to a common format for comparison.
+// It handles both SSH (git@github.com:user/repo.git) and HTTPS (https://github.com/user/repo) formats.
+// Returns lowercase "github.com/user/repo" format for comparison.
+func normalizeGitHubURL(url string) string {
+	url = strings.TrimSpace(url)
+	lowerURL := strings.ToLower(url)
+
+	// Handle SSH format: git@github.com:user/repo.git
+	if strings.HasPrefix(lowerURL, "git@github.com:") {
+		path := url[len("git@github.com:"):]
+		path = strings.TrimSuffix(path, ".git")
+		return strings.ToLower("github.com/" + path)
+	}
+
+	// Handle HTTPS format: https://github.com/user/repo or https://github.com/user/repo.git
+	if strings.HasPrefix(lowerURL, "https://github.com/") {
+		path := url[len("https://"):]
+		path = strings.TrimSuffix(path, ".git")
+		return strings.ToLower(path)
+	}
+
+	// Handle HTTP format: http://github.com/user/repo
+	if strings.HasPrefix(lowerURL, "http://github.com/") {
+		path := url[len("http://"):]
+		path = strings.TrimSuffix(path, ".git")
+		return strings.ToLower(path)
+	}
+
+	// Handle git:// protocol: git://github.com/user/repo.git
+	if strings.HasPrefix(lowerURL, "git://github.com/") {
+		path := url[len("git://"):]
+		path = strings.TrimSuffix(path, ".git")
+		return strings.ToLower(path)
+	}
+
+	// Return empty string for non-GitHub URLs
+	return ""
+}
+
+// findRepoFromGitRemote looks for a git remote in the current directory
+// and tries to match it against known repositories in state.
+func (c *CLI) findRepoFromGitRemote() (string, error) {
+	// Run git remote get-url origin
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get git remote: %w", err)
+	}
+
+	remoteURL := strings.TrimSpace(string(output))
+	if remoteURL == "" {
+		return "", fmt.Errorf("git remote URL is empty")
+	}
+
+	normalizedRemote := normalizeGitHubURL(remoteURL)
+	if normalizedRemote == "" {
+		return "", fmt.Errorf("not a GitHub URL: %s", remoteURL)
+	}
+
+	// Load state to check against known repositories
+	st, err := c.loadState()
+	if err != nil {
+		return "", err
+	}
+
+	// Iterate through repos and find a match
+	for _, repoName := range st.ListRepos() {
+		repo, exists := st.GetRepo(repoName)
+		if !exists {
+			continue
+		}
+
+		normalizedStateURL := normalizeGitHubURL(repo.GithubURL)
+		if normalizedStateURL != "" && normalizedStateURL == normalizedRemote {
+			return repoName, nil
+		}
+	}
+
+	return "", fmt.Errorf("no matching repository found for remote: %s", remoteURL)
+}
+
 // resolveRepo determines the repository to use based on:
 // 1. Explicit --repo flag (highest priority)
-// 2. Current working directory (if in a multiclaude directory)
-// 3. Current repo set via 'multiclaude repo use' (lowest priority)
+// 2. Git remote URL matching (if in a git repo with origin pointing to a tracked repo)
+// 3. Current working directory (if in a multiclaude directory)
+// 4. Current repo set via 'multiclaude repo use' (lowest priority)
 func (c *CLI) resolveRepo(flags map[string]string) (string, error) {
 	// 1. Check explicit --repo flag
 	if r, ok := flags["repo"]; ok {
 		return r, nil
 	}
 
-	// 2. Try to infer from current working directory
+	// 2. Try to infer from git remote URL
+	if repoName, err := c.findRepoFromGitRemote(); err == nil {
+		return repoName, nil
+	}
+
+	// 3. Try to infer from current working directory
 	if inferred, err := c.inferRepoFromCwd(); err == nil {
 		return inferred, nil
 	}
 
-	// 3. Check current repo from daemon
+	// 4. Check current repo from daemon
 	client := socket.NewClient(c.paths.DaemonSock)
 	resp, err := client.Send(socket.Request{
 		Command: "get_current_repo",
@@ -3886,9 +3981,9 @@ func (c *CLI) cleanupMergedBranches(dryRun bool, verbose bool) error {
 	fmt.Println("\nChecking for branches merged upstream...")
 
 	// Load state to get repository list
-	st, err := state.Load(c.paths.StateFile)
+	st, err := c.loadState()
 	if err != nil {
-		return fmt.Errorf("failed to load state: %w", err)
+		return err
 	}
 
 	totalDeleted := 0
@@ -4316,9 +4411,9 @@ func (c *CLI) repair(args []string) error {
 // localRepair performs state repair without the daemon running
 func (c *CLI) localRepair(verbose bool) error {
 	// Load state from disk
-	st, err := state.Load(c.paths.StateFile)
+	st, err := c.loadState()
 	if err != nil {
-		return fmt.Errorf("failed to load state: %w", err)
+		return err
 	}
 
 	tmuxClient := tmux.NewClient()
@@ -4622,7 +4717,10 @@ func ParseFlags(args []string) (map[string]string, []string) {
 		if strings.HasPrefix(arg, "--") {
 			// Long flag
 			flag := strings.TrimPrefix(arg, "--")
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			// Handle --flag=value format
+			if idx := strings.Index(flag, "="); idx != -1 {
+				flags[flag[:idx]] = flag[idx+1:]
+			} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				flags[flag] = args[i+1]
 				i++
 			} else {
@@ -4631,7 +4729,10 @@ func ParseFlags(args []string) (map[string]string, []string) {
 		} else if strings.HasPrefix(arg, "-") {
 			// Short flag
 			flag := strings.TrimPrefix(arg, "-")
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			// Handle -f=value format
+			if idx := strings.Index(flag, "="); idx != -1 {
+				flags[flag[:idx]] = flag[idx+1:]
+			} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				flags[flag] = args[i+1]
 				i++
 			} else {
@@ -4767,16 +4868,8 @@ func (c *CLI) setupOutputCapture(tmuxSession, tmuxWindow, repoName, agentName, a
 // startClaudeInTmux starts Claude Code in a tmux window with the given configuration
 // Returns the PID of the Claude process
 func (c *CLI) startClaudeInTmux(binaryPath, tmuxSession, tmuxWindow, workDir, sessionID, promptFile, repoName string, initialMessage string) (int, error) {
-	// Set up per-agent Claude config directory with slash commands
-	agentConfigDir := c.paths.AgentClaudeConfigDir(repoName, tmuxWindow)
-	if err := commands.SetupAgentCommands(agentConfigDir); err != nil {
-		// Log warning but don't fail - slash commands are a nice-to-have
-		fmt.Printf("Warning: failed to setup agent commands: %v\n", err)
-	}
-
-	// Build Claude command using the full path to prevent version drift
-	// Set CLAUDE_CONFIG_DIR to inject per-agent slash commands
-	claudeCmd := fmt.Sprintf("CLAUDE_CONFIG_DIR=%s %s --session-id %s --dangerously-skip-permissions", agentConfigDir, binaryPath, sessionID)
+	// Build Claude command - uses global ~/.claude/ for auth and slash commands are embedded in prompts
+	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions", binaryPath, sessionID)
 
 	// Add prompt file if provided
 	if promptFile != "" {
@@ -4816,7 +4909,6 @@ func (c *CLI) startClaudeInTmux(binaryPath, tmuxSession, tmuxWindow, workDir, se
 
 	return pid, nil
 }
-
 
 // bugReport generates a diagnostic bug report with redacted sensitive information
 func (c *CLI) bugReport(args []string) error {
