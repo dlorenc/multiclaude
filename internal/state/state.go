@@ -87,9 +87,9 @@ type Agent struct {
 	TmuxWindow      string    `json:"tmux_window"`
 	SessionID       string    `json:"session_id"`
 	PID             int       `json:"pid"`
-	Task            string    `json:"task,omitempty"`             // Only for workers
-	Summary         string    `json:"summary,omitempty"`          // Brief summary of work done (workers only)
-	FailureReason   string    `json:"failure_reason,omitempty"`   // Why the task failed (workers only)
+	Task            string    `json:"task,omitempty"`           // Only for workers
+	Summary         string    `json:"summary,omitempty"`        // Brief summary of work done (workers only)
+	FailureReason   string    `json:"failure_reason,omitempty"` // Why the task failed (workers only)
 	CreatedAt       time.Time `json:"created_at"`
 	LastNudge       time.Time `json:"last_nudge,omitempty"`
 	ReadyForCleanup bool      `json:"ready_for_cleanup,omitempty"` // Only for workers

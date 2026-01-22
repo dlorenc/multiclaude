@@ -628,16 +628,16 @@ func CleanupOrphanedWithDetails(wtRootDir string, manager *Manager) (*CleanupOrp
 
 // WorktreeState represents the current state of a worktree
 type WorktreeState struct {
-	Path            string
-	Branch          string
-	IsDetachedHEAD  bool
-	IsMidRebase     bool
-	IsMidMerge      bool
-	HasUncommitted  bool
-	CommitsBehind   int  // Number of commits behind remote main
-	CommitsAhead    int  // Number of commits ahead of remote main
-	CanRefresh      bool // True if worktree is in a state that can be safely refreshed
-	RefreshReason   string
+	Path           string
+	Branch         string
+	IsDetachedHEAD bool
+	IsMidRebase    bool
+	IsMidMerge     bool
+	HasUncommitted bool
+	CommitsBehind  int  // Number of commits behind remote main
+	CommitsAhead   int  // Number of commits ahead of remote main
+	CanRefresh     bool // True if worktree is in a state that can be safely refreshed
+	RefreshReason  string
 }
 
 // GetWorktreeState checks the current state of a worktree and whether it can be safely refreshed
@@ -747,16 +747,16 @@ func IsBehindMain(worktreePath string, remote string, mainBranch string) (bool, 
 
 // RefreshResult contains the result of a worktree refresh operation
 type RefreshResult struct {
-	WorktreePath    string
-	Branch          string
-	CommitsRebased  int
-	WasStashed      bool
-	StashRestored   bool
-	HasConflicts    bool
-	ConflictFiles   []string
-	Error           error
-	Skipped         bool
-	SkipReason      string
+	WorktreePath   string
+	Branch         string
+	CommitsRebased int
+	WasStashed     bool
+	StashRestored  bool
+	HasConflicts   bool
+	ConflictFiles  []string
+	Error          error
+	Skipped        bool
+	SkipReason     string
 }
 
 // RefreshWorktree syncs a worktree with the latest changes from the main branch.
