@@ -2532,3 +2532,88 @@ func TestFindRepoFromGitRemote(t *testing.T) {
 		}
 	})
 }
+
+func TestGetVersion(t *testing.T) {
+	// Save original version
+	originalVersion := Version
+	defer func() { Version = originalVersion }()
+
+	tests := []struct {
+		name        string
+		version     string
+		wantPrefix  string
+		wantSuffix  string
+		wantContain string
+	}{
+		{
+			name:       "release version unchanged",
+			version:    "v1.2.3",
+			wantPrefix: "v1.2.3",
+		},
+		{
+			name:       "semver without v prefix unchanged",
+			version:    "1.0.0",
+			wantPrefix: "1.0.0",
+		},
+		{
+			name:        "dev version gets semver format",
+			version:     "dev",
+			wantPrefix:  "0.0.0",
+			wantContain: "dev",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			Version = tt.version
+			got := GetVersion()
+
+			if tt.wantPrefix != "" && !strings.HasPrefix(got, tt.wantPrefix) {
+				t.Errorf("GetVersion() = %q, want prefix %q", got, tt.wantPrefix)
+			}
+			if tt.wantSuffix != "" && !strings.HasSuffix(got, tt.wantSuffix) {
+				t.Errorf("GetVersion() = %q, want suffix %q", got, tt.wantSuffix)
+			}
+			if tt.wantContain != "" && !strings.Contains(got, tt.wantContain) {
+				t.Errorf("GetVersion() = %q, want to contain %q", got, tt.wantContain)
+			}
+		})
+	}
+}
+
+func TestIsDevVersion(t *testing.T) {
+	// Save original version
+	originalVersion := Version
+	defer func() { Version = originalVersion }()
+
+	tests := []struct {
+		name    string
+		version string
+		want    bool
+	}{
+		{
+			name:    "dev is dev version",
+			version: "dev",
+			want:    true,
+		},
+		{
+			name:    "release version is not dev",
+			version: "v1.2.3",
+			want:    false,
+		},
+		{
+			name:    "semver is not dev",
+			version: "1.0.0",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			Version = tt.version
+			if got := IsDevVersion(); got != tt.want {
+				t.Errorf("IsDevVersion() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
