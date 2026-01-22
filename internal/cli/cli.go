@@ -548,7 +548,7 @@ func (c *CLI) startDaemon(args []string) error {
 }
 
 func (c *CLI) runDaemon(args []string) error {
-	return daemon.Run()
+	return daemon.Run(Version)
 }
 
 func (c *CLI) stopDaemon(args []string) error {
