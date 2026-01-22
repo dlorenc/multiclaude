@@ -562,12 +562,48 @@ func TestBuildCommandWithoutSkipPermissions(t *testing.T) {
 	}
 }
 
+func TestBuildCommandWithResume(t *testing.T) {
+	runner := NewRunner(WithBinaryPath("claude"))
+
+	// Test with Resume=false (default)
+	cmd := runner.buildCommand("test-session-id", Config{})
+	if !strings.Contains(cmd, "--session-id test-session-id") {
+		t.Errorf("expected command to contain --session-id, got %q", cmd)
+	}
+	if strings.Contains(cmd, "--resume") {
+		t.Error("expected command not to contain --resume when Resume=false")
+	}
+
+	// Test with Resume=true
+	cmd = runner.buildCommand("test-session-id", Config{Resume: true})
+	if !strings.Contains(cmd, "--resume test-session-id") {
+		t.Errorf("expected command to contain --resume, got %q", cmd)
+	}
+	if strings.Contains(cmd, "--session-id") {
+		t.Error("expected command not to contain --session-id when Resume=true")
+	}
+}
+
 func TestResolveBinaryPath(t *testing.T) {
 	// This test is environment-dependent, so we just verify it doesn't panic
 	// and returns something
 	path := ResolveBinaryPath()
 	if path == "" {
 		t.Error("ResolveBinaryPath() returned empty string")
+	}
+}
+
+func TestIsBinaryAvailable(t *testing.T) {
+	// Test with a binary that definitely exists
+	runner := NewRunner(WithBinaryPath("echo"))
+	if !runner.IsBinaryAvailable() {
+		t.Error("IsBinaryAvailable() should return true for 'echo'")
+	}
+
+	// Test with a binary that doesn't exist
+	runner = NewRunner(WithBinaryPath("/nonexistent/binary/path"))
+	if runner.IsBinaryAvailable() {
+		t.Error("IsBinaryAvailable() should return false for nonexistent binary")
 	}
 }
 

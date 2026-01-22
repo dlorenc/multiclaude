@@ -21,11 +21,13 @@
 //	package main
 //
 //	import (
+//	    "context"
 //	    "log"
 //	    "github.com/dlorenc/multiclaude/pkg/tmux"
 //	)
 //
 //	func main() {
+//	    ctx := context.Background()
 //	    client := tmux.NewClient()
 //
 //	    // Verify tmux is available
@@ -34,18 +36,18 @@
 //	    }
 //
 //	    // Create a detached session
-//	    if err := client.CreateSession("demo", true); err != nil {
+//	    if err := client.CreateSession(ctx, "demo", true); err != nil {
 //	        log.Fatal(err)
 //	    }
-//	    defer client.KillSession("demo")
+//	    defer client.KillSession(ctx, "demo")
 //
 //	    // Create a named window
-//	    if err := client.CreateWindow("demo", "worker"); err != nil {
+//	    if err := client.CreateWindow(ctx, "demo", "worker"); err != nil {
 //	        log.Fatal(err)
 //	    }
 //
 //	    // Start capturing output
-//	    if err := client.StartPipePane("demo", "worker", "/tmp/demo.log"); err != nil {
+//	    if err := client.StartPipePane(ctx, "demo", "worker", "/tmp/demo.log"); err != nil {
 //	        log.Fatal(err)
 //	    }
 //
@@ -53,17 +55,17 @@
 //	    multilineMessage := `This is a
 //	multiline message
 //	that won't trigger on each newline`
-//	    if err := client.SendKeysLiteral("demo", "worker", multilineMessage); err != nil {
+//	    if err := client.SendKeysLiteral(ctx, "demo", "worker", multilineMessage); err != nil {
 //	        log.Fatal(err)
 //	    }
 //
 //	    // Now send Enter to submit
-//	    if err := client.SendEnter("demo", "worker"); err != nil {
+//	    if err := client.SendEnter(ctx, "demo", "worker"); err != nil {
 //	        log.Fatal(err)
 //	    }
 //
 //	    // Get the PID of the process in the pane
-//	    pid, err := client.GetPanePID("demo", "worker")
+//	    pid, err := client.GetPanePID(ctx, "demo", "worker")
 //	    if err != nil {
 //	        log.Fatal(err)
 //	    }

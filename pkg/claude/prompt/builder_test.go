@@ -379,6 +379,15 @@ func TestWriteToFileExisting(t *testing.T) {
 	}
 }
 
+func TestWriteToFileInvalidPath(t *testing.T) {
+	// Try to write to a path where we can't create the directory
+	// (using /dev/null as a file means we can't create a subdir inside it)
+	err := WriteToFile("/dev/null/subdir/prompt.md", "content")
+	if err == nil {
+		t.Error("expected error when writing to invalid path")
+	}
+}
+
 func TestLoaderChaining(t *testing.T) {
 	l := NewLoader().
 		SetDefault(TypeSupervisor, "Default").
@@ -389,6 +398,32 @@ func TestLoaderChaining(t *testing.T) {
 	}
 	if l.CustomPromptDir != "/tmp" {
 		t.Error("chained SetCustomDir failed")
+	}
+}
+
+func TestLoaderLoadUnknownAgentType(t *testing.T) {
+	l := NewLoader()
+	l.SetCustomDir("/tmp")
+
+	// Loading an unknown agent type should error when trying to load custom prompt
+	_, err := l.Load(AgentType("unknown"))
+	if err == nil {
+		t.Error("expected error for unknown agent type")
+	}
+}
+
+func TestLoaderLoadWithExtrasError(t *testing.T) {
+	l := NewLoader()
+	l.SetCustomDir("/tmp")
+
+	extras := map[string]string{
+		"Extra": "content",
+	}
+
+	// Loading an unknown agent type with extras should error
+	_, err := l.LoadWithExtras(AgentType("unknown"), extras)
+	if err == nil {
+		t.Error("expected error for unknown agent type with extras")
 	}
 }
 

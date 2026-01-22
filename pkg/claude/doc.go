@@ -15,7 +15,8 @@
 // # Requirements
 //
 // This package requires the Claude Code CLI to be installed. The binary is typically
-// named "claude" and should be available in PATH. Use [ResolveBinaryPath] to find it.
+// named "claude" and should be available in PATH. Use [ResolveBinaryPath] to find it,
+// and [Runner.IsBinaryAvailable] to verify it's installed before use.
 //
 // # Example Usage
 //
@@ -36,6 +37,11 @@
 //	        claude.WithTerminal(tmuxClient),
 //	        claude.WithBinaryPath(claude.ResolveBinaryPath()),
 //	    )
+//
+//	    // Verify Claude CLI is available
+//	    if !runner.IsBinaryAvailable() {
+//	        log.Fatal("Claude CLI is not installed")
+//	    }
 //
 //	    // Prepare a session
 //	    tmuxClient.CreateSession("demo", true)

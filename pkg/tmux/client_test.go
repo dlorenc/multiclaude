@@ -1205,3 +1205,110 @@ func TestListSessionsNoSessions(t *testing.T) {
 		}
 	}
 }
+
+func TestListSessionsContextCancellation(t *testing.T) {
+	client := NewClient()
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// ListSessions should return context error
+	_, err := client.ListSessions(ctx)
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled, got %v", err)
+	}
+}
+
+func TestSendKeysLiteralMultilineContextCancellation(t *testing.T) {
+	client := NewClient()
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// SendKeysLiteral with multiline should return context error
+	multiline := "line1\nline2"
+	err := client.SendKeysLiteral(ctx, "session", "window", multiline)
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled for multiline, got %v", err)
+	}
+
+	// SendKeysLiteral with single line should also return context error
+	err = client.SendKeysLiteral(ctx, "session", "window", "single line")
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled for single line, got %v", err)
+	}
+}
+
+func TestCreateWindowContextCancellation(t *testing.T) {
+	client := NewClient()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := client.CreateWindow(ctx, "session", "window")
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled, got %v", err)
+	}
+}
+
+func TestKillWindowContextCancellation(t *testing.T) {
+	client := NewClient()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := client.KillWindow(ctx, "session", "window")
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled, got %v", err)
+	}
+}
+
+func TestListWindowsContextCancellation(t *testing.T) {
+	client := NewClient()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := client.ListWindows(ctx, "session")
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled, got %v", err)
+	}
+}
+
+func TestGetPanePIDContextCancellation(t *testing.T) {
+	client := NewClient()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := client.GetPanePID(ctx, "session", "window")
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled, got %v", err)
+	}
+}
+
+func TestStartPipePaneContextCancellation(t *testing.T) {
+	client := NewClient()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := client.StartPipePane(ctx, "session", "window", "/tmp/test.log")
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled, got %v", err)
+	}
+}
+
+func TestStopPipePaneContextCancellation(t *testing.T) {
+	client := NewClient()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := client.StopPipePane(ctx, "session", "window")
+	if err != context.Canceled {
+		t.Errorf("Expected context.Canceled, got %v", err)
+	}
+}

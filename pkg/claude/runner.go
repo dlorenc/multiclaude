@@ -153,14 +153,34 @@ func ResolveBinaryPath() string {
 	return "claude"
 }
 
+// IsBinaryAvailable checks if the Claude CLI is installed and available.
+// This is useful for verifying prerequisites before attempting to use the Runner.
+// Similar to tmux.Client.IsTmuxAvailable().
+func (r *Runner) IsBinaryAvailable() bool {
+	cmd := exec.Command(r.BinaryPath, "--version")
+	return cmd.Run() == nil
+}
+
 // Config contains configuration for starting a Claude instance.
 type Config struct {
 	// SessionID is the unique identifier for this Claude session.
 	// If empty, a new UUID will be generated.
+	//
+	// Session IDs allow resuming conversations across process restarts.
+	// They correlate logs with specific sessions and track concurrent instances.
 	SessionID string
 
-	// Resume indicates this is resuming an existing session.
+	// Resume indicates this is resuming an existing session rather than starting fresh.
 	// When true, uses --resume instead of --session-id.
+	//
+	// Use Resume=true when:
+	//   - Restarting an agent after a crash
+	//   - Continuing a conversation from a previous run
+	//   - The session state was previously saved by Claude
+	//
+	// Use Resume=false (default) when:
+	//   - Starting a new conversation
+	//   - The session has never been started before
 	Resume bool
 
 	// WorkDir is the working directory for Claude.
