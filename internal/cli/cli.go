@@ -144,6 +144,19 @@ func (c *CLI) loadState() (*state.State, error) {
 	return st, nil
 }
 
+// removeDirectoryIfExists removes a directory and prints status messages.
+// It prints a warning if removal fails, or a success message if it succeeds.
+// If the directory doesn't exist, it does nothing.
+func removeDirectoryIfExists(path, description string) {
+	if _, err := os.Stat(path); err == nil {
+		if err := os.RemoveAll(path); err != nil {
+			fmt.Printf("  Warning: failed to remove %s: %v\n", description, err)
+		} else {
+			fmt.Printf("  Removed %s\n", path)
+		}
+	}
+}
+
 // tmuxSanitizer replaces problematic characters with hyphens for tmux session names.
 // tmux has issues with dots, colons, spaces, and forward slashes in session names.
 var tmuxSanitizer = strings.NewReplacer(
@@ -825,54 +838,24 @@ func (c *CLI) stopAll(args []string) error {
 	if clean {
 		// Remove worktrees directory
 		fmt.Println("\nRemoving worktrees...")
-		if _, err := os.Stat(c.paths.WorktreesDir); err == nil {
-			if err := os.RemoveAll(c.paths.WorktreesDir); err != nil {
-				fmt.Printf("  Warning: failed to remove worktrees: %v\n", err)
-			} else {
-				fmt.Printf("  Removed %s\n", c.paths.WorktreesDir)
-			}
-		}
+		removeDirectoryIfExists(c.paths.WorktreesDir, "worktrees")
 
 		// Remove messages directory
 		fmt.Println("Removing messages...")
-		if _, err := os.Stat(c.paths.MessagesDir); err == nil {
-			if err := os.RemoveAll(c.paths.MessagesDir); err != nil {
-				fmt.Printf("  Warning: failed to remove messages: %v\n", err)
-			} else {
-				fmt.Printf("  Removed %s\n", c.paths.MessagesDir)
-			}
-		}
+		removeDirectoryIfExists(c.paths.MessagesDir, "messages")
 
 		// Remove output logs
 		fmt.Println("Removing output logs...")
-		if _, err := os.Stat(c.paths.OutputDir); err == nil {
-			if err := os.RemoveAll(c.paths.OutputDir); err != nil {
-				fmt.Printf("  Warning: failed to remove output logs: %v\n", err)
-			} else {
-				fmt.Printf("  Removed %s\n", c.paths.OutputDir)
-			}
-		}
+		removeDirectoryIfExists(c.paths.OutputDir, "output logs")
 
 		// Remove claude config (per-agent settings)
 		fmt.Println("Removing agent configs...")
-		if _, err := os.Stat(c.paths.ClaudeConfigDir); err == nil {
-			if err := os.RemoveAll(c.paths.ClaudeConfigDir); err != nil {
-				fmt.Printf("  Warning: failed to remove agent configs: %v\n", err)
-			} else {
-				fmt.Printf("  Removed %s\n", c.paths.ClaudeConfigDir)
-			}
-		}
+		removeDirectoryIfExists(c.paths.ClaudeConfigDir, "agent configs")
 
 		// Remove prompts directory
 		fmt.Println("Removing prompts...")
 		promptsDir := filepath.Join(c.paths.Root, "prompts")
-		if _, err := os.Stat(promptsDir); err == nil {
-			if err := os.RemoveAll(promptsDir); err != nil {
-				fmt.Printf("  Warning: failed to remove prompts: %v\n", err)
-			} else {
-				fmt.Printf("  Removed %s\n", promptsDir)
-			}
-		}
+		removeDirectoryIfExists(promptsDir, "prompts")
 
 		// Clean up local branches in each repository
 		fmt.Println("\nCleaning up local branches...")
@@ -2029,8 +2012,8 @@ func (c *CLI) showHistory(args []string) error {
 	}
 
 	// Get filter options
-	statusFilter := flags["status"]   // Filter by status (merged, open, closed, failed, no-pr)
-	searchQuery := flags["search"]    // Search in task descriptions
+	statusFilter := flags["status"] // Filter by status (merged, open, closed, failed, no-pr)
+	searchQuery := flags["search"]  // Search in task descriptions
 	showFull := flags["full"] == "true"
 
 	// Validate status filter if provided
