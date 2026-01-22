@@ -485,3 +485,215 @@ func TestGetSlashCommandsPromptNonEmpty(t *testing.T) {
 		t.Errorf("GetSlashCommandsPrompt() seems too short (got %d bytes), expected substantial content", len(prompt))
 	}
 }
+
+// TestParseGitHubURL tests the parseGitHubURL helper function
+func TestParseGitHubURL(t *testing.T) {
+	tests := []struct {
+		name      string
+		url       string
+		wantOwner string
+		wantRepo  string
+	}{
+		{
+			name:      "HTTPS URL",
+			url:       "https://github.com/dlorenc/multiclaude.git",
+			wantOwner: "dlorenc",
+			wantRepo:  "multiclaude",
+		},
+		{
+			name:      "HTTPS URL without .git",
+			url:       "https://github.com/aronchick/multiclaude",
+			wantOwner: "aronchick",
+			wantRepo:  "multiclaude",
+		},
+		{
+			name:      "SSH URL",
+			url:       "git@github.com:dlorenc/multiclaude.git",
+			wantOwner: "dlorenc",
+			wantRepo:  "multiclaude",
+		},
+		{
+			name:      "SSH URL without .git",
+			url:       "git@github.com:aronchick/multiclaude",
+			wantOwner: "aronchick",
+			wantRepo:  "multiclaude",
+		},
+		{
+			name:      "Invalid URL",
+			url:       "not-a-github-url",
+			wantOwner: "",
+			wantRepo:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			owner, repo := parseGitHubURL(tt.url)
+			if owner != tt.wantOwner {
+				t.Errorf("parseGitHubURL(%q) owner = %q, want %q", tt.url, owner, tt.wantOwner)
+			}
+			if repo != tt.wantRepo {
+				t.Errorf("parseGitHubURL(%q) repo = %q, want %q", tt.url, repo, tt.wantRepo)
+			}
+		})
+	}
+}
+
+// TestDetectFork tests fork detection in various git repository configurations
+func TestDetectFork(t *testing.T) {
+	// This test requires git to be installed
+	// We'll create temporary git repos with different remote configurations
+
+	t.Run("non-git directory returns non-fork", func(t *testing.T) {
+		// Create a temporary directory
+		tmpDir, err := os.MkdirTemp("", "multiclaude-fork-test-*")
+		if err != nil {
+			t.Fatalf("failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		// Note: DetectFork will return IsFork=false if git command fails
+		// This is expected behavior - we gracefully handle non-git directories
+		info, err := DetectFork(tmpDir)
+		if err != nil {
+			t.Errorf("DetectFork() unexpected error: %v", err)
+		}
+		if info == nil {
+			t.Fatal("DetectFork() returned nil info")
+		}
+		// For non-git directory, should return IsFork=false
+		if info.IsFork {
+			t.Error("DetectFork() for non-git directory should return IsFork=false")
+		}
+	})
+
+	t.Run("actual git repo without upstream", func(t *testing.T) {
+		// We can test against the actual repo we're in (if it's not a fork)
+		// This is a real integration test
+		currentDir, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("failed to get current dir: %v", err)
+		}
+
+		// Find the repo root (go up until we find .git)
+		repoRoot := currentDir
+		for {
+			if _, err := os.Stat(filepath.Join(repoRoot, ".git")); err == nil {
+				break
+			}
+			parent := filepath.Dir(repoRoot)
+			if parent == repoRoot {
+				t.Skip("not in a git repository")
+			}
+			repoRoot = parent
+		}
+
+		info, err := DetectFork(repoRoot)
+		if err != nil {
+			t.Errorf("DetectFork() unexpected error: %v", err)
+		}
+		if info == nil {
+			t.Fatal("DetectFork() returned nil info")
+		}
+
+		// The actual result depends on whether we're in a fork or not
+		// Just verify the function runs without error
+		t.Logf("Fork detection result: IsFork=%v, Upstream=%s/%s, Fork=%s/%s",
+			info.IsFork, info.UpstreamOwner, info.UpstreamRepo, info.ForkOwner, info.ForkRepo)
+	})
+}
+
+// TestGenerateForkWorkflowPrompt tests fork workflow prompt generation
+func TestGenerateForkWorkflowPrompt(t *testing.T) {
+	t.Run("non-fork returns empty string", func(t *testing.T) {
+		info := &ForkInfo{
+			IsFork: false,
+		}
+		prompt := GenerateForkWorkflowPrompt(info)
+		if prompt != "" {
+			t.Error("GenerateForkWorkflowPrompt() should return empty string for non-fork")
+		}
+	})
+
+	t.Run("fork returns guidance", func(t *testing.T) {
+		info := &ForkInfo{
+			IsFork:         true,
+			UpstreamRemote: "upstream",
+			UpstreamOwner:  "dlorenc",
+			UpstreamRepo:   "multiclaude",
+			ForkOwner:      "aronchick",
+			ForkRepo:       "multiclaude",
+		}
+		prompt := GenerateForkWorkflowPrompt(info)
+
+		// Verify key elements are present
+		if !strings.Contains(prompt, "Fork Workflow") {
+			t.Error("prompt should contain 'Fork Workflow' header")
+		}
+		if !strings.Contains(prompt, "dlorenc/multiclaude") {
+			t.Error("prompt should mention upstream repo")
+		}
+		if !strings.Contains(prompt, "aronchick/multiclaude") {
+			t.Error("prompt should mention fork repo")
+		}
+		if !strings.Contains(prompt, "feature branch") {
+			t.Error("prompt should mention feature branches")
+		}
+		if !strings.Contains(prompt, "gh pr create --repo") {
+			t.Error("prompt should show upstream PR creation command")
+		}
+		if !strings.Contains(prompt, "CRITICAL") {
+			t.Error("prompt should emphasize critical points")
+		}
+	})
+}
+
+// TestGetPromptIncludesForkGuidance verifies fork guidance is included when in a fork
+func TestGetPromptIncludesForkGuidance(t *testing.T) {
+	// Get the actual repo we're testing in
+	currentDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get current dir: %v", err)
+	}
+
+	// Find repo root
+	repoRoot := currentDir
+	for {
+		if _, err := os.Stat(filepath.Join(repoRoot, ".git")); err == nil {
+			break
+		}
+		parent := filepath.Dir(repoRoot)
+		if parent == repoRoot {
+			t.Skip("not in a git repository")
+		}
+		repoRoot = parent
+	}
+
+	// Test GetPrompt with the actual repo
+	prompt, err := GetPrompt(repoRoot, TypeWorker, "")
+	if err != nil {
+		t.Errorf("GetPrompt() unexpected error: %v", err)
+	}
+
+	// Check if we're in a fork
+	forkInfo, err := DetectFork(repoRoot)
+	if err != nil {
+		t.Fatalf("DetectFork() failed: %v", err)
+	}
+
+	if forkInfo.IsFork {
+		// If we're in a fork, prompt should include fork guidance
+		if !strings.Contains(prompt, "Fork Workflow") {
+			t.Error("GetPrompt() should include fork workflow guidance when in a fork")
+		}
+		t.Logf("Detected fork: %s/%s (upstream: %s/%s)",
+			forkInfo.ForkOwner, forkInfo.ForkRepo,
+			forkInfo.UpstreamOwner, forkInfo.UpstreamRepo)
+	} else {
+		// If not in a fork, should not include fork guidance
+		if strings.Contains(prompt, "Fork Workflow") {
+			t.Error("GetPrompt() should not include fork workflow guidance when not in a fork")
+		}
+		t.Log("Not in a fork, no fork guidance included (expected)")
+	}
+}
