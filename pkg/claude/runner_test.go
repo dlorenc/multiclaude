@@ -372,7 +372,7 @@ func TestStartContextCancellation(t *testing.T) {
 
 	runner := NewRunner(
 		WithTerminal(terminal),
-		WithStartupDelay(100 * time.Millisecond),
+		WithStartupDelay(100*time.Millisecond),
 	)
 
 	// Create a context that will be cancelled

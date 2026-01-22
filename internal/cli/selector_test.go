@@ -363,8 +363,8 @@ func TestFormatAgentStatusCell(t *testing.T) {
 		{"completed", "completed"},
 		{"stopped", "stopped"},
 		{"idle", "idle"},
-		{"", "idle"},            // Default case
-		{"unknown", "idle"},    // Unknown status defaults to idle
+		{"", "idle"},        // Default case
+		{"unknown", "idle"}, // Unknown status defaults to idle
 	}
 
 	for _, tt := range tests {

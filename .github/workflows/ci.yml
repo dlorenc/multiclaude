@@ -23,6 +23,31 @@ jobs:
       - name: Build
         run: go build -v ./...
 
+  gofmt-check:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Check gofmt
+        run: |
+          unformatted=$(gofmt -s -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files need formatting:"
+            echo "$unformatted"
+            echo ""
+            echo "Run 'gofmt -s -w .' to fix formatting."
+            exit 1
+          fi
+          echo "All files are properly formatted."
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest

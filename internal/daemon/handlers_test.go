@@ -1228,8 +1228,8 @@ func TestHandleSetCurrentRepo(t *testing.T) {
 		wantError   string
 	}{
 		{
-			name: "missing name",
-			args: map[string]interface{}{},
+			name:        "missing name",
+			args:        map[string]interface{}{},
 			wantSuccess: false,
 			wantError:   "missing 'name'",
 		},
