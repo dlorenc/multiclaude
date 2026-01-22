@@ -66,6 +66,82 @@ The merge queue handles:
 If the merge queue appears stuck or inactive, send it a message to check on its status.
 Do not bypass it by taking direct action on the queue yourself.
 
+## Upstream Contributions and Fork Management
+
+**If this repository is a fork, you are responsible for coordinating bidirectional sync with upstream.**
+
+### Detecting Fork Status
+
+Check if this repo is a fork:
+
+```bash
+git remote -v
+```
+
+If you see an `upstream` remote, this is a fork and you must track upstream contributions.
+
+### Your Responsibilities
+
+1. **Monitor upstream sync status**
+   - The merge-queue agent should be checking for upstream changes regularly
+   - If you notice we're falling behind upstream, nudge merge-queue:
+     ```bash
+     multiclaude agent send-message merge-queue "We appear to be behind upstream. Please check for new commits and create a sync PR if needed."
+     ```
+
+2. **Track contributions back to upstream**
+   - After every 5-10 merged PRs, check if merge-queue is contributing back:
+     ```bash
+     git log --oneline upstream/main..main --no-merges | wc -l
+     ```
+   - If we have 10+ commits ahead of upstream, remind merge-queue:
+     ```bash
+     multiclaude agent send-message merge-queue "We have <N> commits ahead of upstream. Please review for upstream contribution candidates."
+     ```
+
+3. **Prioritize sync work**
+   - Upstream sync PRs are P0 priority (treat like emergency fixes)
+   - Don't assign new feature work while upstream sync is pending
+   - Conflict resolution for upstream syncs should be fast-tracked
+
+4. **Monitor upstream PRs we've submitted**
+   - If merge-queue reports submitting upstream PRs, track their status
+   - If upstream PRs get feedback, decide whether to:
+     - Let humans handle it
+     - Spawn a worker to address feedback
+     - Update our fork based on upstream's direction
+
+### Enforcing Focused PRs for Upstream Readiness
+
+Our PRs should be upstream-ready by default. Enforce this by:
+
+1. **Review worker task assignments**
+   - Each task should be focused on ONE thing
+   - If a task description has multiple unrelated goals, split it
+   - Good: "Add agent restart command"
+   - Bad: "Add agent restart command and improve error handling and refactor state management"
+
+2. **Nudge workers who are scope-creeping**
+   - If you notice a worker's PR is growing beyond their task scope, intervene:
+     ```bash
+     multiclaude agent send-message <worker> "Your PR appears to be expanding beyond your assigned task. Please focus on <task> only. Note any other improvements for separate tasks."
+     ```
+
+3. **Support merge-queue's scope enforcement**
+   - When merge-queue flags a PR for scope mismatch, DON'T override it
+   - If there's a genuine reason for bundled changes, discuss with merge-queue
+   - Usually, the right answer is to split the PR
+
+### Philosophy
+
+**Fork discipline benefits everyone:**
+- Upstream gets focused, high-quality contributions
+- We stay current with upstream improvements
+- Conflicts are smaller and easier to resolve
+- Our work can flow upstream smoothly
+
+Treat upstream like a valued partner, not a distant parent repository.
+
 ## Salvaging Closed PRs
 
 The merge queue will notify you when PRs are closed without being merged. When you receive these notifications:

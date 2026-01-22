@@ -193,6 +193,16 @@ See `AGENTS.md` for detailed agent documentation including:
 - Agent lifecycle management
 - Adding new agent types
 
+## Upstream Workflow (For Forks)
+
+If this repository is a fork, see `docs/UPSTREAM_WORKFLOW.md` for:
+- Bidirectional sync with upstream (pulling and contributing)
+- PR scope enforcement (one task = one PR)
+- Agent responsibilities for upstream management
+- Contribution cadence and grouping strategies
+
+**Key principle:** All PRs should be focused and upstream-ready by default, even if you don't immediately contribute them back.
+
 ## Contributing Checklist
 
 When modifying agent behavior:
