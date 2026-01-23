@@ -68,7 +68,8 @@ jobs:
         env:
           TMUX_TESTS: "1"
         run: |
-          go test -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/...
+          # Use script to provide a PTY for tmux (needed in headless CI environments)
+          script -e -c "go test -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/..."
           go tool cover -func=coverage.out
 
       - name: Upload coverage report
@@ -99,7 +100,8 @@ jobs:
         env:
           TMUX_TESTS: "1"
         run: |
-          go test -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/...
+          # Use script to provide a PTY for tmux (needed in headless CI environments)
+          script -e -c "go test -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/..."
 
           echo "## Coverage Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
