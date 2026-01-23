@@ -2652,17 +2652,10 @@ func (c *CLI) addWorkspace(args []string) error {
 		return err
 	}
 
-	// Determine repository
-	var repoName string
-	if r, ok := flags["repo"]; ok {
-		repoName = r
-	} else {
-		// Try to infer from current directory
-		if inferred, err := c.inferRepoFromCwd(); err == nil {
-			repoName = inferred
-		} else {
-			return errors.MultipleRepos()
-		}
+	// Determine repository using standard resolution chain
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return err
 	}
 
 	// Determine branch to start from
