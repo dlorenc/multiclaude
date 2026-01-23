@@ -6,7 +6,7 @@ Agents (supervisor, merge-queue, workers) should reject or deprioritize work tha
 
 ## Mission
 
-**Multiclaude is a lightweight local orchestrator for running multiple Claude Code agents on GitHub repositories.**
+**Multiclaude is a lightweight local orchestrator for running multiple Claude Code agents on git repositories (GitHub and Azure DevOps).**
 
 Key constraints:
 - **Local-first**: No cloud dependencies, remote coordination, or external services
@@ -96,4 +96,5 @@ These features are explicitly **not wanted**. PRs implementing them should be cl
 
 ## Changelog
 
+- **2026-01-23**: Added Azure DevOps support to mission scope (human approved)
 - **2026-01-20**: Initial roadmap after Phase 1 cleanup (removed notifications, coordination, multi-provider)
