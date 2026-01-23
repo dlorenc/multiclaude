@@ -23,6 +23,11 @@ This project embraces controlled chaos: multiple agents work simultaneously, pot
 go build ./cmd/multiclaude         # Build binary
 go install ./cmd/multiclaude       # Install to $GOPATH/bin
 
+# CI Guard Rails (run before pushing)
+make pre-commit                    # Fast checks: build + unit tests + verify docs
+make check-all                     # Full CI: all checks that GitHub CI runs
+make install-hooks                 # Install git pre-commit hook
+
 # Test
 go test ./...                      # All tests
 go test ./internal/daemon          # Single package
@@ -193,6 +198,61 @@ See `AGENTS.md` for detailed agent documentation including:
 - Agent lifecycle management
 - Adding new agent types
 
+## Extensibility
+
+Multiclaude is designed for extension **without modifying the core binary**. External tools can integrate via:
+
+### Extension Points
+
+| Extension Point | Use Cases | Documentation |
+|----------------|-----------|---------------|
+| **State File** | Monitoring, dashboards, analytics | [`docs/extending/STATE_FILE_INTEGRATION.md`](docs/extending/STATE_FILE_INTEGRATION.md) |
+| **Event Hooks** | Notifications, webhooks, alerting | [`docs/extending/EVENT_HOOKS.md`](docs/extending/EVENT_HOOKS.md) |
+| **Socket API** | Custom CLIs, automation, control planes | [`docs/extending/SOCKET_API.md`](docs/extending/SOCKET_API.md) |
+| **Web UIs** | Visual monitoring dashboards | [`docs/extending/WEB_UI_DEVELOPMENT.md`](docs/extending/WEB_UI_DEVELOPMENT.md) |
+
+**Start here:** [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md) - Complete extension guide
+
+### For LLMs: Keeping Extension Docs Updated
+
+**CRITICAL:** When modifying multiclaude core, check if extension documentation needs updates:
+
+1. **State Schema Changes** (`internal/state/state.go`)
+   - Update: [`docs/extending/STATE_FILE_INTEGRATION.md`](docs/extending/STATE_FILE_INTEGRATION.md)
+   - Update schema reference section
+   - Update all code examples showing state structure
+   - Run: `go run cmd/verify-docs/main.go` (when implemented)
+
+2. **Event Type Changes** (`internal/events/events.go`)
+   - Update: [`docs/extending/EVENT_HOOKS.md`](docs/extending/EVENT_HOOKS.md)
+   - Update event type table
+   - Update event JSON format examples
+   - Add new event examples if new types added
+
+3. **Socket Command Changes** (`internal/daemon/daemon.go`)
+   - Update: [`docs/extending/SOCKET_API.md`](docs/extending/SOCKET_API.md)
+   - Add/update command reference entries
+   - Add code examples for new commands
+   - Update client library examples if needed
+
+4. **Runtime Directory Changes** (`pkg/config/config.go`)
+   - Update: All extension docs that reference file paths
+   - Update the "Runtime Directories" section below
+   - Update [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md) file layout
+
+5. **New Extension Points**
+   - Create new guide in `docs/extending/`
+   - Add entry to [`docs/EXTENSIBILITY.md`](docs/EXTENSIBILITY.md)
+   - Add to this section in `CLAUDE.md`
+
+**Pattern:** After any internal/* or pkg/* changes, search extension docs for outdated references:
+```bash
+# Find docs that might need updating
+grep -r "internal/state" docs/extending/
+grep -r "EventType" docs/extending/
+grep -r "socket.Request" docs/extending/
+```
+
 ## Contributing Checklist
 
 When modifying agent behavior:
@@ -211,6 +271,12 @@ When modifying daemon loops:
 - [ ] Consider interaction with health check (2 min cycle)
 - [ ] Test crash recovery: `go test ./test/ -run Recovery`
 - [ ] Verify state atomicity with concurrent access tests
+
+When modifying extension points (state, events, socket API):
+- [ ] Update relevant extension documentation in `docs/extending/`
+- [ ] Update code examples in docs to match new behavior
+- [ ] Run documentation verification (when implemented): `go run cmd/verify-docs/main.go`
+- [ ] Check that external tools still work (e.g., `cmd/multiclaude-web`)
 
 ## Runtime Directories
 
