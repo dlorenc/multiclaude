@@ -146,6 +146,23 @@ func (c *CLI) loadState() (*state.State, error) {
 	return st, nil
 }
 
+// sendDaemonRequest sends a request to the daemon and handles common error cases.
+// It returns the response if successful, or an error if communication fails or the daemon returns an error.
+func (c *CLI) sendDaemonRequest(command string, args map[string]interface{}) (*socket.Response, error) {
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: command,
+		Args:    args,
+	})
+	if err != nil {
+		return nil, errors.DaemonCommunicationFailed(command, err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("%s failed: %s", command, resp.Error)
+	}
+	return resp, nil
+}
+
 // removeDirectoryIfExists removes a directory and prints status messages.
 // It prints a warning if removal fails, or a success message if it succeeds.
 // If the directory doesn't exist, it does nothing.
@@ -674,16 +691,9 @@ func (c *CLI) runDaemon(args []string) error {
 }
 
 func (c *CLI) stopDaemon(args []string) error {
-	client := socket.NewClient(c.paths.DaemonSock)
-	resp, err := client.Send(socket.Request{
-		Command: "stop",
-	})
+	_, err := c.sendDaemonRequest("stop", nil)
 	if err != nil {
-		return fmt.Errorf("failed to send stop command: %w", err)
-	}
-
-	if !resp.Success {
-		return fmt.Errorf("daemon stop failed: %s", resp.Error)
+		return err
 	}
 
 	fmt.Println("Daemon stopped successfully")
@@ -1295,19 +1305,11 @@ func (c *CLI) initRepo(args []string) error {
 }
 
 func (c *CLI) listRepos(args []string) error {
-	client := socket.NewClient(c.paths.DaemonSock)
-	resp, err := client.Send(socket.Request{
-		Command: "list_repos",
-		Args: map[string]interface{}{
-			"rich": true,
-		},
+	resp, err := c.sendDaemonRequest("list_repos", map[string]interface{}{
+		"rich": true,
 	})
 	if err != nil {
-		return errors.DaemonCommunicationFailed("listing repositories", err)
-	}
-
-	if !resp.Success {
-		return errors.Wrap(errors.CategoryRuntime, "failed to list repos", fmt.Errorf("%s", resp.Error))
+		return err
 	}
 
 	repos, ok := resp.Data.([]interface{})
@@ -1520,18 +1522,11 @@ func (c *CLI) setCurrentRepo(args []string) error {
 
 	repoName := args[0]
 
-	client := socket.NewClient(c.paths.DaemonSock)
-	resp, err := client.Send(socket.Request{
-		Command: "set_current_repo",
-		Args: map[string]interface{}{
-			"name": repoName,
-		},
+	_, err := c.sendDaemonRequest("set_current_repo", map[string]interface{}{
+		"name": repoName,
 	})
 	if err != nil {
-		return errors.DaemonCommunicationFailed("setting current repo", err)
-	}
-	if !resp.Success {
-		return errors.Wrap(errors.CategoryRuntime, "failed to set current repo", fmt.Errorf("%s", resp.Error))
+		return err
 	}
 
 	fmt.Printf("Current repository set to: %s\n", repoName)
@@ -1539,15 +1534,9 @@ func (c *CLI) setCurrentRepo(args []string) error {
 }
 
 func (c *CLI) getCurrentRepo(args []string) error {
-	client := socket.NewClient(c.paths.DaemonSock)
-	resp, err := client.Send(socket.Request{
-		Command: "get_current_repo",
-	})
+	resp, err := c.sendDaemonRequest("get_current_repo", nil)
 	if err != nil {
-		return errors.DaemonCommunicationFailed("getting current repo", err)
-	}
-	if !resp.Success {
-		return errors.Wrap(errors.CategoryRuntime, "failed to get current repo", fmt.Errorf("%s", resp.Error))
+		return err
 	}
 
 	currentRepo, _ := resp.Data.(string)
@@ -1561,15 +1550,9 @@ func (c *CLI) getCurrentRepo(args []string) error {
 }
 
 func (c *CLI) clearCurrentRepo(args []string) error {
-	client := socket.NewClient(c.paths.DaemonSock)
-	resp, err := client.Send(socket.Request{
-		Command: "clear_current_repo",
-	})
+	_, err := c.sendDaemonRequest("clear_current_repo", nil)
 	if err != nil {
-		return errors.DaemonCommunicationFailed("clearing current repo", err)
-	}
-	if !resp.Success {
-		return errors.Wrap(errors.CategoryRuntime, "failed to clear current repo", fmt.Errorf("%s", resp.Error))
+		return err
 	}
 
 	fmt.Println("Current repository cleared")
@@ -1935,20 +1918,12 @@ func (c *CLI) listWorkers(args []string) error {
 		return errors.NotInRepo()
 	}
 
-	client := socket.NewClient(c.paths.DaemonSock)
-	resp, err := client.Send(socket.Request{
-		Command: "list_agents",
-		Args: map[string]interface{}{
-			"repo": repoName,
-			"rich": true,
-		},
+	resp, err := c.sendDaemonRequest("list_agents", map[string]interface{}{
+		"repo": repoName,
+		"rich": true,
 	})
 	if err != nil {
-		return errors.DaemonCommunicationFailed("listing workers", err)
-	}
-
-	if !resp.Success {
-		return errors.Wrap(errors.CategoryRuntime, "failed to list workers", fmt.Errorf("%s", resp.Error))
+		return err
 	}
 
 	agents, ok := resp.Data.([]interface{})

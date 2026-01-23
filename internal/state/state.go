@@ -147,19 +147,12 @@ func Load(path string) (*State, error) {
 	return &s, nil
 }
 
-// Save persists state to disk
-func (s *State) Save() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal state: %w", err)
-	}
-
+// atomicWrite writes data to a file atomically using a temp file and rename.
+// This prevents corruption if the process crashes during writing.
+func atomicWrite(path string, data []byte) error {
 	// Use a unique temp file to avoid races between concurrent saves.
 	// CreateTemp creates a file with a unique name in the same directory.
-	dir := filepath.Dir(s.path)
+	dir := filepath.Dir(path)
 	tmpFile, err := os.CreateTemp(dir, ".state-*.tmp")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
@@ -181,12 +174,25 @@ func (s *State) Save() error {
 	}
 
 	// Atomic rename
-	if err := os.Rename(tmpPath, s.path); err != nil {
+	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath) // Clean up temp file on error
 		return fmt.Errorf("failed to rename state file: %w", err)
 	}
 
 	return nil
+}
+
+// Save persists state to disk
+func (s *State) Save() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal state: %w", err)
+	}
+
+	return atomicWrite(s.path, data)
 }
 
 // AddRepo adds a new repository to the state
@@ -549,34 +555,5 @@ func (s *State) saveUnlocked() error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	// Use a unique temp file to avoid races between concurrent saves.
-	// CreateTemp creates a file with a unique name in the same directory.
-	dir := filepath.Dir(s.path)
-	tmpFile, err := os.CreateTemp(dir, ".state-*.tmp")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-
-	// Write data and close the file
-	_, writeErr := tmpFile.Write(data)
-	closeErr := tmpFile.Close()
-
-	// Check for write or close errors
-	if writeErr != nil {
-		os.Remove(tmpPath) // Clean up temp file on error
-		return fmt.Errorf("failed to write state file: %w", writeErr)
-	}
-	if closeErr != nil {
-		os.Remove(tmpPath) // Clean up temp file on error
-		return fmt.Errorf("failed to close temp file: %w", closeErr)
-	}
-
-	// Atomic rename
-	if err := os.Rename(tmpPath, s.path); err != nil {
-		os.Remove(tmpPath) // Clean up temp file on error
-		return fmt.Errorf("failed to rename state file: %w", err)
-	}
-
-	return nil
+	return atomicWrite(s.path, data)
 }
