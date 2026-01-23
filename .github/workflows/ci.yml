@@ -138,6 +138,14 @@ jobs:
           git config --global user.email "ci@github.com"
           git config --global user.name "GitHub CI"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude CLI
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Run e2e tests
         run: go test -v ./test/...
 
