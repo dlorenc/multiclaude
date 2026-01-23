@@ -184,6 +184,32 @@ func getRequiredStringArg(args map[string]interface{}, key, description string) 
 	return val, socket.Response{}, true
 }
 
+// periodicLoop runs a function periodically at the specified interval.
+// If onStartup is provided, it's called immediately before entering the loop.
+// The onTick function is called on each timer tick.
+func (d *Daemon) periodicLoop(name string, interval time.Duration, onStartup, onTick func()) {
+	defer d.wg.Done()
+	d.logger.Info("Starting %s loop", name)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Run startup tasks if provided
+	if onStartup != nil {
+		onStartup()
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			onTick()
+		case <-d.ctx.Done():
+			d.logger.Info("%s loop stopped", name)
+			return
+		}
+	}
+}
+
 // serverLoop handles socket connections
 func (d *Daemon) serverLoop() {
 	defer d.wg.Done()
@@ -207,28 +233,12 @@ func (d *Daemon) serverLoop() {
 
 // healthCheckLoop periodically checks agent health
 func (d *Daemon) healthCheckLoop() {
-	defer d.wg.Done()
-	d.logger.Info("Starting health check loop")
-
-	ticker := time.NewTicker(2 * time.Minute)
-	defer ticker.Stop()
-
-	// Run once immediately on startup
-	d.checkAgentHealth()
-	d.rotateLogsIfNeeded()
-	d.cleanupMergedBranches()
-
-	for {
-		select {
-		case <-ticker.C:
-			d.checkAgentHealth()
-			d.rotateLogsIfNeeded()
-			d.cleanupMergedBranches()
-		case <-d.ctx.Done():
-			d.logger.Info("Health check loop stopped")
-			return
-		}
+	startup := func() {
+		d.checkAgentHealth()
+		d.rotateLogsIfNeeded()
+		d.cleanupMergedBranches()
 	}
+	d.periodicLoop("health check", 2*time.Minute, startup, startup)
 }
 
 // checkAgentHealth checks if agents are still alive
@@ -324,21 +334,7 @@ func (d *Daemon) checkAgentHealth() {
 
 // messageRouterLoop watches for new messages and delivers them
 func (d *Daemon) messageRouterLoop() {
-	defer d.wg.Done()
-	d.logger.Info("Starting message router loop")
-
-	ticker := time.NewTicker(2 * time.Minute)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			d.routeMessages()
-		case <-d.ctx.Done():
-			d.logger.Info("Message router loop stopped")
-			return
-		}
-	}
+	d.periodicLoop("message router", 2*time.Minute, nil, d.routeMessages)
 }
 
 // routeMessages checks for pending messages and delivers them
@@ -403,21 +399,7 @@ func (d *Daemon) getMessageManager() *messages.Manager {
 
 // wakeLoop periodically wakes agents with status checks
 func (d *Daemon) wakeLoop() {
-	defer d.wg.Done()
-	d.logger.Info("Starting wake loop")
-
-	ticker := time.NewTicker(2 * time.Minute)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			d.wakeAgents()
-		case <-d.ctx.Done():
-			d.logger.Info("Wake loop stopped")
-			return
-		}
-	}
+	d.periodicLoop("wake", 2*time.Minute, nil, d.wakeAgents)
 }
 
 // wakeAgents sends periodic nudges to agents
