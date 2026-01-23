@@ -1760,31 +1760,14 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 		mqConfig = state.DefaultMergeQueueConfig()
 	}
 
-	// Create merge-queue window only if enabled
-	if mqConfig.Enabled {
-		cmd = exec.Command("tmux", "new-window", "-d", "-t", repo.TmuxSession, "-n", "merge-queue", "-c", repoPath)
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to create merge-queue window: %w", err)
-		}
-	}
-
 	// Start supervisor agent
 	if err := d.startAgent(repoName, repo, "supervisor", prompts.TypeSupervisor, repoPath); err != nil {
 		d.logger.Error("Failed to start supervisor for %s: %v", repoName, err)
 	}
 
-	// Send agent definitions to supervisor
-	if err := d.sendAgentDefinitionsToSupervisor(repoName, repoPath); err != nil {
+	// Send agent definitions to supervisor (includes merge-queue config for supervisor to decide)
+	if err := d.sendAgentDefinitionsToSupervisor(repoName, repoPath, mqConfig); err != nil {
 		d.logger.Warn("Failed to send agent definitions to supervisor: %v", err)
-	}
-
-	// Start merge-queue agent only if enabled
-	if mqConfig.Enabled {
-		if err := d.startMergeQueueAgent(repoName, repo, repoPath, mqConfig); err != nil {
-			d.logger.Error("Failed to start merge-queue for %s: %v", repoName, err)
-		}
-	} else {
-		d.logger.Info("Merge queue is disabled for repo %s, skipping merge-queue agent", repoName)
 	}
 
 	// Create and restore workspace
@@ -1844,7 +1827,7 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 
 // sendAgentDefinitionsToSupervisor reads agent definitions and sends them to the supervisor.
 // This allows the supervisor to know about available agents and spawn them as needed.
-func (d *Daemon) sendAgentDefinitionsToSupervisor(repoName, repoPath string) error {
+func (d *Daemon) sendAgentDefinitionsToSupervisor(repoName, repoPath string, mqConfig state.MergeQueueConfig) error {
 	// Create agent reader
 	localAgentsDir := d.paths.RepoAgentsDir(repoName)
 	reader := agents.NewReader(localAgentsDir, repoPath)
@@ -1864,8 +1847,25 @@ func (d *Daemon) sendAgentDefinitionsToSupervisor(repoName, repoPath string) err
 	var sb strings.Builder
 	sb.WriteString("Agent definitions available for this repository:\n\n")
 
+	// Include merge-queue configuration
+	sb.WriteString("## Merge Queue Configuration\n")
+	if mqConfig.Enabled {
+		sb.WriteString(fmt.Sprintf("- Enabled: yes\n"))
+		sb.WriteString(fmt.Sprintf("- Track Mode: %s\n\n", mqConfig.TrackMode))
+	} else {
+		sb.WriteString("- Enabled: no (do NOT spawn merge-queue agent)\n\n")
+	}
+
 	for i, def := range definitions {
 		sb.WriteString(fmt.Sprintf("--- Agent Definition %d: %s (source: %s) ---\n", i+1, def.Name, def.Source))
+
+		// For merge-queue, prepend the tracking mode configuration if enabled
+		if def.Name == "merge-queue" && mqConfig.Enabled {
+			trackModePrompt := prompts.GenerateTrackingModePrompt(string(mqConfig.TrackMode))
+			sb.WriteString(trackModePrompt)
+			sb.WriteString("\n\n")
+		}
+
 		sb.WriteString(def.Content)
 		sb.WriteString("\n--- End of Definition ---\n\n")
 	}
@@ -1874,7 +1874,8 @@ func (d *Daemon) sendAgentDefinitionsToSupervisor(repoName, repoPath string) err
 	sb.WriteString("For each agent, decide:\n")
 	sb.WriteString("- Class: Is it persistent (long-running, auto-restarts) or ephemeral (task-based, cleans up)?\n")
 	sb.WriteString("- Spawn now: Should this agent start immediately on repository init?\n\n")
-	sb.WriteString("To spawn an agent, use: multiclaude agent send-message daemon \"spawn_agent:<repo>:<name>:<class>:<prompt>\"\n")
+	sb.WriteString("To spawn an agent, save the prompt to a file and use:\n")
+	sb.WriteString(fmt.Sprintf("  multiclaude agents spawn --repo %s --name <agent-name> --class <persistent|ephemeral> --prompt-file <file>\n", repoName))
 
 	// Send message to supervisor
 	msgMgr := d.getMessageManager()
@@ -1974,27 +1975,6 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 		promptFile: promptFile,
 		workDir:    workDir,
 	})
-}
-
-// startMergeQueueAgent starts a merge-queue agent with tracking mode configuration
-func (d *Daemon) startMergeQueueAgent(repoName string, repo *state.Repository, workDir string, mqConfig state.MergeQueueConfig) error {
-	promptFile, err := d.writePromptFileWithPrefix(repoName, prompts.TypeMergeQueue, "merge-queue",
-		prompts.GenerateTrackingModePrompt(string(mqConfig.TrackMode)))
-	if err != nil {
-		return fmt.Errorf("failed to write prompt file: %w", err)
-	}
-
-	if err := d.startAgentWithConfig(repoName, repo, agentStartConfig{
-		agentName:  "merge-queue",
-		agentType:  state.AgentTypeMergeQueue,
-		promptFile: promptFile,
-		workDir:    workDir,
-	}); err != nil {
-		return err
-	}
-
-	d.logger.Info("Merge-queue agent started with track mode: %s", mqConfig.TrackMode)
-	return nil
 }
 
 // writePromptFileWithPrefix writes a prompt file with an optional prefix prepended to the content

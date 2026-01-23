@@ -646,6 +646,20 @@ func (c *CLI) registerCommands() {
 		Run:         c.listAgentDefinitions,
 	}
 
+	agentsCmd.Subcommands["spawn"] = &Command{
+		Name:        "spawn",
+		Description: "Spawn an agent from a prompt file",
+		Usage:       "multiclaude agents spawn --name <name> --class <class> --prompt-file <file> [--repo <repo>] [--task <task>]",
+		Run:         c.spawnAgentFromFile,
+	}
+
+	agentsCmd.Subcommands["reset"] = &Command{
+		Name:        "reset",
+		Description: "Reset agent definitions to defaults (re-copy from templates)",
+		Usage:       "multiclaude agents reset [--repo <repo>]",
+		Run:         c.resetAgentDefinitions,
+	}
+
 	c.rootCmd.Subcommands["agents"] = agentsCmd
 }
 
@@ -2076,6 +2090,118 @@ func (c *CLI) listAgentDefinitions(args []string) error {
 	}
 
 	table.Print()
+
+	return nil
+}
+
+// spawnAgentFromFile spawns an agent using a prompt file and the daemon's spawn_agent handler.
+// This is the CLI command that connects supervisor orchestration with daemon agent spawning.
+func (c *CLI) spawnAgentFromFile(args []string) error {
+	flags, _ := ParseFlags(args)
+
+	// Get required parameters
+	agentName, ok := flags["name"]
+	if !ok || agentName == "" {
+		return errors.InvalidUsage("--name is required")
+	}
+
+	agentClass, ok := flags["class"]
+	if !ok || agentClass == "" {
+		return errors.InvalidUsage("--class is required (persistent or ephemeral)")
+	}
+	if agentClass != "persistent" && agentClass != "ephemeral" {
+		return errors.InvalidUsage("--class must be 'persistent' or 'ephemeral'")
+	}
+
+	promptFile, ok := flags["prompt-file"]
+	if !ok || promptFile == "" {
+		return errors.InvalidUsage("--prompt-file is required")
+	}
+
+	// Determine repository
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
+	}
+
+	// Read prompt from file
+	promptContent, err := os.ReadFile(promptFile)
+	if err != nil {
+		return errors.Wrap(errors.CategoryRuntime, "failed to read prompt file", err)
+	}
+
+	// Get optional task parameter
+	task := flags["task"]
+
+	// Send spawn_agent request to daemon
+	client := socket.NewClient(c.paths.DaemonSock)
+	reqArgs := map[string]interface{}{
+		"repo":   repoName,
+		"name":   agentName,
+		"class":  agentClass,
+		"prompt": string(promptContent),
+	}
+	if task != "" {
+		reqArgs["task"] = task
+	}
+
+	resp, err := client.Send(socket.Request{
+		Command: "spawn_agent",
+		Args:    reqArgs,
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("spawning agent", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to spawn agent", fmt.Errorf("%s", resp.Error))
+	}
+
+	fmt.Printf("Agent '%s' spawned successfully (class: %s)\n", agentName, agentClass)
+	return nil
+}
+
+// resetAgentDefinitions deletes the local agent definitions and re-copies from templates.
+func (c *CLI) resetAgentDefinitions(args []string) error {
+	flags, _ := ParseFlags(args)
+
+	// Determine repository
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
+	}
+
+	// Get agents directory path
+	agentsDir := c.paths.RepoAgentsDir(repoName)
+
+	// Check if directory exists
+	if _, err := os.Stat(agentsDir); os.IsNotExist(err) {
+		fmt.Printf("No agent definitions found at %s\n", agentsDir)
+		fmt.Println("Creating new definitions from templates...")
+	} else {
+		// Remove existing directory
+		fmt.Printf("Removing existing agent definitions at %s...\n", agentsDir)
+		if err := os.RemoveAll(agentsDir); err != nil {
+			return errors.Wrap(errors.CategoryRuntime, "failed to remove agent definitions", err)
+		}
+	}
+
+	// Copy templates
+	if err := templates.CopyAgentTemplates(agentsDir); err != nil {
+		return errors.Wrap(errors.CategoryRuntime, "failed to copy agent templates", err)
+	}
+
+	// List what was copied
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		return errors.Wrap(errors.CategoryRuntime, "failed to list agent definitions", err)
+	}
+
+	fmt.Printf("Reset complete. Agent definitions in %s:\n", agentsDir)
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".md" {
+			fmt.Printf("  - %s\n", entry.Name())
+		}
+	}
 
 	return nil
 }
@@ -4886,12 +5012,69 @@ func (c *CLI) writePromptFile(repoPath string, agentType prompts.AgentType, agen
 	return promptPath, nil
 }
 
-// writeMergeQueuePromptFile writes a merge-queue prompt file with tracking mode configuration
+// writeMergeQueuePromptFile writes a merge-queue prompt file with tracking mode configuration.
+// It reads the merge-queue prompt from agent definitions (configurable agent system).
 func (c *CLI) writeMergeQueuePromptFile(repoPath string, agentName string, mqConfig state.MergeQueueConfig) (string, error) {
-	// Get the complete prompt (default + custom + CLI docs)
-	promptText, err := prompts.GetPrompt(repoPath, prompts.TypeMergeQueue, c.documentation)
+	// Determine the repo name from the repoPath
+	repoName := filepath.Base(repoPath)
+
+	// Read merge-queue prompt from agent definitions
+	localAgentsDir := c.paths.RepoAgentsDir(repoName)
+	reader := agents.NewReader(localAgentsDir, repoPath)
+	definitions, err := reader.ReadAllDefinitions()
 	if err != nil {
-		return "", fmt.Errorf("failed to get prompt: %w", err)
+		return "", fmt.Errorf("failed to read agent definitions: %w", err)
+	}
+
+	// Find the merge-queue definition
+	var promptText string
+	for _, def := range definitions {
+		if def.Name == "merge-queue" {
+			promptText = def.Content
+			break
+		}
+	}
+
+	// If no merge-queue definition found, try to copy from templates and retry
+	if promptText == "" {
+		// Copy templates to local agents dir if it doesn't exist
+		if _, err := os.Stat(localAgentsDir); os.IsNotExist(err) {
+			if err := templates.CopyAgentTemplates(localAgentsDir); err != nil {
+				return "", fmt.Errorf("failed to copy agent templates: %w", err)
+			}
+			// Re-read definitions
+			definitions, err = reader.ReadAllDefinitions()
+			if err != nil {
+				return "", fmt.Errorf("failed to read agent definitions after template copy: %w", err)
+			}
+			for _, def := range definitions {
+				if def.Name == "merge-queue" {
+					promptText = def.Content
+					break
+				}
+			}
+		}
+	}
+
+	if promptText == "" {
+		return "", fmt.Errorf("no merge-queue agent definition found")
+	}
+
+	// Add CLI documentation
+	if c.documentation != "" {
+		promptText += fmt.Sprintf("\n\n---\n\n%s", c.documentation)
+	}
+
+	// Add slash commands section
+	slashCommands := prompts.GetSlashCommandsPrompt()
+	if slashCommands != "" {
+		promptText += fmt.Sprintf("\n\n---\n\n%s", slashCommands)
+	}
+
+	// Add custom prompt if it exists
+	customPrompt, err := prompts.LoadCustomPrompt(repoPath, prompts.TypeMergeQueue)
+	if err == nil && customPrompt != "" {
+		promptText += fmt.Sprintf("\n\n---\n\nRepository-specific instructions:\n\n%s", customPrompt)
 	}
 
 	// Add tracking mode configuration to the prompt
@@ -4917,12 +5100,69 @@ type WorkerConfig struct {
 	PushToBranch string // Branch to push to instead of creating a new PR (for iterating on existing PRs)
 }
 
-// writeWorkerPromptFile writes a worker prompt file with optional configuration
+// writeWorkerPromptFile writes a worker prompt file with optional configuration.
+// It reads the worker prompt from agent definitions (configurable agent system).
 func (c *CLI) writeWorkerPromptFile(repoPath string, agentName string, config WorkerConfig) (string, error) {
-	// Get the complete prompt (default + custom + CLI docs)
-	promptText, err := prompts.GetPrompt(repoPath, prompts.TypeWorker, c.documentation)
+	// Determine the repo name from the repoPath
+	repoName := filepath.Base(repoPath)
+
+	// Read worker prompt from agent definitions
+	localAgentsDir := c.paths.RepoAgentsDir(repoName)
+	reader := agents.NewReader(localAgentsDir, repoPath)
+	definitions, err := reader.ReadAllDefinitions()
 	if err != nil {
-		return "", fmt.Errorf("failed to get prompt: %w", err)
+		return "", fmt.Errorf("failed to read agent definitions: %w", err)
+	}
+
+	// Find the worker definition
+	var promptText string
+	for _, def := range definitions {
+		if def.Name == "worker" {
+			promptText = def.Content
+			break
+		}
+	}
+
+	// If no worker definition found, try to copy from templates and retry
+	if promptText == "" {
+		// Copy templates to local agents dir if it doesn't exist
+		if _, err := os.Stat(localAgentsDir); os.IsNotExist(err) {
+			if err := templates.CopyAgentTemplates(localAgentsDir); err != nil {
+				return "", fmt.Errorf("failed to copy agent templates: %w", err)
+			}
+			// Re-read definitions
+			definitions, err = reader.ReadAllDefinitions()
+			if err != nil {
+				return "", fmt.Errorf("failed to read agent definitions after template copy: %w", err)
+			}
+			for _, def := range definitions {
+				if def.Name == "worker" {
+					promptText = def.Content
+					break
+				}
+			}
+		}
+	}
+
+	if promptText == "" {
+		return "", fmt.Errorf("no worker agent definition found")
+	}
+
+	// Add CLI documentation
+	if c.documentation != "" {
+		promptText += fmt.Sprintf("\n\n---\n\n%s", c.documentation)
+	}
+
+	// Add slash commands section
+	slashCommands := prompts.GetSlashCommandsPrompt()
+	if slashCommands != "" {
+		promptText += fmt.Sprintf("\n\n---\n\n%s", slashCommands)
+	}
+
+	// Add custom prompt if it exists
+	customPrompt, err := prompts.LoadCustomPrompt(repoPath, prompts.TypeWorker)
+	if err == nil && customPrompt != "" {
+		promptText += fmt.Sprintf("\n\n---\n\nRepository-specific instructions:\n\n%s", customPrompt)
 	}
 
 	// Add push-to configuration if specified

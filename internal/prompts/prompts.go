@@ -22,35 +22,28 @@ const (
 )
 
 // Embedded default prompts
+// Only supervisor and workspace are "hardcoded" - other agent types (worker, merge-queue, review)
+// should come from configurable agent definitions in agent-templates.
 //
 //go:embed supervisor.md
 var defaultSupervisorPrompt string
 
-//go:embed worker.md
-var defaultWorkerPrompt string
-
-//go:embed merge-queue.md
-var defaultMergeQueuePrompt string
-
 //go:embed workspace.md
 var defaultWorkspacePrompt string
 
-//go:embed review.md
-var defaultReviewPrompt string
-
-// GetDefaultPrompt returns the default prompt for the given agent type
+// GetDefaultPrompt returns the default prompt for the given agent type.
+// Only supervisor and workspace have embedded default prompts.
+// Worker, merge-queue, and review prompts should come from agent definitions.
 func GetDefaultPrompt(agentType AgentType) string {
 	switch agentType {
 	case TypeSupervisor:
 		return defaultSupervisorPrompt
-	case TypeWorker:
-		return defaultWorkerPrompt
-	case TypeMergeQueue:
-		return defaultMergeQueuePrompt
 	case TypeWorkspace:
 		return defaultWorkspacePrompt
-	case TypeReview:
-		return defaultReviewPrompt
+	case TypeWorker, TypeMergeQueue, TypeReview:
+		// These agent types should use configurable agent definitions
+		// from ~/.multiclaude/repos/<repo>/agents/ or <repo>/.multiclaude/agents/
+		return ""
 	default:
 		return ""
 	}
