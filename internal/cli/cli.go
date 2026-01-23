@@ -23,6 +23,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/prompts"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
+	"github.com/dlorenc/multiclaude/internal/templates"
 	"github.com/dlorenc/multiclaude/internal/worktree"
 	"github.com/dlorenc/multiclaude/pkg/claude"
 	"github.com/dlorenc/multiclaude/pkg/config"
@@ -997,6 +998,13 @@ func (c *CLI) initRepo(args []string) error {
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return errors.GitOperationFailed("clone", err)
+	}
+
+	// Copy agent templates to per-repo agents directory
+	agentsDir := c.paths.RepoAgentsDir(repoName)
+	fmt.Printf("Copying agent templates to: %s\n", agentsDir)
+	if err := templates.CopyAgentTemplates(agentsDir); err != nil {
+		return fmt.Errorf("failed to copy agent templates: %w", err)
 	}
 
 	// Create tmux session

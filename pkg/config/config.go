@@ -69,6 +69,12 @@ func (p *Paths) RepoDir(repoName string) string {
 	return filepath.Join(p.ReposDir, repoName)
 }
 
+// RepoAgentsDir returns the path for a repository's agent definitions
+// These are the per-repo agent templates that define configurable agents
+func (p *Paths) RepoAgentsDir(repoName string) string {
+	return filepath.Join(p.ReposDir, repoName, "agents")
+}
+
 // WorktreeDir returns the path for a repository's worktrees
 func (p *Paths) WorktreeDir(repoName string) string {
 	return filepath.Join(p.WorktreesDir, repoName)
