@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/dlorenc/multiclaude/internal/prompts/commands"
+	"github.com/dlorenc/multiclaude/internal/provider"
 	"github.com/dlorenc/multiclaude/internal/state"
 )
 
@@ -137,22 +138,51 @@ func GetPrompt(repoPath string, agentType state.AgentType, cliDocs string) (stri
 
 // GenerateTrackingModePrompt generates prompt text explaining which PRs to track
 // based on the tracking mode. The trackMode parameter should be "all", "author", or "assigned".
+// This version defaults to GitHub commands for backward compatibility.
 func GenerateTrackingModePrompt(trackMode string) string {
+	return GenerateTrackingModePromptWithProvider(trackMode, state.ProviderGitHub, nil)
+}
+
+// GenerateTrackingModePromptWithProvider generates provider-aware prompt text explaining which PRs to track.
+func GenerateTrackingModePromptWithProvider(trackMode string, providerType state.ProviderType, provConfig *state.ProviderConfig) string {
+	// Get the appropriate provider for command generation
+	var prov provider.Provider
+	if providerType == state.ProviderAzureDevOps && provConfig != nil {
+		prov = provider.NewAzureDevOpsWithConfig(provConfig.Organization, provConfig.Project, provConfig.RepoName)
+	} else {
+		prov = provider.NewGitHub()
+	}
+
 	switch trackMode {
 	case "author":
-		return `## PR Tracking Mode: Author Only
+		return fmt.Sprintf(`## PR Tracking Mode: Author Only
 
 **IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are the author.
 
 When listing and monitoring PRs, use:
-` + "```bash" + `
-gh pr list --author @me --label multiclaude
-` + "```" + `
+`+"```bash"+`
+%s
+`+"```"+`
 
-Do NOT process or attempt to merge PRs authored by others. Focus only on PRs created by multiclaude workers.`
+Do NOT process or attempt to merge PRs authored by others. Focus only on PRs created by multiclaude workers.`,
+			prov.PRListCommand("multiclaude", "@me"))
 
 	case "assigned":
-		return `## PR Tracking Mode: Assigned Only
+		// Note: ADO doesn't have assignee filter in the same way, so we adapt the message
+		if providerType == state.ProviderAzureDevOps {
+			return fmt.Sprintf(`## PR Tracking Mode: Assigned Only
+
+**IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are the reviewer.
+
+When listing and monitoring PRs, filter for PRs where you are a reviewer:
+`+"```bash"+`
+%s
+`+"```"+`
+
+Do NOT process or attempt to complete PRs unless they are assigned to you for review.`,
+				prov.PRListCommand("multiclaude", ""))
+		}
+		return fmt.Sprintf(`## PR Tracking Mode: Assigned Only
 
 **IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are assigned.
 
@@ -161,25 +191,82 @@ When listing and monitoring PRs, use:
 gh pr list --assignee @me --label multiclaude
 ` + "```" + `
 
-Do NOT process or attempt to merge PRs unless they are assigned to you. Focus only on PRs explicitly assigned to multiclaude.`
+Do NOT process or attempt to merge PRs unless they are assigned to you. Focus only on PRs explicitly assigned to multiclaude.`)
 
 	default: // "all"
-		return `## PR Tracking Mode: All PRs
+		return fmt.Sprintf(`## PR Tracking Mode: All PRs
 
 This repository is configured to track all PRs with the multiclaude label.
 
 When listing and monitoring PRs, use:
-` + "```bash" + `
-gh pr list --label multiclaude
-` + "```" + `
+`+"```bash"+`
+%s
+`+"```"+`
 
-Monitor and process all multiclaude-labeled PRs regardless of author or assignee.`
+Monitor and process all multiclaude-labeled PRs regardless of author or assignee.`,
+			prov.PRListCommand("multiclaude", ""))
 	}
 }
 
 // GenerateForkWorkflowPrompt generates prompt text explaining fork-based workflow.
 // This is injected into all agent prompts when working in a fork.
+// This version defaults to GitHub commands for backward compatibility.
 func GenerateForkWorkflowPrompt(upstreamOwner, upstreamRepo, forkOwner string) string {
+	return GenerateForkWorkflowPromptWithProvider(upstreamOwner, upstreamRepo, forkOwner, state.ProviderGitHub, nil)
+}
+
+// GenerateForkWorkflowPromptWithProvider generates provider-aware prompt text for fork workflow.
+func GenerateForkWorkflowPromptWithProvider(upstreamOwner, upstreamRepo, forkOwner string, providerType state.ProviderType, provConfig *state.ProviderConfig) string {
+	// Azure DevOps forks work differently - provide different guidance
+	if providerType == state.ProviderAzureDevOps {
+		return fmt.Sprintf(`## Fork Workflow (Azure DevOps)
+
+You are working in a fork repository.
+
+**Key differences from main repository workflow:**
+
+### Git Remotes
+- **origin**: Your fork - push branches here
+- **upstream**: Original repo - PRs target this repo
+
+### Creating PRs
+PRs should target the upstream repository. In Azure DevOps, you create PRs through the web UI or API:
+
+` + "```bash" + `
+# Fetch upstream changes first
+git fetch upstream main
+
+# Create your branch and push to origin
+git checkout -b feature-branch
+# ... make changes ...
+git push origin feature-branch
+
+# Then create a PR via the Azure DevOps API or web UI
+# The PR should target the upstream repository
+` + "```" + `
+
+### Keeping Synced
+Keep your fork updated with upstream:
+` + "```bash" + `
+# Fetch upstream changes
+git fetch upstream main
+
+# Rebase your work
+git rebase upstream/main
+
+# Update your fork's main
+git checkout main && git merge --ff-only upstream/main && git push origin main
+` + "```" + `
+
+### Important Notes
+- **You cannot complete PRs** - upstream maintainers do that
+- Create branches on your fork (origin), target upstream for PRs
+- Keep rebasing onto upstream/main to avoid conflicts
+- Use the Azure DevOps REST API with AZURE_DEVOPS_PAT for automation
+`)
+	}
+
+	// GitHub fork workflow (default)
 	return fmt.Sprintf(`## Fork Workflow (Auto-detected)
 
 You are working in a fork of **%s/%s**.
@@ -223,6 +310,51 @@ git checkout main && git merge --ff-only upstream/main && git push origin main
 		upstreamOwner, upstreamRepo,
 		upstreamOwner, upstreamRepo, forkOwner,
 		upstreamOwner, upstreamRepo)
+}
+
+// GenerateProviderInfoPrompt generates prompt text explaining the git hosting provider.
+// This helps agents understand which commands to use.
+func GenerateProviderInfoPrompt(providerType state.ProviderType, provConfig *state.ProviderConfig) string {
+	if providerType == state.ProviderAzureDevOps && provConfig != nil {
+		return fmt.Sprintf(`## Git Hosting Provider: Azure DevOps
+
+This repository is hosted on **Azure DevOps**.
+
+**Organization**: %s
+**Project**: %s
+**Repository**: %s
+
+### Authentication
+All Azure DevOps API calls require the AZURE_DEVOPS_PAT environment variable to be set.
+
+### Key Differences from GitHub
+- Use curl with the Azure DevOps REST API instead of the 'gh' CLI
+- PRs are called "Pull Requests" and use a different API
+- Labels are called "tags" in Azure DevOps
+- CI pipelines work differently than GitHub Actions
+
+### Common Commands
+`+"```bash"+`
+# List open PRs
+curl -s -u ":$AZURE_DEVOPS_PAT" "https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests?api-version=7.0&searchCriteria.status=active"
+
+# View PR details
+curl -s -u ":$AZURE_DEVOPS_PAT" "https://dev.azure.com/%s/%s/_apis/git/pullrequests/{PR_NUMBER}?api-version=7.0"
+
+# Add a PR comment
+curl -s -u ":$AZURE_DEVOPS_PAT" -X POST "https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests/{PR_NUMBER}/threads?api-version=7.0" \
+  -H "Content-Type: application/json" \
+  -d '{"comments":[{"content":"Your comment here"}]}'
+`+"```"+`
+`,
+			provConfig.Organization, provConfig.Project, provConfig.RepoName,
+			provConfig.Organization, provConfig.Project, provConfig.RepoName,
+			provConfig.Organization, provConfig.Project,
+			provConfig.Organization, provConfig.Project, provConfig.RepoName)
+	}
+
+	// GitHub is the default - no special prompt needed as agents assume GitHub by default
+	return ""
 }
 
 // GetSlashCommandsPrompt returns a formatted prompt section containing all available

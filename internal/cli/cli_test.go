@@ -2144,13 +2144,13 @@ func TestInitRepoNameParsing(t *testing.T) {
 			name:        "URL that is just slashes",
 			url:         "///",
 			wantError:   true,
-			errContains: "could not determine repository name",
+			errContains: "unsupported repository URL",
 		},
 		{
 			name:        "domain only URL with trailing slash",
 			url:         "https://github.com/",
 			wantError:   true,
-			errContains: "could not determine repository name",
+			errContains: "unsupported repository URL",
 		},
 	}
 
