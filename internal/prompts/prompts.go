@@ -59,7 +59,7 @@ func LoadCustomPrompt(repoPath string, agentType AgentType) (string, error) {
 	case TypeWorker:
 		filename = "WORKER.md"
 	case TypeMergeQueue:
-		filename = "REVIEWER.md"
+		filename = "MERGE-QUEUE.md"
 	case TypeWorkspace:
 		filename = "WORKSPACE.md"
 	case TypeReview:

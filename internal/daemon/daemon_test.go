@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -2826,4 +2827,148 @@ func TestDaemonTriggerWorktreeRefresh(t *testing.T) {
 	// Test multiple triggers
 	d.TriggerWorktreeRefresh()
 	d.TriggerWorktreeRefresh()
+}
+
+func TestHandleSpawnAgent(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupRepo   bool
+		setupAgent  bool
+		args        map[string]interface{}
+		wantSuccess bool
+		wantError   string
+	}{
+		{
+			name:      "missing repo arg",
+			setupRepo: false,
+			args: map[string]interface{}{
+				"name":   "test-agent",
+				"class":  "ephemeral",
+				"prompt": "Test prompt",
+			},
+			wantSuccess: false,
+			wantError:   "repository name is required",
+		},
+		{
+			name:      "missing name arg",
+			setupRepo: true,
+			args: map[string]interface{}{
+				"repo":   "test-repo",
+				"class":  "ephemeral",
+				"prompt": "Test prompt",
+			},
+			wantSuccess: false,
+			wantError:   "agent name is required",
+		},
+		{
+			name:      "missing class arg",
+			setupRepo: true,
+			args: map[string]interface{}{
+				"repo":   "test-repo",
+				"name":   "test-agent",
+				"prompt": "Test prompt",
+			},
+			wantSuccess: false,
+			wantError:   "agent class is required",
+		},
+		{
+			name:      "missing prompt arg",
+			setupRepo: true,
+			args: map[string]interface{}{
+				"repo":  "test-repo",
+				"name":  "test-agent",
+				"class": "ephemeral",
+			},
+			wantSuccess: false,
+			wantError:   "prompt text is required",
+		},
+		{
+			name:      "invalid class value",
+			setupRepo: true,
+			args: map[string]interface{}{
+				"repo":   "test-repo",
+				"name":   "test-agent",
+				"class":  "invalid",
+				"prompt": "Test prompt",
+			},
+			wantSuccess: false,
+			wantError:   "invalid agent class",
+		},
+		{
+			name:      "repo not found",
+			setupRepo: false,
+			args: map[string]interface{}{
+				"repo":   "nonexistent-repo",
+				"name":   "test-agent",
+				"class":  "ephemeral",
+				"prompt": "Test prompt",
+			},
+			wantSuccess: false,
+			wantError:   "not found",
+		},
+		{
+			name:       "agent already exists",
+			setupRepo:  true,
+			setupAgent: true,
+			args: map[string]interface{}{
+				"repo":   "test-repo",
+				"name":   "existing-agent",
+				"class":  "ephemeral",
+				"prompt": "Test prompt",
+			},
+			wantSuccess: false,
+			wantError:   "already exists",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, cleanup := setupTestDaemon(t)
+			defer cleanup()
+
+			if tt.setupRepo {
+				repo := &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "mc-test-repo",
+					Agents:      make(map[string]state.Agent),
+				}
+				if err := d.state.AddRepo("test-repo", repo); err != nil {
+					t.Fatalf("Failed to add repo: %v", err)
+				}
+			}
+
+			if tt.setupAgent {
+				agent := state.Agent{
+					Type:         state.AgentTypeWorker,
+					WorktreePath: "/tmp/test",
+					TmuxWindow:   "existing-agent",
+					SessionID:    "test-session-id",
+					CreatedAt:    time.Now(),
+				}
+				if err := d.state.AddAgent("test-repo", "existing-agent", agent); err != nil {
+					t.Fatalf("Failed to add agent: %v", err)
+				}
+			}
+
+			resp := d.handleSpawnAgent(socket.Request{
+				Command: "spawn_agent",
+				Args:    tt.args,
+			})
+
+			if resp.Success != tt.wantSuccess {
+				t.Errorf("handleSpawnAgent() success = %v, want %v; error = %s", resp.Success, tt.wantSuccess, resp.Error)
+			}
+
+			if !tt.wantSuccess && tt.wantError != "" {
+				if resp.Error == "" || !containsIgnoreCase(resp.Error, tt.wantError) {
+					t.Errorf("handleSpawnAgent() error = %q, want to contain %q", resp.Error, tt.wantError)
+				}
+			}
+		})
+	}
+}
+
+// containsIgnoreCase checks if s contains substr (case-insensitive)
+func containsIgnoreCase(s, substr string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
