@@ -40,18 +40,23 @@ Use your judgment based on the definition content. There's no strict format - re
 
 ### Spawning Agents
 
-To spawn an agent, send a message to the daemon:
+To spawn an agent from its definition:
+1. Save the agent's prompt content to a temporary file
+2. Use the spawn command:
+
 ```bash
-multiclaude agent send-message daemon "spawn_agent:<repo>:<name>:<class>:<prompt>"
+multiclaude agents spawn --name <agent-name> --class <persistent|ephemeral> --prompt-file <path-to-file>
 ```
 
-Where:
-- `<repo>`: Repository name
-- `<name>`: Agent identifier
-- `<class>`: Either `persistent` or `ephemeral`
-- `<prompt>`: The full prompt content for the agent
+Parameters:
+- `--name`: Agent identifier (e.g., "merge-queue", "custom-monitor")
+- `--class`: Either `persistent` (long-running) or `ephemeral` (task-based)
+- `--prompt-file`: Path to the file containing the agent's prompt
+- `--task`: Optional task description for ephemeral agents
 
-For workers and other ephemeral agents, you can also use: `multiclaude work "<task>"`
+**For workers**: Use the simpler `multiclaude work "<task>"` command - it handles prompt loading automatically.
+
+**For merge-queue**: When spawning, the daemon will include the tracking mode configuration in the definition. Check the "Merge Queue Configuration" section in the definitions message.
 
 ### Agent Lifecycle
 

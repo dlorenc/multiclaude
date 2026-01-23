@@ -14,10 +14,11 @@ func TestGetDefaultPrompt(t *testing.T) {
 		wantEmpty bool
 	}{
 		{"supervisor", TypeSupervisor, false},
-		{"worker", TypeWorker, false},
-		{"merge-queue", TypeMergeQueue, false},
 		{"workspace", TypeWorkspace, false},
-		{"review", TypeReview, false},
+		// Worker, merge-queue, and review should return empty - they use configurable agent definitions
+		{"worker", TypeWorker, true},
+		{"merge-queue", TypeMergeQueue, true},
+		{"review", TypeReview, true},
 		{"unknown", AgentType("unknown"), true},
 	}
 
@@ -35,7 +36,7 @@ func TestGetDefaultPrompt(t *testing.T) {
 }
 
 func TestGetDefaultPromptContent(t *testing.T) {
-	// Verify supervisor prompt
+	// Verify supervisor prompt (hardcoded - has embedded content)
 	supervisorPrompt := GetDefaultPrompt(TypeSupervisor)
 	if !strings.Contains(supervisorPrompt, "supervisor agent") {
 		t.Error("supervisor prompt should mention 'supervisor agent'")
@@ -44,25 +45,7 @@ func TestGetDefaultPromptContent(t *testing.T) {
 		t.Error("supervisor prompt should mention message commands")
 	}
 
-	// Verify worker prompt
-	workerPrompt := GetDefaultPrompt(TypeWorker)
-	if !strings.Contains(workerPrompt, "worker agent") {
-		t.Error("worker prompt should mention 'worker agent'")
-	}
-	if !strings.Contains(workerPrompt, "multiclaude agent complete") {
-		t.Error("worker prompt should mention complete command")
-	}
-
-	// Verify merge queue prompt
-	mergePrompt := GetDefaultPrompt(TypeMergeQueue)
-	if !strings.Contains(mergePrompt, "merge queue agent") {
-		t.Error("merge queue prompt should mention 'merge queue agent'")
-	}
-	if !strings.Contains(mergePrompt, "CRITICAL CONSTRAINT") {
-		t.Error("merge queue prompt should have critical constraint about CI")
-	}
-
-	// Verify workspace prompt
+	// Verify workspace prompt (hardcoded - has embedded content)
 	workspacePrompt := GetDefaultPrompt(TypeWorkspace)
 	if !strings.Contains(workspacePrompt, "user workspace") {
 		t.Error("workspace prompt should mention 'user workspace'")
@@ -74,19 +57,19 @@ func TestGetDefaultPromptContent(t *testing.T) {
 		t.Error("workspace prompt should document worker spawning capabilities")
 	}
 
-	// Verify review prompt
-	reviewPrompt := GetDefaultPrompt(TypeReview)
-	if !strings.Contains(reviewPrompt, "code review agent") {
-		t.Error("review prompt should mention 'code review agent'")
+	// Note: Worker, merge-queue, and review prompts are now configurable
+	// and come from agent definitions, not embedded defaults.
+	// Their content is tested via the templates package instead.
+
+	// Verify worker, merge-queue, and review return empty (configurable agents)
+	if GetDefaultPrompt(TypeWorker) != "" {
+		t.Error("worker prompt should be empty (configurable agent)")
 	}
-	if !strings.Contains(reviewPrompt, "Forward progress is forward") {
-		t.Error("review prompt should mention the philosophy 'Forward progress is forward'")
+	if GetDefaultPrompt(TypeMergeQueue) != "" {
+		t.Error("merge-queue prompt should be empty (configurable agent)")
 	}
-	if !strings.Contains(reviewPrompt, "[BLOCKING]") {
-		t.Error("review prompt should mention [BLOCKING] comment format")
-	}
-	if !strings.Contains(reviewPrompt, "multiclaude agent complete") {
-		t.Error("review prompt should mention complete command")
+	if GetDefaultPrompt(TypeReview) != "" {
+		t.Error("review prompt should be empty (configurable agent)")
 	}
 }
 
@@ -273,19 +256,19 @@ func TestGetPrompt(t *testing.T) {
 			t.Fatalf("failed to create .multiclaude dir: %v", err)
 		}
 
-		// Write custom prompt
+		// Write custom prompt for supervisor (which has embedded default)
 		customContent := "Use emojis in all messages! 🎉"
-		promptPath := filepath.Join(multiclaudeDir, "WORKER.md")
+		promptPath := filepath.Join(multiclaudeDir, "SUPERVISOR.md")
 		if err := os.WriteFile(promptPath, []byte(customContent), 0644); err != nil {
 			t.Fatalf("failed to write custom prompt: %v", err)
 		}
 
-		prompt, err := GetPrompt(tmpDir, TypeWorker, "")
+		prompt, err := GetPrompt(tmpDir, TypeSupervisor, "")
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
-		if !strings.Contains(prompt, "worker agent") {
-			t.Error("prompt should contain default worker text")
+		if !strings.Contains(prompt, "supervisor agent") {
+			t.Error("prompt should contain default supervisor text")
 		}
 		if !strings.Contains(prompt, "Use emojis") {
 			t.Error("prompt should contain custom text")
@@ -387,21 +370,21 @@ func TestGetSlashCommandsPromptContainsCLICommands(t *testing.T) {
 	}
 }
 
-// TestGetPromptIncludesSlashCommandsForAllAgentTypes verifies that GetPrompt()
-// includes the slash commands section for every agent type.
-func TestGetPromptIncludesSlashCommandsForAllAgentTypes(t *testing.T) {
+// TestGetPromptIncludesSlashCommandsForHardcodedAgentTypes verifies that GetPrompt()
+// includes the slash commands section for hardcoded agent types (supervisor, workspace).
+// Worker, merge-queue, and review are configurable agents and their prompts come
+// from agent definitions, not GetPrompt().
+func TestGetPromptIncludesSlashCommandsForHardcodedAgentTypes(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "multiclaude-prompts-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
+	// Only test hardcoded agent types (supervisor, workspace)
 	agentTypes := []AgentType{
-		TypeWorker,
 		TypeSupervisor,
-		TypeMergeQueue,
 		TypeWorkspace,
-		TypeReview,
 	}
 
 	for _, agentType := range agentTypes {
@@ -422,6 +405,38 @@ func TestGetPromptIncludesSlashCommandsForAllAgentTypes(t *testing.T) {
 				if !strings.Contains(prompt, cmd) {
 					t.Errorf("GetPrompt(%s) should contain slash command %q", agentType, cmd)
 				}
+			}
+		})
+	}
+}
+
+// TestGetPromptForConfigurableAgentTypesReturnsSlashCommandsOnly verifies that
+// configurable agent types (worker, merge-queue, review) only get slash commands
+// since they have no embedded default prompt.
+func TestGetPromptForConfigurableAgentTypesReturnsSlashCommandsOnly(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "multiclaude-prompts-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Configurable agent types have no embedded prompt
+	agentTypes := []AgentType{
+		TypeWorker,
+		TypeMergeQueue,
+		TypeReview,
+	}
+
+	for _, agentType := range agentTypes {
+		t.Run(string(agentType), func(t *testing.T) {
+			prompt, err := GetPrompt(tmpDir, agentType, "")
+			if err != nil {
+				t.Fatalf("GetPrompt failed for %s: %v", agentType, err)
+			}
+
+			// Should still include slash commands even with empty default
+			if !strings.Contains(prompt, "## Slash Commands") {
+				t.Errorf("GetPrompt(%s) should contain slash commands even for configurable agents", agentType)
 			}
 		})
 	}
