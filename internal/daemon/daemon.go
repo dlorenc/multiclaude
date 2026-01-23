@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dlorenc/multiclaude/internal/agents"
 	"github.com/dlorenc/multiclaude/internal/hooks"
 	"github.com/dlorenc/multiclaude/internal/logging"
 	"github.com/dlorenc/multiclaude/internal/messages"
@@ -662,6 +663,9 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 
 	case "task_history":
 		return d.handleTaskHistory(req)
+
+	case "spawn_agent":
+		return d.handleSpawnAgent(req)
 
 	default:
 		return socket.Response{
@@ -1431,6 +1435,162 @@ func (d *Daemon) handleTaskHistory(req socket.Request) socket.Response {
 	return socket.Response{Success: true, Data: result}
 }
 
+// handleSpawnAgent spawns a new agent with an inline prompt (no hardcoded type).
+// This is used by the supervisor to spawn agents based on markdown definitions.
+// Args:
+//   - repo: repository name
+//   - name: agent name (used for tmux window and worktree)
+//   - class: "persistent" or "ephemeral"
+//   - prompt: full prompt text to use as system prompt
+//   - task: optional task description (for ephemeral/worker agents)
+func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
+	repoName, errResp, ok := getRequiredStringArg(req.Args, "repo", "repository name is required")
+	if !ok {
+		return errResp
+	}
+
+	agentName, errResp, ok := getRequiredStringArg(req.Args, "name", "agent name is required")
+	if !ok {
+		return errResp
+	}
+
+	agentClass, errResp, ok := getRequiredStringArg(req.Args, "class", "agent class is required (persistent or ephemeral)")
+	if !ok {
+		return errResp
+	}
+
+	promptText, errResp, ok := getRequiredStringArg(req.Args, "prompt", "prompt text is required")
+	if !ok {
+		return errResp
+	}
+
+	// Validate class
+	if agentClass != "persistent" && agentClass != "ephemeral" {
+		return socket.Response{
+			Success: false,
+			Error:   fmt.Sprintf("invalid agent class %q: must be 'persistent' or 'ephemeral'", agentClass),
+		}
+	}
+
+	// Get optional task
+	task, _ := req.Args["task"].(string)
+
+	// Get repository
+	repo, exists := d.state.GetRepo(repoName)
+	if !exists {
+		return socket.Response{Success: false, Error: fmt.Sprintf("repository %q not found", repoName)}
+	}
+
+	// Check if agent already exists
+	if _, exists := d.state.GetAgent(repoName, agentName); exists {
+		return socket.Response{Success: false, Error: fmt.Sprintf("agent %q already exists in repository %q", agentName, repoName)}
+	}
+
+	// Determine agent type based on class
+	var agentType state.AgentType
+	if agentClass == "persistent" {
+		// For persistent agents, use a generic type or determine from name
+		if agentName == "merge-queue" {
+			agentType = state.AgentTypeMergeQueue
+		} else {
+			// Generic persistent agent (future: could add a new type)
+			agentType = state.AgentTypeMergeQueue // Reuse for now, behavior is similar
+		}
+	} else {
+		// Ephemeral agents are workers or reviewers
+		if strings.Contains(strings.ToLower(agentName), "review") {
+			agentType = state.AgentTypeReview
+		} else {
+			agentType = state.AgentTypeWorker
+		}
+	}
+
+	// Create worktree for the agent
+	repoPath := d.paths.RepoDir(repoName)
+	worktreePath := d.paths.AgentWorktree(repoName, agentName)
+
+	wt := worktree.NewManager(repoPath)
+
+	// Create branch name based on agent type
+	branchName := fmt.Sprintf("work/%s", agentName)
+	if agentType == state.AgentTypeMergeQueue {
+		// Persistent agents work on main
+		branchName = ""
+	}
+
+	// Create the worktree
+	if branchName != "" {
+		if err := wt.CreateNewBranch(worktreePath, branchName, "HEAD"); err != nil {
+			return socket.Response{Success: false, Error: fmt.Sprintf("failed to create worktree: %v", err)}
+		}
+	} else {
+		// For persistent agents, just create worktree on current branch (or reuse repo dir)
+		worktreePath = repoPath
+	}
+
+	// Create tmux window with working directory
+	cmd := exec.Command("tmux", "new-window", "-d", "-t", repo.TmuxSession, "-n", agentName, "-c", worktreePath)
+	if err := cmd.Run(); err != nil {
+		// Clean up worktree on failure
+		if branchName != "" {
+			wt.Remove(worktreePath, true)
+		}
+		return socket.Response{Success: false, Error: fmt.Sprintf("failed to create tmux window: %v", err)}
+	}
+
+	// Write prompt to file
+	promptDir := filepath.Join(d.paths.Root, "prompts")
+	if err := os.MkdirAll(promptDir, 0755); err != nil {
+		return socket.Response{Success: false, Error: fmt.Sprintf("failed to create prompt directory: %v", err)}
+	}
+
+	promptPath := filepath.Join(promptDir, fmt.Sprintf("%s.md", agentName))
+	if err := os.WriteFile(promptPath, []byte(promptText), 0644); err != nil {
+		return socket.Response{Success: false, Error: fmt.Sprintf("failed to write prompt file: %v", err)}
+	}
+
+	// Copy hooks config
+	if err := hooks.CopyConfig(repoPath, worktreePath); err != nil {
+		d.logger.Warn("Failed to copy hooks config: %v", err)
+	}
+
+	// Start Claude in the tmux window
+	cfg := agentStartConfig{
+		agentName:  agentName,
+		agentType:  agentType,
+		promptFile: promptPath,
+		workDir:    worktreePath,
+	}
+
+	if err := d.startAgentWithConfig(repoName, repo, cfg); err != nil {
+		// Clean up on failure
+		d.tmux.KillWindow(d.ctx, repo.TmuxSession, agentName)
+		if branchName != "" {
+			wt.Remove(worktreePath, true)
+		}
+		return socket.Response{Success: false, Error: fmt.Sprintf("failed to start agent: %v", err)}
+	}
+
+	// Update task if provided
+	if task != "" {
+		agent, _ := d.state.GetAgent(repoName, agentName)
+		agent.Task = task
+		d.state.UpdateAgent(repoName, agentName, agent)
+	}
+
+	d.logger.Info("Spawned agent %s/%s (class=%s, type=%s)", repoName, agentName, agentClass, agentType)
+
+	return socket.Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"name":          agentName,
+			"class":         agentClass,
+			"type":          string(agentType),
+			"worktree_path": worktreePath,
+		},
+	}
+}
+
 // cleanupOrphanedWorktrees removes worktree directories without git tracking
 func (d *Daemon) cleanupOrphanedWorktrees() {
 	repoNames := d.state.ListRepos()
@@ -1617,6 +1777,11 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 		d.logger.Error("Failed to start supervisor for %s: %v", repoName, err)
 	}
 
+	// Send agent definitions to supervisor
+	if err := d.sendAgentDefinitionsToSupervisor(repoName, repoPath); err != nil {
+		d.logger.Warn("Failed to send agent definitions to supervisor: %v", err)
+	}
+
 	// Start merge-queue agent only if enabled
 	if mqConfig.Enabled {
 		if err := d.startMergeQueueAgent(repoName, repo, repoPath, mqConfig); err != nil {
@@ -1678,6 +1843,62 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 		}
 	}
 
+	return nil
+}
+
+// sendAgentDefinitionsToSupervisor reads agent definitions and sends them to the supervisor.
+// This allows the supervisor to know about available agents and spawn them as needed.
+func (d *Daemon) sendAgentDefinitionsToSupervisor(repoName, repoPath string) error {
+	// Create agent reader
+	localAgentsDir := d.paths.RepoAgentsDir(repoName)
+	reader := agents.NewReader(localAgentsDir, repoPath)
+
+	// Read all definitions
+	definitions, err := reader.ReadAllDefinitions()
+	if err != nil {
+		return fmt.Errorf("failed to read agent definitions: %w", err)
+	}
+
+	if len(definitions) == 0 {
+		d.logger.Info("No agent definitions found for repo %s", repoName)
+		return nil
+	}
+
+	// Build message with all definitions
+	var sb strings.Builder
+	sb.WriteString("Agent definitions available for this repository:\n\n")
+	sb.WriteString("You are the orchestrator. Review these definitions and spawn agents as needed.\n")
+	sb.WriteString("Use the spawn_agent command (via socket) to spawn agents with their prompts.\n\n")
+
+	for i, def := range definitions {
+		title := def.ParseTitle()
+		class := def.ParseClass()
+		spawnOnInit := def.ParseSpawnOnInit()
+
+		sb.WriteString(fmt.Sprintf("--- Agent Definition %d: %s ---\n", i+1, def.Name))
+		sb.WriteString(fmt.Sprintf("Title: %s\n", title))
+		sb.WriteString(fmt.Sprintf("Class: %s\n", class))
+		sb.WriteString(fmt.Sprintf("Spawn on init: %v\n", spawnOnInit))
+		sb.WriteString(fmt.Sprintf("Source: %s\n\n", def.Source))
+		sb.WriteString("Full prompt content:\n")
+		sb.WriteString(def.Content)
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("--- End of Agent Definitions ---\n\n")
+	sb.WriteString("To spawn an agent, send a request to the daemon with:\n")
+	sb.WriteString("- Command: spawn_agent\n")
+	sb.WriteString("- Args: repo, name, class (persistent/ephemeral), prompt\n")
+	sb.WriteString("The daemon will create the worktree, tmux window, and start Claude.\n\n")
+	sb.WriteString("For agents marked 'Spawn on init: true', you should spawn them now.\n")
+
+	// Send message to supervisor
+	msgMgr := d.getMessageManager()
+	if _, err := msgMgr.Send(repoName, "daemon", "supervisor", sb.String()); err != nil {
+		return fmt.Errorf("failed to send message to supervisor: %w", err)
+	}
+
+	d.logger.Info("Sent %d agent definition(s) to supervisor for repo %s", len(definitions), repoName)
 	return nil
 }
 
