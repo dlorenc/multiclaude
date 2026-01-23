@@ -1888,12 +1888,6 @@ type agentStartConfig struct {
 
 // startAgentWithConfig is the unified agent start function that handles all common logic
 func (d *Daemon) startAgentWithConfig(repoName string, repo *state.Repository, cfg agentStartConfig) error {
-	// Resolve claude binary path
-	binaryPath, err := d.getClaudeBinaryPath()
-	if err != nil {
-		return fmt.Errorf("failed to resolve claude binary: %w", err)
-	}
-
 	// Generate session ID
 	sessionID, err := claude.GenerateSessionID()
 	if err != nil {
@@ -1906,24 +1900,35 @@ func (d *Daemon) startAgentWithConfig(repoName string, repo *state.Repository, c
 		d.logger.Warn("Failed to copy hooks config: %v", err)
 	}
 
-	// Build CLI command
-	claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
-		binaryPath, sessionID, cfg.promptFile)
+	var pid int
 
-	// Send command to tmux window
-	target := fmt.Sprintf("%s:%s", repo.TmuxSession, cfg.agentName)
-	cmd := exec.Command("tmux", "send-keys", "-t", target, claudeCmd, "C-m")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to start Claude in tmux: %w", err)
-	}
+	// Skip actual Claude startup in test mode
+	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
+		// Resolve claude binary path
+		binaryPath, err := d.getClaudeBinaryPath()
+		if err != nil {
+			return fmt.Errorf("failed to resolve claude binary: %w", err)
+		}
 
-	// Wait a moment for Claude to start
-	time.Sleep(500 * time.Millisecond)
+		// Build CLI command
+		claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions --append-system-prompt-file %s",
+			binaryPath, sessionID, cfg.promptFile)
 
-	// Get PID
-	pid, err := d.tmux.GetPanePID(d.ctx, repo.TmuxSession, cfg.agentName)
-	if err != nil {
-		return fmt.Errorf("failed to get Claude PID: %w", err)
+		// Send command to tmux window
+		target := fmt.Sprintf("%s:%s", repo.TmuxSession, cfg.agentName)
+		cmd := exec.Command("tmux", "send-keys", "-t", target, claudeCmd, "C-m")
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to start Claude in tmux: %w", err)
+		}
+
+		// Wait a moment for Claude to start
+		time.Sleep(500 * time.Millisecond)
+
+		// Get PID
+		pid, err = d.tmux.GetPanePID(d.ctx, repo.TmuxSession, cfg.agentName)
+		if err != nil {
+			return fmt.Errorf("failed to get Claude PID: %w", err)
+		}
 	}
 
 	// Register agent with state

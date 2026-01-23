@@ -18,31 +18,6 @@ import (
 	"github.com/dlorenc/multiclaude/pkg/tmux"
 )
 
-// skipIfTmuxCantCreateSessions skips the test if tmux cannot create sessions.
-// This is more robust than IsTmuxAvailable() which only checks if the binary exists.
-// In CI environments without a proper terminal, tmux may be installed but unable
-// to create sessions.
-func skipIfTmuxCantCreateSessions(t *testing.T, tmuxClient *tmux.Client) {
-	t.Helper()
-
-	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
-	}
-
-	// Try to actually create and destroy a session to verify it works
-	// Use a unique session name per test to avoid conflicts when tests run in sequence
-	testSession := "mc-skip-check-" + strings.ReplaceAll(t.Name(), "/", "-")
-	ctx := context.Background()
-
-	// Clean up any leftover session from a previous failed test run
-	tmuxClient.KillSession(ctx, testSession)
-
-	if err := tmuxClient.CreateSession(ctx, testSession, true); err != nil {
-		t.Skipf("tmux cannot create sessions in this environment: %v", err)
-	}
-	tmuxClient.KillSession(ctx, testSession)
-}
-
 func setupTestDaemon(t *testing.T) (*Daemon, func()) {
 	t.Helper()
 
@@ -1000,7 +975,9 @@ func TestWorkspaceAgentExcludedFromWakeLoop(t *testing.T) {
 
 func TestHealthCheckLoopWithRealTmux(t *testing.T) {
 	tmuxClient := tmux.NewClient()
-	skipIfTmuxCantCreateSessions(t, tmuxClient)
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -1062,7 +1039,9 @@ func TestHealthCheckLoopWithRealTmux(t *testing.T) {
 
 func TestHealthCheckCleansUpMarkedAgents(t *testing.T) {
 	tmuxClient := tmux.NewClient()
-	skipIfTmuxCantCreateSessions(t, tmuxClient)
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -1123,7 +1102,9 @@ func TestHealthCheckCleansUpMarkedAgents(t *testing.T) {
 
 func TestMessageRoutingWithRealTmux(t *testing.T) {
 	tmuxClient := tmux.NewClient()
-	skipIfTmuxCantCreateSessions(t, tmuxClient)
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -1200,7 +1181,9 @@ func TestMessageRoutingWithRealTmux(t *testing.T) {
 
 func TestWakeLoopUpdatesNudgeTime(t *testing.T) {
 	tmuxClient := tmux.NewClient()
-	skipIfTmuxCantCreateSessions(t, tmuxClient)
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -1257,7 +1240,9 @@ func TestWakeLoopUpdatesNudgeTime(t *testing.T) {
 
 func TestWakeLoopSkipsRecentlyNudgedAgents(t *testing.T) {
 	tmuxClient := tmux.NewClient()
-	skipIfTmuxCantCreateSessions(t, tmuxClient)
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -1903,7 +1888,9 @@ func TestRestoreTrackedReposNoRepos(t *testing.T) {
 
 func TestRestoreTrackedReposExistingSession(t *testing.T) {
 	tmuxClient := tmux.NewClient()
-	skipIfTmuxCantCreateSessions(t, tmuxClient)
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -1960,7 +1947,9 @@ func TestRestoreRepoAgentsMissingRepoPath(t *testing.T) {
 
 func TestRestoreDeadAgentsWithExistingSession(t *testing.T) {
 	tmuxClient := tmux.NewClient()
-	skipIfTmuxCantCreateSessions(t, tmuxClient)
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -2009,7 +1998,9 @@ func TestRestoreDeadAgentsWithExistingSession(t *testing.T) {
 
 func TestRestoreDeadAgentsSkipsAliveProcesses(t *testing.T) {
 	tmuxClient := tmux.NewClient()
-	skipIfTmuxCantCreateSessions(t, tmuxClient)
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -2062,7 +2053,9 @@ func TestRestoreDeadAgentsSkipsAliveProcesses(t *testing.T) {
 
 func TestRestoreDeadAgentsSkipsTransientAgents(t *testing.T) {
 	tmuxClient := tmux.NewClient()
-	skipIfTmuxCantCreateSessions(t, tmuxClient)
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -2113,7 +2106,9 @@ func TestRestoreDeadAgentsSkipsTransientAgents(t *testing.T) {
 
 func TestRestoreDeadAgentsIncludesWorkspace(t *testing.T) {
 	tmuxClient := tmux.NewClient()
-	skipIfTmuxCantCreateSessions(t, tmuxClient)
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -2384,7 +2379,9 @@ func TestHandleListReposRichFormat(t *testing.T) {
 
 func TestHealthCheckAttemptsRestorationBeforeCleanup(t *testing.T) {
 	tmuxClient := tmux.NewClient()
-	skipIfTmuxCantCreateSessions(t, tmuxClient)
+	if !tmuxClient.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -2977,4 +2974,210 @@ func TestHandleSpawnAgent(t *testing.T) {
 // containsIgnoreCase checks if s contains substr (case-insensitive)
 func containsIgnoreCase(s, substr string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
+}
+
+// TestSendAgentDefinitionsToSupervisor tests the daemon function that sends
+// agent definitions to the supervisor.
+func TestSendAgentDefinitionsToSupervisor(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	repoName := "defs-test-repo"
+	repoPath := d.paths.RepoDir(repoName)
+
+	// Create repo directory structure
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("Failed to create repo dir: %v", err)
+	}
+
+	// Initialize git repo
+	cmds := [][]string{
+		{"git", "init"},
+		{"git", "config", "user.email", "test@example.com"},
+		{"git", "config", "user.name", "Test User"},
+		{"git", "commit", "--allow-empty", "-m", "Initial commit"},
+	}
+	for _, cmdArgs := range cmds {
+		cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+		cmd.Dir = repoPath
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("Failed to run %v: %v", cmdArgs, err)
+		}
+	}
+
+	t.Run("no definitions returns nil without sending message", func(t *testing.T) {
+		// No agents directory exists, should return nil
+		mqConfig := state.DefaultMergeQueueConfig()
+		err := d.sendAgentDefinitionsToSupervisor(repoName, repoPath, mqConfig)
+		if err != nil {
+			t.Errorf("Expected nil error for empty definitions, got: %v", err)
+		}
+	})
+
+	t.Run("sends definitions to supervisor", func(t *testing.T) {
+		// Create local agents directory with a definition
+		agentsDir := d.paths.RepoAgentsDir(repoName)
+		if err := os.MkdirAll(agentsDir, 0755); err != nil {
+			t.Fatalf("Failed to create agents dir: %v", err)
+		}
+
+		workerContent := `# Test Worker
+
+A test worker agent for unit testing.
+
+## Instructions
+- Process tasks
+- Report results
+`
+		if err := os.WriteFile(filepath.Join(agentsDir, "test-worker.md"), []byte(workerContent), 0644); err != nil {
+			t.Fatalf("Failed to write worker definition: %v", err)
+		}
+
+		// Add repo to state (needed for message routing)
+		repo := &state.Repository{
+			GithubURL:        "https://github.com/test/defs-test-repo",
+			TmuxSession:      "mc-defs-test-repo",
+			Agents:           make(map[string]state.Agent),
+			MergeQueueConfig: state.DefaultMergeQueueConfig(),
+		}
+		if err := d.state.AddRepo(repoName, repo); err != nil {
+			t.Fatalf("Failed to add repo: %v", err)
+		}
+
+		mqConfig := state.DefaultMergeQueueConfig()
+		err := d.sendAgentDefinitionsToSupervisor(repoName, repoPath, mqConfig)
+		if err != nil {
+			t.Errorf("sendAgentDefinitionsToSupervisor failed: %v", err)
+		}
+
+		// Verify message was sent to supervisor
+		msgMgr := messages.NewManager(d.paths.MessagesDir)
+		msgs, err := msgMgr.List(repoName, "supervisor")
+		if err != nil {
+			t.Fatalf("Failed to list messages: %v", err)
+		}
+
+		if len(msgs) == 0 {
+			t.Fatal("Expected at least one message to be sent to supervisor")
+		}
+
+		// Verify message content includes the definition
+		lastMsg := msgs[len(msgs)-1]
+		msgContent, err := msgMgr.Get(repoName, "supervisor", lastMsg.ID)
+		if err != nil {
+			t.Fatalf("Failed to read message: %v", err)
+		}
+
+		if !strings.Contains(msgContent.Body, "test-worker") {
+			t.Error("Message should contain the agent definition name")
+		}
+		if !strings.Contains(msgContent.Body, "Test Worker") {
+			t.Error("Message should contain the agent title")
+		}
+		if !strings.Contains(msgContent.Body, "A test worker agent") {
+			t.Error("Message should contain the agent description")
+		}
+	})
+
+	t.Run("includes merge queue config when enabled", func(t *testing.T) {
+		// Create a fresh message directory
+		if err := os.RemoveAll(d.paths.MessagesDir); err != nil {
+			t.Fatalf("Failed to clear messages: %v", err)
+		}
+		if err := os.MkdirAll(d.paths.MessagesDir, 0755); err != nil {
+			t.Fatalf("Failed to create messages dir: %v", err)
+		}
+
+		mqConfig := state.MergeQueueConfig{
+			Enabled:   true,
+			TrackMode: state.TrackModeAll,
+		}
+
+		err := d.sendAgentDefinitionsToSupervisor(repoName, repoPath, mqConfig)
+		if err != nil {
+			t.Errorf("sendAgentDefinitionsToSupervisor failed: %v", err)
+		}
+
+		// Verify message includes merge queue config
+		msgMgr := messages.NewManager(d.paths.MessagesDir)
+		msgs, _ := msgMgr.List(repoName, "supervisor")
+		if len(msgs) == 0 {
+			t.Fatal("Expected message to be sent")
+		}
+
+		lastMsg := msgs[len(msgs)-1]
+		msgContent, _ := msgMgr.Get(repoName, "supervisor", lastMsg.ID)
+
+		if !strings.Contains(msgContent.Body, "Merge Queue Configuration") {
+			t.Error("Message should contain merge queue configuration section")
+		}
+		if !strings.Contains(msgContent.Body, "Enabled: yes") {
+			t.Error("Message should indicate merge queue is enabled")
+		}
+		if !strings.Contains(msgContent.Body, "Track Mode: all") {
+			t.Error("Message should include track mode")
+		}
+	})
+
+	t.Run("includes disabled message when merge queue disabled", func(t *testing.T) {
+		// Create a fresh message directory
+		if err := os.RemoveAll(d.paths.MessagesDir); err != nil {
+			t.Fatalf("Failed to clear messages: %v", err)
+		}
+		if err := os.MkdirAll(d.paths.MessagesDir, 0755); err != nil {
+			t.Fatalf("Failed to create messages dir: %v", err)
+		}
+
+		mqConfig := state.MergeQueueConfig{
+			Enabled:   false,
+			TrackMode: state.TrackModeAll,
+		}
+
+		err := d.sendAgentDefinitionsToSupervisor(repoName, repoPath, mqConfig)
+		if err != nil {
+			t.Errorf("sendAgentDefinitionsToSupervisor failed: %v", err)
+		}
+
+		// Verify message indicates merge queue is disabled
+		msgMgr := messages.NewManager(d.paths.MessagesDir)
+		msgs, _ := msgMgr.List(repoName, "supervisor")
+		if len(msgs) == 0 {
+			t.Fatal("Expected message to be sent")
+		}
+
+		lastMsg := msgs[len(msgs)-1]
+		msgContent, _ := msgMgr.Get(repoName, "supervisor", lastMsg.ID)
+
+		if !strings.Contains(msgContent.Body, "Enabled: no") {
+			t.Error("Message should indicate merge queue is disabled")
+		}
+		if !strings.Contains(msgContent.Body, "do NOT spawn merge-queue") {
+			t.Error("Message should instruct not to spawn merge-queue")
+		}
+	})
+
+	t.Run("includes spawn instructions", func(t *testing.T) {
+		mqConfig := state.DefaultMergeQueueConfig()
+		err := d.sendAgentDefinitionsToSupervisor(repoName, repoPath, mqConfig)
+		if err != nil {
+			t.Errorf("sendAgentDefinitionsToSupervisor failed: %v", err)
+		}
+
+		// Verify message includes spawn command
+		msgMgr := messages.NewManager(d.paths.MessagesDir)
+		msgs, _ := msgMgr.List(repoName, "supervisor")
+		if len(msgs) == 0 {
+			t.Fatal("Expected message to be sent")
+		}
+
+		lastMsg := msgs[len(msgs)-1]
+		msgContent, _ := msgMgr.Get(repoName, "supervisor", lastMsg.ID)
+
+		if !strings.Contains(msgContent.Body, "multiclaude agents spawn") {
+			t.Error("Message should include spawn command")
+		}
+		if !strings.Contains(msgContent.Body, "--class <persistent|ephemeral>") {
+			t.Error("Message should include class flag in spawn command")
+		}
+	})
 }
