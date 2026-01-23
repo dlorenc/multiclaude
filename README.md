@@ -416,11 +416,16 @@ Repositories can include optional configuration in `.multiclaude/`:
 
 ```
 .multiclaude/
-├── SUPERVISOR.md   # Additional instructions for supervisor
-├── WORKER.md       # Additional instructions for workers
-├── REVIEWER.md     # Additional instructions for merge queue
-└── hooks.json      # Claude Code hooks configuration
+├── agents/              # Agent customization (recommended)
+│   ├── worker.md        # Worker agent definition
+│   ├── merge-queue.md   # Merge-queue agent definition
+│   └── review.md        # Review agent definition
+└── hooks.json           # Claude Code hooks configuration
 ```
+
+Agent definitions in `.multiclaude/agents/` take precedence over local definitions in `~/.multiclaude/repos/<repo>/agents/` and built-in templates.
+
+**Deprecated:** The old system using `SUPERVISOR.md`, `WORKER.md`, `REVIEWER.md` directly in `.multiclaude/` is deprecated. Migrate to the new `agents/` directory structure.
 
 ## Public Libraries
 

@@ -1743,7 +1743,7 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 	}
 
 	// Start supervisor agent
-	if err := d.startAgent(repoName, repo, "supervisor", prompts.TypeSupervisor, repoPath); err != nil {
+	if err := d.startAgent(repoName, repo, "supervisor", state.AgentTypeSupervisor, repoPath); err != nil {
 		d.logger.Error("Failed to start supervisor for %s: %v", repoName, err)
 	}
 
@@ -1798,7 +1798,7 @@ func (d *Daemon) restoreRepoAgents(repoName string, repo *state.Repository) erro
 		if err := cmd.Run(); err != nil {
 			d.logger.Error("Failed to create workspace window: %v", err)
 		} else {
-			if err := d.startAgent(repoName, repo, "workspace", prompts.TypeWorkspace, workspacePath); err != nil {
+			if err := d.startAgent(repoName, repo, "workspace", state.AgentTypeWorkspace, workspacePath); err != nil {
 				d.logger.Error("Failed to start workspace for %s: %v", repoName, err)
 			}
 		}
@@ -1945,7 +1945,7 @@ func (d *Daemon) startAgentWithConfig(repoName string, repo *state.Repository, c
 }
 
 // startAgent starts a Claude agent in a tmux window and registers it with state
-func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName string, agentType prompts.AgentType, workDir string) error {
+func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName string, agentType state.AgentType, workDir string) error {
 	promptFile, err := d.writePromptFile(repoName, agentType, agentName)
 	if err != nil {
 		return fmt.Errorf("failed to write prompt file: %w", err)
@@ -1953,14 +1953,14 @@ func (d *Daemon) startAgent(repoName string, repo *state.Repository, agentName s
 
 	return d.startAgentWithConfig(repoName, repo, agentStartConfig{
 		agentName:  agentName,
-		agentType:  state.AgentType(agentType),
+		agentType:  agentType,
 		promptFile: promptFile,
 		workDir:    workDir,
 	})
 }
 
 // writePromptFileWithPrefix writes a prompt file with an optional prefix prepended to the content
-func (d *Daemon) writePromptFileWithPrefix(repoName string, agentType prompts.AgentType, agentName, prefix string) (string, error) {
+func (d *Daemon) writePromptFileWithPrefix(repoName string, agentType state.AgentType, agentName, prefix string) (string, error) {
 	repoPath := d.paths.RepoDir(repoName)
 
 	// Get the base prompt (without CLI docs since we don't have them in daemon context)
@@ -2038,7 +2038,7 @@ func (d *Daemon) restartAgent(repoName, agentName string, agent state.Agent, rep
 }
 
 // writePromptFile writes the agent prompt to a file and returns the path
-func (d *Daemon) writePromptFile(repoName string, agentType prompts.AgentType, agentName string) (string, error) {
+func (d *Daemon) writePromptFile(repoName string, agentType state.AgentType, agentName string) (string, error) {
 	return d.writePromptFileWithPrefix(repoName, agentType, agentName, "")
 }
 

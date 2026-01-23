@@ -201,19 +201,24 @@ Default prompts are embedded at compile time via `//go:embed`:
 var defaultSupervisorPrompt string
 ```
 
-### Custom Prompts
+### Custom Prompts (Configurable Agents System)
 
-Repositories can override prompts by adding files to `.multiclaude/`:
+Repositories can customize agent behavior by creating markdown files in `.multiclaude/agents/`:
 
-| Agent Type | Custom File |
-|------------|-------------|
-| supervisor | `.multiclaude/SUPERVISOR.md` |
-| worker | `.multiclaude/WORKER.md` |
-| merge-queue | `.multiclaude/REVIEWER.md` |
-| workspace | `.multiclaude/WORKSPACE.md` |
-| review | `.multiclaude/REVIEW.md` |
+| Agent Type | Definition File |
+|------------|-----------------|
+| worker | `.multiclaude/agents/worker.md` |
+| merge-queue | `.multiclaude/agents/merge-queue.md` |
+| review | `.multiclaude/agents/review.md` |
 
-Custom prompts are appended to default prompts, not replaced.
+**Precedence order:**
+1. `<repo>/.multiclaude/agents/<agent>.md` (checked into repo, highest priority)
+2. `~/.multiclaude/repos/<repo>/agents/<agent>.md` (local overrides)
+3. Built-in templates (fallback)
+
+Note: Supervisor and workspace agents use embedded prompts only and cannot be customized via this system.
+
+**Deprecated:** The old system using `SUPERVISOR.md`, `WORKER.md`, `REVIEWER.md`, etc. directly in `.multiclaude/` is deprecated. Migrate your custom prompts to the new `.multiclaude/agents/` directory structure.
 
 ### Prompt Assembly
 
