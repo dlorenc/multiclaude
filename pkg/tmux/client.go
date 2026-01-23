@@ -85,6 +85,24 @@ func (c *Client) tmuxCmd(ctx context.Context, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, c.tmuxPath, args...)
 }
 
+// wrapCommandError wraps an error from a tmux command, checking for context cancellation first.
+// If err is nil, returns nil. If context is cancelled, returns context error.
+// Otherwise, wraps in CommandError with the given operation and target information.
+func (c *Client) wrapCommandError(ctx context.Context, err error, op, session, window string) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return &CommandError{
+		Op:      op,
+		Session: session,
+		Window:  window,
+		Err:     err,
+	}
+}
+
 // IsTmuxAvailable checks if tmux is installed and available.
 // This method does not take a context as it's a quick local check.
 func (c *Client) IsTmuxAvailable() bool {
@@ -124,25 +142,13 @@ func (c *Client) CreateSession(ctx context.Context, name string, detached bool) 
 	}
 
 	cmd := c.tmuxCmd(ctx, args...)
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return &CommandError{Op: "new-session", Session: name, Err: err}
-	}
-	return nil
+	return c.wrapCommandError(ctx, cmd.Run(), "new-session", name, "")
 }
 
 // KillSession terminates a tmux session.
 func (c *Client) KillSession(ctx context.Context, name string) error {
 	cmd := c.tmuxCmd(ctx, "kill-session", "-t", name)
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return &CommandError{Op: "kill-session", Session: name, Err: err}
-	}
-	return nil
+	return c.wrapCommandError(ctx, cmd.Run(), "kill-session", name, "")
 }
 
 // ListSessions returns a list of all tmux session names.
@@ -177,13 +183,7 @@ func (c *Client) ListSessions(ctx context.Context) ([]string, error) {
 func (c *Client) CreateWindow(ctx context.Context, session, windowName string) error {
 	target := fmt.Sprintf("%s:", session)
 	cmd := c.tmuxCmd(ctx, "new-window", "-t", target, "-n", windowName)
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return &CommandError{Op: "new-window", Session: session, Window: windowName, Err: err}
-	}
-	return nil
+	return c.wrapCommandError(ctx, cmd.Run(), "new-window", session, windowName)
 }
 
 // HasWindow checks if a window with the given name exists in the session.
@@ -213,13 +213,7 @@ func (c *Client) HasWindow(ctx context.Context, session, windowName string) (boo
 func (c *Client) KillWindow(ctx context.Context, session, windowName string) error {
 	target := fmt.Sprintf("%s:%s", session, windowName)
 	cmd := c.tmuxCmd(ctx, "kill-window", "-t", target)
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return &CommandError{Op: "kill-window", Session: session, Window: windowName, Err: err}
-	}
-	return nil
+	return c.wrapCommandError(ctx, cmd.Run(), "kill-window", session, windowName)
 }
 
 // ListWindows returns a list of window names in the specified session.
@@ -397,11 +391,5 @@ func (c *Client) StopPipePane(ctx context.Context, session, windowName string) e
 	target := fmt.Sprintf("%s:%s", session, windowName)
 	// Running pipe-pane with no command stops any existing pipe
 	cmd := c.tmuxCmd(ctx, "pipe-pane", "-t", target)
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return &CommandError{Op: "pipe-pane-stop", Session: session, Window: windowName, Err: err}
-	}
-	return nil
+	return c.wrapCommandError(ctx, cmd.Run(), "pipe-pane-stop", session, windowName)
 }

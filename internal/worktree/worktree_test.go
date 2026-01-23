@@ -1495,9 +1495,7 @@ func TestListBranchesWithPrefix(t *testing.T) {
 
 		// Empty prefix should return empty (git for-each-ref refs/heads/ returns all)
 		// Actually testing the behavior
-		if branches == nil {
-			branches = []string{} // normalize
-		}
+		_ = branches // branches is checked above; behavior is validated by not erroring
 	})
 }
 

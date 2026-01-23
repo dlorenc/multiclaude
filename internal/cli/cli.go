@@ -2536,25 +2536,8 @@ func (c *CLI) removeWorker(args []string) error {
 	}
 
 	// Check for unpushed commits
-	hasUnpushed, err := worktree.HasUnpushedCommits(wtPath)
-	if err != nil {
-		// This is ok - might not have a tracking branch
-		fmt.Printf("Note: Could not check for unpushed commits (no tracking branch?)\n")
-	} else if hasUnpushed {
-		fmt.Println("\nWarning: Worker has unpushed commits!")
-		branch, err := worktree.GetCurrentBranch(wtPath)
-		if err == nil {
-			fmt.Printf("Branch '%s' has commits not pushed to remote.\n", branch)
-		}
-		fmt.Println("These commits may be lost if you continue with cleanup.")
-		fmt.Print("Continue with cleanup? [y/N]: ")
-
-		var response string
-		fmt.Scanln(&response)
-		if response != "y" && response != "Y" {
-			fmt.Println("Cleanup cancelled")
-			return nil
-		}
+	if err := checkUnpushedCommits(wtPath, "Worker", "cleanup"); err != nil {
+		return nil
 	}
 
 	// Kill tmux window
@@ -2849,25 +2832,8 @@ func (c *CLI) removeWorkspace(args []string) error {
 	}
 
 	// Check for unpushed commits
-	hasUnpushed, err := worktree.HasUnpushedCommits(wtPath)
-	if err != nil {
-		// This is ok - might not have a tracking branch
-		fmt.Printf("Note: Could not check for unpushed commits (no tracking branch?)\n")
-	} else if hasUnpushed {
-		fmt.Println("\nWarning: Workspace has unpushed commits!")
-		branch, err := worktree.GetCurrentBranch(wtPath)
-		if err == nil {
-			fmt.Printf("Branch '%s' has commits not pushed to remote.\n", branch)
-		}
-		fmt.Println("These commits may be lost if you continue with removal.")
-		fmt.Print("Continue with removal? [y/N]: ")
-
-		var response string
-		fmt.Scanln(&response)
-		if response != "y" && response != "Y" {
-			fmt.Println("Removal cancelled")
-			return nil
-		}
+	if err := checkUnpushedCommits(wtPath, "Workspace", "removal"); err != nil {
+		return nil
 	}
 
 	// Kill tmux window
@@ -3521,6 +3487,41 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// checkUnpushedCommits checks if a worktree has unpushed commits and prompts the user for confirmation.
+// Returns nil if the user wants to continue, or an error to cancel the operation.
+// The entityType parameter should be "Worker" or "Workspace" for appropriate messaging.
+// The action parameter should be "cleanup" or "removal" for appropriate messaging.
+func checkUnpushedCommits(wtPath, entityType, action string) error {
+	hasUnpushed, err := worktree.HasUnpushedCommits(wtPath)
+	if err != nil {
+		// This is ok - might not have a tracking branch
+		fmt.Printf("Note: Could not check for unpushed commits (no tracking branch?)\n")
+		return nil
+	}
+
+	if !hasUnpushed {
+		return nil
+	}
+
+	fmt.Printf("\nWarning: %s has unpushed commits!\n", entityType)
+	branch, err := worktree.GetCurrentBranch(wtPath)
+	if err == nil {
+		fmt.Printf("Branch '%s' has commits not pushed to remote.\n", branch)
+	}
+	fmt.Printf("These commits may be lost if you continue with %s.\n", action)
+	fmt.Printf("Continue with %s? [y/N]: ", action)
+
+	var response string
+	fmt.Scanln(&response)
+	if response != "y" && response != "Y" {
+		// Capitalize first letter of action for the message
+		actionCapitalized := strings.ToUpper(action[:1]) + action[1:]
+		fmt.Printf("%s cancelled\n", actionCapitalized)
+		return fmt.Errorf("cancelled by user")
+	}
+	return nil
 }
 
 func (c *CLI) completeWorker(args []string) error {

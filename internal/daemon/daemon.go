@@ -1832,7 +1832,7 @@ func (d *Daemon) sendAgentDefinitionsToSupervisor(repoName, repoPath string, mqC
 	// Include merge-queue configuration
 	sb.WriteString("## Merge Queue Configuration\n")
 	if mqConfig.Enabled {
-		sb.WriteString(fmt.Sprintf("- Enabled: yes\n"))
+		sb.WriteString("- Enabled: yes\n")
 		sb.WriteString(fmt.Sprintf("- Track Mode: %s\n\n", mqConfig.TrackMode))
 	} else {
 		sb.WriteString("- Enabled: no (do NOT spawn merge-queue agent)\n\n")
