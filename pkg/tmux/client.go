@@ -136,10 +136,11 @@ func (c *Client) HasSession(ctx context.Context, name string) (bool, error) {
 // CreateSession creates a new tmux session with the given name.
 // If detached is true, creates the session in detached mode (-d).
 func (c *Client) CreateSession(ctx context.Context, name string, detached bool) error {
-	args := []string{"new-session", "-s", name}
+	args := []string{"new-session"}
 	if detached {
 		args = append(args, "-d")
 	}
+	args = append(args, "-s", name)
 
 	cmd := c.tmuxCmd(ctx, args...)
 	return c.wrapCommandError(ctx, cmd.Run(), "new-session", name, "")

@@ -34,8 +34,8 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "FAIL: tmux is required for these tests but cannot create sessions (no terminal?)")
 		os.Exit(1)
 	}
-	// Clean up probe session
-	exec.Command("tmux", "kill-session", "-t", testSession).Run()
+	// Keep the probe session alive during tests to ensure the tmux server stays running.
+	// It will be cleaned up by cleanupTestSessions() at the end since it starts with "test-".
 
 	// Run tests
 	code := m.Run()
