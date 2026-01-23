@@ -3219,3 +3219,374 @@ func TestCLIGetPRStatusForBranch(t *testing.T) {
 		}
 	})
 }
+
+// TestParseDuration tests the parseDuration utility function
+func TestParseDuration(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		want      time.Duration
+		wantError bool
+	}{
+		{
+			name:      "days",
+			input:     "7d",
+			want:      7 * 24 * time.Hour,
+			wantError: false,
+		},
+		{
+			name:      "hours",
+			input:     "24h",
+			want:      24 * time.Hour,
+			wantError: false,
+		},
+		{
+			name:      "minutes",
+			input:     "30m",
+			want:      30 * time.Minute,
+			wantError: false,
+		},
+		{
+			name:      "single day",
+			input:     "1d",
+			want:      24 * time.Hour,
+			wantError: false,
+		},
+		{
+			name:      "single hour",
+			input:     "1h",
+			want:      time.Hour,
+			wantError: false,
+		},
+		{
+			name:      "single minute",
+			input:     "1m",
+			want:      time.Minute,
+			wantError: false,
+		},
+		{
+			name:      "too short",
+			input:     "5",
+			wantError: true,
+		},
+		{
+			name:      "empty",
+			input:     "",
+			wantError: true,
+		},
+		{
+			name:      "unknown unit",
+			input:     "10s",
+			wantError: true,
+		},
+		{
+			name:      "invalid number",
+			input:     "abcd",
+			wantError: true,
+		},
+		{
+			name:      "zero value",
+			input:     "0d",
+			want:      0,
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseDuration(tt.input)
+			if tt.wantError {
+				if err == nil {
+					t.Errorf("parseDuration(%q) expected error, got %v", tt.input, got)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("parseDuration(%q) unexpected error: %v", tt.input, err)
+				}
+				if got != tt.want {
+					t.Errorf("parseDuration(%q) = %v, want %v", tt.input, got, tt.want)
+				}
+			}
+		})
+	}
+}
+
+// TestCLIListMessages tests the listMessages command
+func TestCLIListMessages(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	repoName := "msg-list-repo"
+	paths := d.GetPaths()
+
+	// Add a repo and agents
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/msg-list-repo",
+		TmuxSession: "mc-msg-list-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo(repoName, repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	worker := state.Agent{
+		Type:         state.AgentTypeWorker,
+		WorktreePath: filepath.Join(paths.WorktreesDir, repoName, "msg-worker"),
+		TmuxWindow:   "msg-worker",
+		Task:         "Test task",
+		CreatedAt:    time.Now(),
+	}
+	if err := d.GetState().AddAgent(repoName, "msg-worker", worker); err != nil {
+		t.Fatalf("Failed to add worker: %v", err)
+	}
+
+	// Create the worktree directory
+	worktreeDir := filepath.Join(paths.WorktreesDir, repoName, "msg-worker")
+	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
+		t.Fatalf("Failed to create worktree dir: %v", err)
+	}
+
+	// Save current directory
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	t.Run("lists empty messages", func(t *testing.T) {
+		if err := os.Chdir(worktreeDir); err != nil {
+			t.Fatalf("Failed to change to worktree: %v", err)
+		}
+
+		err := cli.listMessages([]string{})
+		if err != nil {
+			t.Errorf("listMessages() unexpected error: %v", err)
+		}
+	})
+
+	t.Run("lists messages after sending", func(t *testing.T) {
+		// Send a message to the worker
+		msgMgr := messages.NewManager(paths.MessagesDir)
+		_, err := msgMgr.Send(repoName, "supervisor", "msg-worker", "Test message for listing")
+		if err != nil {
+			t.Fatalf("Failed to send message: %v", err)
+		}
+
+		if err := os.Chdir(worktreeDir); err != nil {
+			t.Fatalf("Failed to change to worktree: %v", err)
+		}
+
+		err = cli.listMessages([]string{})
+		if err != nil {
+			t.Errorf("listMessages() unexpected error: %v", err)
+		}
+	})
+}
+
+// TestCLIReadMessage tests the readMessage command
+func TestCLIReadMessage(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	repoName := "msg-read-repo"
+	paths := d.GetPaths()
+
+	// Add a repo and agents
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/msg-read-repo",
+		TmuxSession: "mc-msg-read-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo(repoName, repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	worker := state.Agent{
+		Type:         state.AgentTypeWorker,
+		WorktreePath: filepath.Join(paths.WorktreesDir, repoName, "read-worker"),
+		TmuxWindow:   "read-worker",
+		Task:         "Test task",
+		CreatedAt:    time.Now(),
+	}
+	if err := d.GetState().AddAgent(repoName, "read-worker", worker); err != nil {
+		t.Fatalf("Failed to add worker: %v", err)
+	}
+
+	// Create the worktree directory
+	worktreeDir := filepath.Join(paths.WorktreesDir, repoName, "read-worker")
+	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
+		t.Fatalf("Failed to create worktree dir: %v", err)
+	}
+
+	// Save current directory
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	t.Run("returns error without message ID", func(t *testing.T) {
+		if err := os.Chdir(worktreeDir); err != nil {
+			t.Fatalf("Failed to change to worktree: %v", err)
+		}
+
+		err := cli.readMessage([]string{})
+		if err == nil {
+			t.Error("readMessage() should return error without message ID")
+		}
+	})
+
+	t.Run("reads message successfully", func(t *testing.T) {
+		// Send a message
+		msgMgr := messages.NewManager(paths.MessagesDir)
+		msg, err := msgMgr.Send(repoName, "supervisor", "read-worker", "Message to be read")
+		if err != nil {
+			t.Fatalf("Failed to send message: %v", err)
+		}
+
+		if err := os.Chdir(worktreeDir); err != nil {
+			t.Fatalf("Failed to change to worktree: %v", err)
+		}
+
+		err = cli.readMessage([]string{msg.ID})
+		if err != nil {
+			t.Errorf("readMessage() unexpected error: %v", err)
+		}
+
+		// Verify status was updated to read
+		updatedMsg, _ := msgMgr.Get(repoName, "read-worker", msg.ID)
+		if updatedMsg.Status != messages.StatusRead {
+			t.Errorf("Message status = %v, want %v", updatedMsg.Status, messages.StatusRead)
+		}
+	})
+
+	t.Run("returns error for nonexistent message", func(t *testing.T) {
+		if err := os.Chdir(worktreeDir); err != nil {
+			t.Fatalf("Failed to change to worktree: %v", err)
+		}
+
+		err := cli.readMessage([]string{"nonexistent-msg-id"})
+		if err == nil {
+			t.Error("readMessage() should return error for nonexistent message")
+		}
+	})
+}
+
+// TestCLIAckMessage tests the ackMessage command
+func TestCLIAckMessage(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	repoName := "msg-ack-repo"
+	paths := d.GetPaths()
+
+	// Add a repo and agents
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/msg-ack-repo",
+		TmuxSession: "mc-msg-ack-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.GetState().AddRepo(repoName, repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	worker := state.Agent{
+		Type:         state.AgentTypeWorker,
+		WorktreePath: filepath.Join(paths.WorktreesDir, repoName, "ack-worker"),
+		TmuxWindow:   "ack-worker",
+		Task:         "Test task",
+		CreatedAt:    time.Now(),
+	}
+	if err := d.GetState().AddAgent(repoName, "ack-worker", worker); err != nil {
+		t.Fatalf("Failed to add worker: %v", err)
+	}
+
+	// Create the worktree directory
+	worktreeDir := filepath.Join(paths.WorktreesDir, repoName, "ack-worker")
+	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
+		t.Fatalf("Failed to create worktree dir: %v", err)
+	}
+
+	// Save current directory
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	t.Run("returns error without message ID", func(t *testing.T) {
+		if err := os.Chdir(worktreeDir); err != nil {
+			t.Fatalf("Failed to change to worktree: %v", err)
+		}
+
+		err := cli.ackMessage([]string{})
+		if err == nil {
+			t.Error("ackMessage() should return error without message ID")
+		}
+	})
+
+	t.Run("acknowledges message successfully", func(t *testing.T) {
+		// Send a message
+		msgMgr := messages.NewManager(paths.MessagesDir)
+		msg, err := msgMgr.Send(repoName, "supervisor", "ack-worker", "Message to be acked")
+		if err != nil {
+			t.Fatalf("Failed to send message: %v", err)
+		}
+
+		if err := os.Chdir(worktreeDir); err != nil {
+			t.Fatalf("Failed to change to worktree: %v", err)
+		}
+
+		err = cli.ackMessage([]string{msg.ID})
+		if err != nil {
+			t.Errorf("ackMessage() unexpected error: %v", err)
+		}
+
+		// Verify status was updated to acked
+		updatedMsg, _ := msgMgr.Get(repoName, "ack-worker", msg.ID)
+		if updatedMsg.Status != messages.StatusAcked {
+			t.Errorf("Message status = %v, want %v", updatedMsg.Status, messages.StatusAcked)
+		}
+	})
+
+	t.Run("returns error for nonexistent message", func(t *testing.T) {
+		if err := os.Chdir(worktreeDir); err != nil {
+			t.Fatalf("Failed to change to worktree: %v", err)
+		}
+
+		err := cli.ackMessage([]string{"nonexistent-msg-id"})
+		if err == nil {
+			t.Error("ackMessage() should return error for nonexistent message")
+		}
+	})
+}
+
+
+// TestGetClaudeBinaryFunction tests the getClaudeBinary function
+func TestGetClaudeBinaryFunction(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// This test checks that getClaudeBinary uses exec.LookPath
+	// If claude is not installed, it returns an error
+	binary, err := cli.getClaudeBinary()
+	if err != nil {
+		// This is expected in CI environments where claude is not installed
+		// The error should be a ClaudeNotFound error
+		if !strings.Contains(err.Error(), "claude") {
+			t.Errorf("getClaudeBinary() error should mention claude: %v", err)
+		}
+	} else {
+		// If we found it, the path should be non-empty
+		if binary == "" {
+			t.Error("getClaudeBinary() returned empty path without error")
+		}
+	}
+}
+
+// TestLoadStateFunction tests the loadState function
+func TestLoadStateFunction(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	t.Run("loads state successfully", func(t *testing.T) {
+		st, err := cli.loadState()
+		if err != nil {
+			t.Errorf("loadState() unexpected error: %v", err)
+		}
+		if st == nil {
+			t.Error("loadState() should return non-nil state")
+		}
+	})
+}

@@ -3182,3 +3182,335 @@ A test worker agent for unit testing.
 		}
 	})
 }
+
+// TestHandleRequestUnknownCommand tests handleRequest with unknown command
+func TestHandleRequestUnknownCommand(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	resp := d.handleRequest(socket.Request{
+		Command: "unknown_command_xyz",
+	})
+
+	if resp.Success {
+		t.Error("Expected failure for unknown command")
+	}
+	if !strings.Contains(resp.Error, "unknown command") {
+		t.Errorf("Error should mention unknown command, got: %s", resp.Error)
+	}
+}
+
+// TestHandleRequestPing tests the ping command
+func TestHandleRequestPing(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	resp := d.handleRequest(socket.Request{
+		Command: "ping",
+	})
+
+	if !resp.Success {
+		t.Errorf("Expected success for ping, got error: %s", resp.Error)
+	}
+	if resp.Data != "pong" {
+		t.Errorf("Expected pong response, got: %v", resp.Data)
+	}
+}
+
+// TestHandleRequestRouteMessages tests the route_messages command
+func TestHandleRequestRouteMessages(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	resp := d.handleRequest(socket.Request{
+		Command: "route_messages",
+	})
+
+	if !resp.Success {
+		t.Errorf("Expected success for route_messages, got error: %s", resp.Error)
+	}
+	if !strings.Contains(resp.Data.(string), "routing triggered") {
+		t.Errorf("Expected routing triggered message, got: %v", resp.Data)
+	}
+}
+
+// TestHandleListAgentsRichFormat tests handleListAgents with rich format
+func TestHandleListAgentsRichFormat(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a test repository
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "test-session",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Add a test agent
+	agent := state.Agent{
+		Type:         state.AgentTypeWorker,
+		WorktreePath: "/tmp/test",
+		TmuxWindow:   "test-window",
+		SessionID:    "test-session-id",
+		Task:         "Test task description",
+		CreatedAt:    time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "test-agent", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	t.Run("lists agents without rich format", func(t *testing.T) {
+		resp := d.handleListAgents(socket.Request{
+			Command: "list_agents",
+			Args: map[string]interface{}{
+				"repo": "test-repo",
+			},
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success, got error: %s", resp.Error)
+		}
+
+		data, ok := resp.Data.([]map[string]interface{})
+		if !ok {
+			t.Fatal("Expected slice of maps")
+		}
+		if len(data) != 1 {
+			t.Errorf("Expected 1 agent, got %d", len(data))
+		}
+		if data[0]["name"] != "test-agent" {
+			t.Errorf("Expected agent name 'test-agent', got %v", data[0]["name"])
+		}
+	})
+
+	t.Run("lists agents with rich format", func(t *testing.T) {
+		resp := d.handleListAgents(socket.Request{
+			Command: "list_agents",
+			Args: map[string]interface{}{
+				"repo": "test-repo",
+				"rich": true,
+			},
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success, got error: %s", resp.Error)
+		}
+
+		data, ok := resp.Data.([]map[string]interface{})
+		if !ok {
+			t.Fatal("Expected slice of maps")
+		}
+		if len(data) != 1 {
+			t.Errorf("Expected 1 agent, got %d", len(data))
+		}
+
+		// Rich format should include status and message counts
+		if _, hasStatus := data[0]["status"]; !hasStatus {
+			t.Error("Rich format should include status")
+		}
+		if _, hasBranch := data[0]["branch"]; !hasBranch {
+			t.Error("Rich format should include branch")
+		}
+		if _, hasTotal := data[0]["messages_total"]; !hasTotal {
+			t.Error("Rich format should include messages_total")
+		}
+		if _, hasPending := data[0]["messages_pending"]; !hasPending {
+			t.Error("Rich format should include messages_pending")
+		}
+	})
+
+	t.Run("returns error for missing repo", func(t *testing.T) {
+		resp := d.handleListAgents(socket.Request{
+			Command: "list_agents",
+			Args:    map[string]interface{}{},
+		})
+
+		if resp.Success {
+			t.Error("Expected failure for missing repo")
+		}
+	})
+}
+
+// TestHandleRepairState tests handleRepairState
+func TestHandleRepairState(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a test repository
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "nonexistent-session",
+		Agents:      make(map[string]state.Agent),
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Add a test agent with nonexistent window
+	agent := state.Agent{
+		Type:         state.AgentTypeWorker,
+		WorktreePath: "/tmp/nonexistent",
+		TmuxWindow:   "nonexistent-window",
+		SessionID:    "test-session-id",
+		CreatedAt:    time.Now(),
+	}
+	if err := d.state.AddAgent("test-repo", "test-agent", agent); err != nil {
+		t.Fatalf("Failed to add agent: %v", err)
+	}
+
+	resp := d.handleRepairState(socket.Request{
+		Command: "repair_state",
+	})
+
+	if !resp.Success {
+		t.Errorf("Expected success, got error: %s", resp.Error)
+	}
+
+	data, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected map response")
+	}
+
+	// Should have processed the repair (agent with nonexistent session)
+	if _, hasRemoved := data["agents_removed"]; !hasRemoved {
+		t.Error("Response should include agents_removed")
+	}
+	if _, hasFixed := data["issues_fixed"]; !hasFixed {
+		t.Error("Response should include issues_fixed")
+	}
+}
+
+// TestHandleTaskHistoryExtended tests handleTaskHistory with various scenarios
+func TestHandleTaskHistoryExtended(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a test repository with task history
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "test-session",
+		Agents:      make(map[string]state.Agent),
+		TaskHistory: []state.TaskHistoryEntry{
+			{
+				Name:        "worker-1",
+				Task:        "Test task 1",
+				Status:      state.TaskStatusMerged,
+				CreatedAt:   time.Now().Add(-1 * time.Hour),
+				CompletedAt: time.Now(),
+			},
+			{
+				Name:      "worker-2",
+				Task:      "Test task 2",
+				Status:    state.TaskStatusOpen,
+				CreatedAt: time.Now(),
+			},
+		},
+	}
+	if err := d.state.AddRepo("history-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	t.Run("returns error for missing repo", func(t *testing.T) {
+		resp := d.handleTaskHistory(socket.Request{
+			Command: "task_history",
+			Args:    map[string]interface{}{},
+		})
+
+		if resp.Success {
+			t.Error("Expected failure for missing repo")
+		}
+	})
+
+	t.Run("returns error for nonexistent repo", func(t *testing.T) {
+		resp := d.handleTaskHistory(socket.Request{
+			Command: "task_history",
+			Args: map[string]interface{}{
+				"repo": "nonexistent-repo",
+			},
+		})
+
+		if resp.Success {
+			t.Error("Expected failure for nonexistent repo")
+		}
+	})
+
+	t.Run("returns task history", func(t *testing.T) {
+		resp := d.handleTaskHistory(socket.Request{
+			Command: "task_history",
+			Args: map[string]interface{}{
+				"repo": "history-repo",
+			},
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success, got error: %s", resp.Error)
+		}
+
+		// Response comes as []map[string]interface{} when returned from handler
+		data, ok := resp.Data.([]map[string]interface{})
+		if !ok {
+			t.Fatalf("Expected []map[string]interface{}, got %T", resp.Data)
+		}
+		if len(data) != 2 {
+			t.Errorf("Expected 2 history entries, got %d", len(data))
+		}
+	})
+
+	t.Run("limits results with limit param", func(t *testing.T) {
+		resp := d.handleTaskHistory(socket.Request{
+			Command: "task_history",
+			Args: map[string]interface{}{
+				"repo":  "history-repo",
+				"limit": float64(1), // JSON numbers come as float64
+			},
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success, got error: %s", resp.Error)
+		}
+
+		data, ok := resp.Data.([]map[string]interface{})
+		if !ok {
+			t.Fatalf("Expected []map[string]interface{}, got %T", resp.Data)
+		}
+		if len(data) != 1 {
+			t.Errorf("Expected 1 history entry with limit=1, got %d", len(data))
+		}
+	})
+
+	t.Run("returns entries with correct fields", func(t *testing.T) {
+		resp := d.handleTaskHistory(socket.Request{
+			Command: "task_history",
+			Args: map[string]interface{}{
+				"repo": "history-repo",
+			},
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success, got error: %s", resp.Error)
+		}
+
+		data, ok := resp.Data.([]map[string]interface{})
+		if !ok {
+			t.Fatalf("Expected []map[string]interface{}, got %T", resp.Data)
+		}
+		if len(data) == 0 {
+			t.Fatal("Expected at least one entry")
+		}
+
+		// Verify entry has expected fields
+		entry := data[0]
+		if _, hasName := entry["name"]; !hasName {
+			t.Error("Entry should have 'name' field")
+		}
+		if _, hasTask := entry["task"]; !hasTask {
+			t.Error("Entry should have 'task' field")
+		}
+		if _, hasStatus := entry["status"]; !hasStatus {
+			t.Error("Entry should have 'status' field")
+		}
+	})
+}
