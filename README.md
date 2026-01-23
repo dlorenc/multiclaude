@@ -212,6 +212,19 @@ Agents have access to multiclaude-specific slash commands:
 - `/workers` - List active workers for the repo
 - `/messages` - Check inter-agent messages
 
+### Agent Definitions
+
+Manage configurable agent definitions:
+
+```bash
+multiclaude agents list                    # List available agent definitions
+multiclaude agents reset                   # Reset to built-in templates
+multiclaude agents spawn --name <n> --class <c> --prompt-file <f>  # Spawn custom agent
+```
+
+Agent definitions in `~/.multiclaude/repos/<repo>/agents/` customize agent behavior.
+Definitions checked into `<repo>/.multiclaude/agents/` are shared with your team.
+
 ## Working with multiclaude
 
 ### What the tmux Session Looks Like
@@ -386,6 +399,74 @@ When CI fails, the merge queue can spawn workers to fix it:
 │  │ I'll check back on #48 after quick-fox pushes a fix.                    ││
 ```
 
+## Configurable Agents
+
+multiclaude allows you to customize agent behavior through agent definitions - markdown files that define how workers, merge-queue, and review agents operate.
+
+### What Can Be Customized
+
+You can customize:
+- **Worker** behavior - coding style, commit conventions, testing requirements
+- **Merge-queue** behavior - merge policies, PR handling rules
+- **Review** behavior - code review focus areas, comment style
+
+Note: Supervisor and workspace agents use embedded prompts and cannot be customized.
+
+### How to Customize
+
+Agent definitions are stored in `~/.multiclaude/repos/<repo>/agents/`:
+
+```bash
+# List current agent definitions
+multiclaude agents list
+
+# Reset to built-in defaults (useful after upgrading)
+multiclaude agents reset
+```
+
+Edit the definition files to customize behavior:
+- `~/.multiclaude/repos/<repo>/agents/worker.md`
+- `~/.multiclaude/repos/<repo>/agents/merge-queue.md`
+- `~/.multiclaude/repos/<repo>/agents/reviewer.md`
+
+### Sharing with Your Team
+
+Check agent definitions into your repository to share them:
+
+```
+<repo>/.multiclaude/agents/
+├── worker.md        # Team's worker conventions
+├── merge-queue.md   # Team's merge policies
+└── review.md        # Team's review guidelines
+```
+
+These take precedence over local definitions, ensuring all team members use consistent agent behavior.
+
+### Precedence Order
+
+1. `<repo>/.multiclaude/agents/<agent>.md` (checked into repo, highest priority)
+2. `~/.multiclaude/repos/<repo>/agents/<agent>.md` (local overrides)
+3. Built-in templates (fallback)
+
+### Example: Customizing Worker Conventions
+
+To make workers follow your project's coding conventions, edit the worker definition:
+
+```bash
+# Open the worker definition
+$EDITOR ~/.multiclaude/repos/my-repo/agents/worker.md
+```
+
+Add project-specific instructions:
+```markdown
+## Project-Specific Guidelines
+
+- Use conventional commits (feat:, fix:, docs:, etc.)
+- All new functions require unit tests
+- Follow the existing code style in src/
+- Run `npm run lint` before creating PRs
+```
+
 ## Architecture
 
 ### Design Principles
@@ -405,10 +486,13 @@ When CI fails, the merge queue can spawn workers to fix it:
 ├── daemon.log          # Daemon logs
 ├── state.json          # Persisted state
 ├── repos/<repo>/       # Cloned repositories
+│   └── agents/         # Per-repo agent definitions (local overrides)
 ├── wts/<repo>/         # Git worktrees (supervisor, merge-queue, workers)
 ├── messages/<repo>/    # Inter-agent messages
 └── claude-config/<repo>/<agent>/  # Per-agent Claude configuration (slash commands)
 ```
+
+Repository-checked agent definitions in `<repo>/.multiclaude/agents/` take precedence over local definitions.
 
 ### Repository Configuration
 

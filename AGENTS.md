@@ -220,6 +220,59 @@ Note: Supervisor and workspace agents use embedded prompts only and cannot be cu
 
 **Deprecated:** The old system using `SUPERVISOR.md`, `WORKER.md`, `REVIEWER.md`, etc. directly in `.multiclaude/` is deprecated. Migrate your custom prompts to the new `.multiclaude/agents/` directory structure.
 
+### Managing Agent Definitions via CLI
+
+```bash
+# List agent definitions for the current repo
+multiclaude agents list
+
+# Reset definitions to built-in defaults
+multiclaude agents reset
+
+# Spawn a custom agent from a prompt file
+multiclaude agents spawn --name my-agent --class worker --prompt-file ./custom.md
+```
+
+### Example: Customizing Worker Behavior
+
+To customize how workers operate for your project:
+
+1. First, ensure the default templates are copied to your local definitions:
+   ```bash
+   multiclaude agents reset
+   ```
+
+2. Edit the worker definition:
+   ```bash
+   $EDITOR ~/.multiclaude/repos/my-repo/agents/worker.md
+   ```
+
+3. Add project-specific instructions at the end:
+   ```markdown
+   ## Project-Specific Guidelines
+
+   ### Commit Conventions
+   - Use conventional commits: feat:, fix:, docs:, refactor:, test:
+   - Reference issue numbers in commit messages
+
+   ### Code Style
+   - Follow the patterns in existing code
+   - Run `make lint` before creating PRs
+   - All new public functions need docstrings
+
+   ### Testing Requirements
+   - Add tests for all new functionality
+   - Ensure `make test` passes before marking complete
+   ```
+
+4. To share with your team, move the customization to the repo:
+   ```bash
+   mkdir -p .multiclaude/agents
+   cp ~/.multiclaude/repos/my-repo/agents/worker.md .multiclaude/agents/
+   git add .multiclaude/agents/worker.md
+   git commit -m "docs: Add worker agent conventions"
+   ```
+
 ### Prompt Assembly
 
 ```

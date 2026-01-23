@@ -17,6 +17,10 @@ It is intended to help with debugging and understanding how multiclaude organize
 │
 ├── repos/              # Cloned repositories
 │   └── <repo-name>/    # Git clone of tracked repo
+│       └── agents/     # Per-repo agent definitions (local overrides)
+│           ├── worker.md
+│           ├── merge-queue.md
+│           └── reviewer.md
 │
 ├── wts/                # Git worktrees
 │   └── <repo-name>/
@@ -138,6 +142,43 @@ Inbox directory for a specific agent
 Generated prompt files for agents
 
 **Notes**: Created on-demand. Contains <agent-name>.md prompt files.
+
+### 📁 `repos/<repo-name>/agents/`
+
+**Type**: directory
+
+Per-repository agent definitions for customizing agent behavior
+
+**Notes**: Contains `worker.md`, `merge-queue.md`, and `reviewer.md` files that override built-in templates. Created when `multiclaude agents reset` is run.
+
+## Repository-Checked Agent Definitions
+
+Repositories can include agent definitions checked into version control at `<repo>/.multiclaude/agents/`:
+
+```
+<repo>/.multiclaude/agents/
+├── worker.md        # Worker agent definition
+├── merge-queue.md   # Merge-queue agent definition
+└── review.md        # Review agent definition
+```
+
+These take precedence over local definitions in `~/.multiclaude/repos/<repo>/agents/`.
+
+## Built-in Templates
+
+Built-in agent templates are embedded in the binary from `internal/templates/agent-templates/`:
+
+```
+internal/templates/agent-templates/
+├── worker.md        # Default worker template
+├── merge-queue.md   # Default merge-queue template
+└── reviewer.md      # Default reviewer template
+```
+
+**Precedence order:**
+1. `<repo>/.multiclaude/agents/<agent>.md` (checked into repo, highest priority)
+2. `~/.multiclaude/repos/<repo>/agents/<agent>.md` (local overrides)
+3. Built-in templates (fallback)
 
 ## state.json Format
 
