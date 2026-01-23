@@ -65,6 +65,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y tmux
 
       - name: Run unit tests with coverage
+        env:
+          TMUX_TESTS: "1"
         run: |
           go test -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/...
           go tool cover -func=coverage.out
@@ -94,6 +96,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y tmux
 
       - name: Check coverage thresholds
+        env:
+          TMUX_TESTS: "1"
         run: |
           go test -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/...
 
