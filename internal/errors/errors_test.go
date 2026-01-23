@@ -60,8 +60,8 @@ func TestFormat_CLIError(t *testing.T) {
 		},
 		{
 			name:     "error with suggestion",
-			err:      New(CategoryConnection, "daemon offline").WithSuggestion("multiclaude start"),
-			contains: []string{"daemon offline", "Try:", "multiclaude start"},
+			err:      New(CategoryConnection, "daemon offline").WithSuggestion("multiclaude daemon start"),
+			contains: []string{"daemon offline", "Try:", "multiclaude daemon start"},
 		},
 	}
 
@@ -109,7 +109,7 @@ func TestDaemonNotRunning(t *testing.T) {
 	if !strings.Contains(formatted, "daemon") {
 		t.Errorf("expected 'daemon' in message, got: %s", formatted)
 	}
-	if !strings.Contains(formatted, "multiclaude start") {
+	if !strings.Contains(formatted, "multiclaude daemon start") {
 		t.Errorf("expected suggestion, got: %s", formatted)
 	}
 }

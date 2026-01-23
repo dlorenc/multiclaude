@@ -312,9 +312,10 @@ func (c *CLI) showCommandHelp(cmd *Command) error {
 // registerCommands registers all CLI commands
 func (c *CLI) registerCommands() {
 	// Daemon commands
+	// Root-level 'start' is kept as alias for backward compatibility
 	c.rootCmd.Subcommands["start"] = &Command{
 		Name:        "start",
-		Description: "Start the multiclaude daemon",
+		Description: "Start the daemon (alias for 'daemon start')",
 		Usage:       "multiclaude start",
 		Run:         c.startDaemon,
 	}
@@ -958,7 +959,7 @@ func (c *CLI) stopAll(args []string) error {
 
 		fmt.Println("\n✓ Full cleanup complete! Multiclaude has been reset to a clean state.")
 		fmt.Println("Your repositories are preserved at:", c.paths.ReposDir)
-		fmt.Println("\nRun 'multiclaude start' to begin fresh.")
+		fmt.Println("\nRun 'multiclaude daemon start' to begin fresh.")
 	} else {
 		fmt.Println("\n✓ All multiclaude sessions stopped")
 	}

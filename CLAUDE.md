@@ -108,7 +108,7 @@ Use structured errors from `internal/errors` for user-facing messages:
 
 ```go
 // Good: User gets helpful message + suggestion
-return errors.DaemonNotRunning()  // "daemon is not running" + "Try: multiclaude start"
+return errors.DaemonNotRunning()  // "daemon is not running" + "Try: multiclaude daemon start"
 
 // Good: Wrap with context
 return errors.GitOperationFailed("clone", err)

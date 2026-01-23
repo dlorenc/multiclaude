@@ -123,7 +123,7 @@ func DaemonNotRunning() *CLIError {
 	return &CLIError{
 		Category:   CategoryConnection,
 		Message:    "daemon is not running",
-		Suggestion: "multiclaude start",
+		Suggestion: "multiclaude daemon start",
 	}
 }
 
