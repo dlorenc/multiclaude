@@ -799,8 +799,43 @@ func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
 		psConfig.Enabled = true
 	}
 
+	// Parse provider configuration (optional, defaults to GitHub for backward compatibility)
+	var providerType state.ProviderType
+	if prov, ok := req.Args["provider"].(string); ok {
+		providerType = state.ProviderType(prov)
+	}
+
+	var providerConfig *state.ProviderConfig
+	if provOrg, ok := req.Args["provider_org"].(string); ok {
+		if providerConfig == nil {
+			providerConfig = &state.ProviderConfig{}
+		}
+		providerConfig.Organization = provOrg
+	}
+	if provProj, ok := req.Args["provider_proj"].(string); ok {
+		if providerConfig == nil {
+			providerConfig = &state.ProviderConfig{}
+		}
+		providerConfig.Project = provProj
+	}
+	if provRepo, ok := req.Args["provider_repo"].(string); ok {
+		if providerConfig == nil {
+			providerConfig = &state.ProviderConfig{}
+		}
+		providerConfig.RepoName = provRepo
+	}
+
+	// Get repo_url if provided, otherwise fall back to github_url
+	repoURL := githubURL
+	if url, ok := req.Args["repo_url"].(string); ok && url != "" {
+		repoURL = url
+	}
+
 	repo := &state.Repository{
-		GithubURL:        githubURL,
+		RepoURL:          repoURL,
+		GithubURL:        githubURL, // Keep for backward compatibility
+		Provider:         providerType,
+		ProviderConfig:   providerConfig,
 		TmuxSession:      tmuxSession,
 		Agents:           make(map[string]state.Agent),
 		MergeQueueConfig: mqConfig,

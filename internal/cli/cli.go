@@ -23,6 +23,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/names"
 	"github.com/dlorenc/multiclaude/internal/prompts"
+	"github.com/dlorenc/multiclaude/internal/provider"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/internal/templates"
@@ -197,6 +198,22 @@ func sanitizeTmuxSessionName(repoName string) string {
 		return r
 	}, repoName)
 	return fmt.Sprintf("mc-%s", tmuxSanitizer.Replace(sanitized))
+}
+
+// extractRepoNameFromPath extracts the repository name from a local file path.
+// Used for testing scenarios where a local git repo is used instead of a URL.
+func extractRepoNameFromPath(path string) string {
+	// Remove file:// prefix if present
+	path = strings.TrimPrefix(path, "file://")
+	// Remove trailing slashes and .git suffix
+	path = strings.TrimRight(path, "/")
+	path = strings.TrimSuffix(path, ".git")
+	// Get the last component of the path
+	parts := strings.Split(path, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return path
 }
 
 // Execute executes the CLI with the given arguments
@@ -970,24 +987,48 @@ func (c *CLI) initRepo(args []string) error {
 	flags, posArgs := ParseFlags(args)
 
 	if len(posArgs) < 1 {
-		return errors.InvalidUsage("usage: multiclaude init <github-url> [name] [--no-merge-queue] [--mq-track=all|author|assigned]")
+		return errors.InvalidUsage("usage: multiclaude init <repo-url> [name] [--no-merge-queue] [--mq-track=all|author|assigned]")
 	}
 
-	githubURL := strings.TrimRight(posArgs[0], "/")
+	repoURL := strings.TrimRight(posArgs[0], "/")
+
+	// Detect provider from URL - try provider detection first
+	repoInfo, err := fork.ParseRepoURL(repoURL)
+
+	// If provider detection fails, check if it's a local path (for testing)
+	// or fall back to legacy behavior for backward compatibility
+	var githubURL string
+	if err != nil {
+		// Check if it looks like a local path
+		if strings.HasPrefix(repoURL, "/") || strings.HasPrefix(repoURL, ".") || strings.HasPrefix(repoURL, "file://") {
+			// Local path - used for testing, default to GitHub provider
+			githubURL = repoURL
+			repoInfo = &provider.RepoInfo{
+				Provider: provider.TypeGitHub,
+				Repo:     extractRepoNameFromPath(repoURL),
+			}
+		} else {
+			return errors.InvalidUsage(fmt.Sprintf("unsupported repository URL: %s\nSupported providers: GitHub, Azure DevOps", repoURL))
+		}
+	} else {
+		// Use the normalized clone URL
+		githubURL = repoInfo.CloneURL
+	}
+
+	// Validate provider-specific requirements
+	if repoInfo.Provider == provider.TypeAzureDevOps {
+		if err := provider.ValidatePAT(); err != nil {
+			return fmt.Errorf("Azure DevOps requires authentication: %w", err)
+		}
+	}
 
 	// Parse repository name from URL if not provided
 	var repoName string
 	if len(posArgs) >= 2 {
 		repoName = posArgs[1]
 	} else {
-		// Extract repo name from URL (e.g., github.com/user/repo -> repo)
-		// A valid GitHub URL has format: https://github.com/owner/repo
-		// When split by "/": ["https:", "", "github.com", "owner", "repo"] - 5+ parts
-		parts := strings.Split(githubURL, "/")
-		if len(parts) < 5 {
-			return errors.InvalidUsage("could not determine repository name from URL; please provide a name: multiclaude init <url> <name>")
-		}
-		repoName = strings.TrimSuffix(parts[len(parts)-1], ".git")
+		// Use the parsed repo name from the provider
+		repoName = repoInfo.Repo
 	}
 
 	// Validate repository name before any operations
@@ -1017,7 +1058,8 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	fmt.Printf("Initializing repository: %s\n", repoName)
-	fmt.Printf("GitHub URL: %s\n", githubURL)
+	fmt.Printf("Provider: %s\n", repoInfo.Provider)
+	fmt.Printf("Repository URL: %s\n", githubURL)
 	if mqEnabled {
 		fmt.Printf("Merge queue: enabled (tracking: %s)\n", mqTrackMode)
 	} else {
@@ -1026,7 +1068,7 @@ func (c *CLI) initRepo(args []string) error {
 
 	// Check if daemon is running
 	client := socket.NewClient(c.paths.DaemonSock)
-	_, err := client.Send(socket.Request{Command: "ping"})
+	_, err = client.Send(socket.Request{Command: "ping"})
 	if err != nil {
 		return errors.DaemonNotRunning()
 	}
@@ -1206,7 +1248,12 @@ func (c *CLI) initRepo(args []string) error {
 	// Add repository to daemon state (with merge queue and fork config)
 	addRepoArgs := map[string]interface{}{
 		"name":          repoName,
-		"github_url":    githubURL,
+		"github_url":    githubURL, // Keep for backward compatibility
+		"repo_url":      githubURL, // New field
+		"provider":      string(repoInfo.Provider),
+		"provider_org":  repoInfo.Owner,
+		"provider_proj": repoInfo.Project,
+		"provider_repo": repoInfo.Repo,
 		"tmux_session":  tmuxSession,
 		"mq_enabled":    mqConfig.Enabled,
 		"mq_track_mode": string(mqConfig.TrackMode),
