@@ -5,21 +5,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dlorenc/multiclaude/internal/state"
 )
 
 func TestGetDefaultPrompt(t *testing.T) {
 	tests := []struct {
 		name      string
-		agentType AgentType
+		agentType state.AgentType
 		wantEmpty bool
 	}{
-		{"supervisor", TypeSupervisor, false},
-		{"workspace", TypeWorkspace, false},
+		{"supervisor", state.AgentTypeSupervisor, false},
+		{"workspace", state.AgentTypeWorkspace, false},
 		// Worker, merge-queue, and review should return empty - they use configurable agent definitions
-		{"worker", TypeWorker, true},
-		{"merge-queue", TypeMergeQueue, true},
-		{"review", TypeReview, true},
-		{"unknown", AgentType("unknown"), true},
+		{"worker", state.AgentTypeWorker, true},
+		{"merge-queue", state.AgentTypeMergeQueue, true},
+		{"review", state.AgentTypeReview, true},
+		{"unknown", state.AgentType("unknown"), true},
 	}
 
 	for _, tt := range tests {
@@ -37,7 +39,7 @@ func TestGetDefaultPrompt(t *testing.T) {
 
 func TestGetDefaultPromptContent(t *testing.T) {
 	// Verify supervisor prompt (hardcoded - has embedded content)
-	supervisorPrompt := GetDefaultPrompt(TypeSupervisor)
+	supervisorPrompt := GetDefaultPrompt(state.AgentTypeSupervisor)
 	if !strings.Contains(supervisorPrompt, "supervisor agent") {
 		t.Error("supervisor prompt should mention 'supervisor agent'")
 	}
@@ -46,7 +48,7 @@ func TestGetDefaultPromptContent(t *testing.T) {
 	}
 
 	// Verify workspace prompt (hardcoded - has embedded content)
-	workspacePrompt := GetDefaultPrompt(TypeWorkspace)
+	workspacePrompt := GetDefaultPrompt(state.AgentTypeWorkspace)
 	if !strings.Contains(workspacePrompt, "user workspace") {
 		t.Error("workspace prompt should mention 'user workspace'")
 	}
@@ -62,13 +64,13 @@ func TestGetDefaultPromptContent(t *testing.T) {
 	// Their content is tested via the templates package instead.
 
 	// Verify worker, merge-queue, and review return empty (configurable agents)
-	if GetDefaultPrompt(TypeWorker) != "" {
+	if GetDefaultPrompt(state.AgentTypeWorker) != "" {
 		t.Error("worker prompt should be empty (configurable agent)")
 	}
-	if GetDefaultPrompt(TypeMergeQueue) != "" {
+	if GetDefaultPrompt(state.AgentTypeMergeQueue) != "" {
 		t.Error("merge-queue prompt should be empty (configurable agent)")
 	}
-	if GetDefaultPrompt(TypeReview) != "" {
+	if GetDefaultPrompt(state.AgentTypeReview) != "" {
 		t.Error("review prompt should be empty (configurable agent)")
 	}
 }
@@ -88,7 +90,7 @@ func TestLoadCustomPrompt(t *testing.T) {
 	}
 
 	t.Run("no custom prompt", func(t *testing.T) {
-		prompt, err := LoadCustomPrompt(tmpDir, TypeSupervisor)
+		prompt, err := LoadCustomPrompt(tmpDir, state.AgentTypeSupervisor)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -104,7 +106,7 @@ func TestLoadCustomPrompt(t *testing.T) {
 			t.Fatalf("failed to write custom prompt: %v", err)
 		}
 
-		prompt, err := LoadCustomPrompt(tmpDir, TypeSupervisor)
+		prompt, err := LoadCustomPrompt(tmpDir, state.AgentTypeSupervisor)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -120,7 +122,7 @@ func TestLoadCustomPrompt(t *testing.T) {
 			t.Fatalf("failed to write custom prompt: %v", err)
 		}
 
-		prompt, err := LoadCustomPrompt(tmpDir, TypeWorker)
+		prompt, err := LoadCustomPrompt(tmpDir, state.AgentTypeWorker)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -136,7 +138,7 @@ func TestLoadCustomPrompt(t *testing.T) {
 			t.Fatalf("failed to write custom prompt: %v", err)
 		}
 
-		prompt, err := LoadCustomPrompt(tmpDir, TypeMergeQueue)
+		prompt, err := LoadCustomPrompt(tmpDir, state.AgentTypeMergeQueue)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -152,7 +154,7 @@ func TestLoadCustomPrompt(t *testing.T) {
 			t.Fatalf("failed to write custom prompt: %v", err)
 		}
 
-		prompt, err := LoadCustomPrompt(tmpDir, TypeWorkspace)
+		prompt, err := LoadCustomPrompt(tmpDir, state.AgentTypeWorkspace)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -168,7 +170,7 @@ func TestLoadCustomPrompt(t *testing.T) {
 			t.Fatalf("failed to write custom prompt: %v", err)
 		}
 
-		prompt, err := LoadCustomPrompt(tmpDir, TypeReview)
+		prompt, err := LoadCustomPrompt(tmpDir, state.AgentTypeReview)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -237,7 +239,7 @@ func TestGetPrompt(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	t.Run("default only", func(t *testing.T) {
-		prompt, err := GetPrompt(tmpDir, TypeSupervisor, "")
+		prompt, err := GetPrompt(tmpDir, state.AgentTypeSupervisor, "")
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -263,7 +265,7 @@ func TestGetPrompt(t *testing.T) {
 			t.Fatalf("failed to write custom prompt: %v", err)
 		}
 
-		prompt, err := GetPrompt(tmpDir, TypeSupervisor, "")
+		prompt, err := GetPrompt(tmpDir, state.AgentTypeSupervisor, "")
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -280,7 +282,7 @@ func TestGetPrompt(t *testing.T) {
 
 	t.Run("with CLI docs", func(t *testing.T) {
 		cliDocs := "# CLI Documentation\n\n## Commands\n\n- test command"
-		prompt, err := GetPrompt(tmpDir, TypeSupervisor, cliDocs)
+		prompt, err := GetPrompt(tmpDir, state.AgentTypeSupervisor, cliDocs)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -382,9 +384,9 @@ func TestGetPromptIncludesSlashCommandsForHardcodedAgentTypes(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Only test hardcoded agent types (supervisor, workspace)
-	agentTypes := []AgentType{
-		TypeSupervisor,
-		TypeWorkspace,
+	agentTypes := []state.AgentType{
+		state.AgentTypeSupervisor,
+		state.AgentTypeWorkspace,
 	}
 
 	for _, agentType := range agentTypes {
@@ -421,10 +423,10 @@ func TestGetPromptForConfigurableAgentTypesReturnsSlashCommandsOnly(t *testing.T
 	defer os.RemoveAll(tmpDir)
 
 	// Configurable agent types have no embedded prompt
-	agentTypes := []AgentType{
-		TypeWorker,
-		TypeMergeQueue,
-		TypeReview,
+	agentTypes := []state.AgentType{
+		state.AgentTypeWorker,
+		state.AgentTypeMergeQueue,
+		state.AgentTypeReview,
 	}
 
 	for _, agentType := range agentTypes {

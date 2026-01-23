@@ -1085,7 +1085,7 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	// Write prompt files
-	supervisorPromptFile, err := c.writePromptFile(repoPath, prompts.TypeSupervisor, "supervisor")
+	supervisorPromptFile, err := c.writePromptFile(repoPath, state.AgentTypeSupervisor, "supervisor")
 	if err != nil {
 		return fmt.Errorf("failed to write supervisor prompt: %w", err)
 	}
@@ -1238,7 +1238,7 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	// Write prompt file for default workspace
-	workspacePromptFile, err := c.writePromptFile(repoPath, prompts.TypeWorkspace, "default")
+	workspacePromptFile, err := c.writePromptFile(repoPath, state.AgentTypeWorkspace, "default")
 	if err != nil {
 		return fmt.Errorf("failed to write default workspace prompt: %w", err)
 	}
@@ -2698,7 +2698,7 @@ func (c *CLI) addWorkspace(args []string) error {
 	}
 
 	// Write prompt file for workspace
-	workspacePromptFile, err := c.writePromptFile(repoPath, prompts.TypeWorkspace, workspaceName)
+	workspacePromptFile, err := c.writePromptFile(repoPath, state.AgentTypeWorkspace, workspaceName)
 	if err != nil {
 		return fmt.Errorf("failed to write workspace prompt: %w", err)
 	}
@@ -3721,7 +3721,7 @@ func (c *CLI) reviewPR(args []string) error {
 	}
 
 	// Write prompt file for reviewer
-	reviewerPromptFile, err := c.writePromptFile(repoPath, prompts.TypeReview, reviewerName)
+	reviewerPromptFile, err := c.writePromptFile(repoPath, state.AgentTypeReview, reviewerName)
 	if err != nil {
 		return fmt.Errorf("failed to write reviewer prompt: %w", err)
 	}
@@ -4964,7 +4964,7 @@ func ParseFlags(args []string) (map[string]string, []string) {
 }
 
 // writePromptFile writes the agent prompt to a temporary file and returns the path
-func (c *CLI) writePromptFile(repoPath string, agentType prompts.AgentType, agentName string) (string, error) {
+func (c *CLI) writePromptFile(repoPath string, agentType state.AgentType, agentName string) (string, error) {
 	// Get the complete prompt (default + custom + CLI docs)
 	promptText, err := prompts.GetPrompt(repoPath, agentType, c.documentation)
 	if err != nil {
@@ -5044,11 +5044,8 @@ func (c *CLI) writeMergeQueuePromptFile(repoPath string, agentName string, mqCon
 		promptText += fmt.Sprintf("\n\n---\n\n%s", slashCommands)
 	}
 
-	// Add custom prompt if it exists
-	customPrompt, err := prompts.LoadCustomPrompt(repoPath, prompts.TypeMergeQueue)
-	if err == nil && customPrompt != "" {
-		promptText += fmt.Sprintf("\n\n---\n\nRepository-specific instructions:\n\n%s", customPrompt)
-	}
+	// Note: Custom prompts from <repo>/.multiclaude/REVIEWER.md are deprecated.
+	// Users should customize via <repo>/.multiclaude/agents/merge-queue.md instead.
 
 	// Add tracking mode configuration to the prompt
 	trackingConfig := prompts.GenerateTrackingModePrompt(string(mqConfig.TrackMode))
@@ -5132,11 +5129,8 @@ func (c *CLI) writeWorkerPromptFile(repoPath string, agentName string, config Wo
 		promptText += fmt.Sprintf("\n\n---\n\n%s", slashCommands)
 	}
 
-	// Add custom prompt if it exists
-	customPrompt, err := prompts.LoadCustomPrompt(repoPath, prompts.TypeWorker)
-	if err == nil && customPrompt != "" {
-		promptText += fmt.Sprintf("\n\n---\n\nRepository-specific instructions:\n\n%s", customPrompt)
-	}
+	// Note: Custom prompts from <repo>/.multiclaude/WORKER.md are deprecated.
+	// Users should customize via <repo>/.multiclaude/agents/worker.md instead.
 
 	// Add push-to configuration if specified
 	if config.PushToBranch != "" {

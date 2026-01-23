@@ -8,18 +8,27 @@ import (
 	"strings"
 
 	"github.com/dlorenc/multiclaude/internal/prompts/commands"
+	"github.com/dlorenc/multiclaude/internal/state"
 )
 
-// AgentType represents the type of agent
-type AgentType string
+// AgentType is an alias for state.AgentType.
+// Deprecated: Use state.AgentType directly instead.
+type AgentType = state.AgentType
 
-const (
-	TypeSupervisor AgentType = "supervisor"
-	TypeWorker     AgentType = "worker"
-	TypeMergeQueue AgentType = "merge-queue"
-	TypeWorkspace  AgentType = "workspace"
-	TypeReview     AgentType = "review"
-)
+// Deprecated: Use state.AgentTypeSupervisor directly.
+const TypeSupervisor = state.AgentTypeSupervisor
+
+// Deprecated: Use state.AgentTypeWorker directly.
+const TypeWorker = state.AgentTypeWorker
+
+// Deprecated: Use state.AgentTypeMergeQueue directly.
+const TypeMergeQueue = state.AgentTypeMergeQueue
+
+// Deprecated: Use state.AgentTypeWorkspace directly.
+const TypeWorkspace = state.AgentTypeWorkspace
+
+// Deprecated: Use state.AgentTypeReview directly.
+const TypeReview = state.AgentTypeReview
 
 // Embedded default prompts
 // Only supervisor and workspace are "hardcoded" - other agent types (worker, merge-queue, review)
@@ -34,13 +43,13 @@ var defaultWorkspacePrompt string
 // GetDefaultPrompt returns the default prompt for the given agent type.
 // Only supervisor and workspace have embedded default prompts.
 // Worker, merge-queue, and review prompts should come from agent definitions.
-func GetDefaultPrompt(agentType AgentType) string {
+func GetDefaultPrompt(agentType state.AgentType) string {
 	switch agentType {
-	case TypeSupervisor:
+	case state.AgentTypeSupervisor:
 		return defaultSupervisorPrompt
-	case TypeWorkspace:
+	case state.AgentTypeWorkspace:
 		return defaultWorkspacePrompt
-	case TypeWorker, TypeMergeQueue, TypeReview:
+	case state.AgentTypeWorker, state.AgentTypeMergeQueue, state.AgentTypeReview:
 		// These agent types should use configurable agent definitions
 		// from ~/.multiclaude/repos/<repo>/agents/ or <repo>/.multiclaude/agents/
 		return ""
@@ -49,20 +58,25 @@ func GetDefaultPrompt(agentType AgentType) string {
 	}
 }
 
-// LoadCustomPrompt loads a custom prompt from the repository's .multiclaude directory
-// Returns empty string if the file doesn't exist
-func LoadCustomPrompt(repoPath string, agentType AgentType) (string, error) {
+// LoadCustomPrompt loads a custom prompt from the repository's .multiclaude directory.
+// Returns empty string if the file doesn't exist.
+//
+// Deprecated: This function is deprecated. Use the configurable agent system instead:
+// - Agent definitions: <repo>/.multiclaude/agents/<agent-name>.md
+// - Local overrides: ~/.multiclaude/repos/<repo>/agents/<agent-name>.md
+// See internal/agents package for the new system.
+func LoadCustomPrompt(repoPath string, agentType state.AgentType) (string, error) {
 	var filename string
 	switch agentType {
-	case TypeSupervisor:
+	case state.AgentTypeSupervisor:
 		filename = "SUPERVISOR.md"
-	case TypeWorker:
+	case state.AgentTypeWorker:
 		filename = "WORKER.md"
-	case TypeMergeQueue:
+	case state.AgentTypeMergeQueue:
 		filename = "MERGE-QUEUE.md"
-	case TypeWorkspace:
+	case state.AgentTypeWorkspace:
 		filename = "WORKSPACE.md"
-	case TypeReview:
+	case state.AgentTypeReview:
 		filename = "REVIEW.md"
 	default:
 		return "", fmt.Errorf("unknown agent type: %s", agentType)
@@ -85,7 +99,7 @@ func LoadCustomPrompt(repoPath string, agentType AgentType) (string, error) {
 }
 
 // GetPrompt returns the complete prompt for an agent, combining default, custom prompts, CLI docs, and slash commands
-func GetPrompt(repoPath string, agentType AgentType, cliDocs string) (string, error) {
+func GetPrompt(repoPath string, agentType state.AgentType, cliDocs string) (string, error) {
 	defaultPrompt := GetDefaultPrompt(agentType)
 
 	customPrompt, err := LoadCustomPrompt(repoPath, agentType)

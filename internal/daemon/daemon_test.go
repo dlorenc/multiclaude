@@ -30,8 +30,13 @@ func skipIfTmuxCantCreateSessions(t *testing.T, tmuxClient *tmux.Client) {
 	}
 
 	// Try to actually create and destroy a session to verify it works
-	testSession := "mc-test-can-create-session"
+	// Use a unique session name per test to avoid conflicts when tests run in sequence
+	testSession := "mc-skip-check-" + strings.ReplaceAll(t.Name(), "/", "-")
 	ctx := context.Background()
+
+	// Clean up any leftover session from a previous failed test run
+	tmuxClient.KillSession(ctx, testSession)
+
 	if err := tmuxClient.CreateSession(ctx, testSession, true); err != nil {
 		t.Skipf("tmux cannot create sessions in this environment: %v", err)
 	}

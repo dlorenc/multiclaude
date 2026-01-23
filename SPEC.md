@@ -266,10 +266,12 @@ claude --session-id "<uuid>" \
 
 ### Role Prompts
 
-Default prompts are embedded in the binary. Repositories can extend them with:
-- `.multiclaude/SUPERVISOR.md`
-- `.multiclaude/WORKER.md`
-- `.multiclaude/REVIEWER.md`
+Default prompts are embedded in the binary. Repositories can customize agents with:
+- `.multiclaude/agents/worker.md` - Worker agent definition
+- `.multiclaude/agents/merge-queue.md` - Merge-queue agent definition
+- `.multiclaude/agents/review.md` - Review agent definition
+
+**Deprecated:** The old files (`SUPERVISOR.md`, `WORKER.md`, `REVIEWER.md` directly in `.multiclaude/`) are deprecated.
 
 ### Hooks Configuration
 
