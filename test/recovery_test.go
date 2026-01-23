@@ -100,7 +100,7 @@ func TestCorruptedStateFileRecovery(t *testing.T) {
 func TestOrphanedTmuxSessionCleanup(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	tmpDir := t.TempDir()
@@ -365,7 +365,7 @@ func TestDaemonCrashRecovery(t *testing.T) {
 	// state is preserved as-is.
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping crash recovery test")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	tmpDir := t.TempDir()

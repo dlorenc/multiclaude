@@ -976,7 +976,7 @@ func TestWorkspaceAgentExcludedFromWakeLoop(t *testing.T) {
 func TestHealthCheckLoopWithRealTmux(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	d, cleanup := setupTestDaemon(t)
@@ -986,7 +986,7 @@ func TestHealthCheckLoopWithRealTmux(t *testing.T) {
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-healthcheck"
 	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
-		t.Skipf("tmux cannot create sessions in this environment: %v", err)
+		t.Fatalf("tmux is required for this test but cannot create sessions in this environment: %v", err)
 	}
 	defer tmuxClient.KillSession(context.Background(), sessionName)
 
@@ -1041,7 +1041,7 @@ func TestHealthCheckLoopWithRealTmux(t *testing.T) {
 func TestHealthCheckCleansUpMarkedAgents(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	d, cleanup := setupTestDaemon(t)
@@ -1051,7 +1051,7 @@ func TestHealthCheckCleansUpMarkedAgents(t *testing.T) {
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-cleanup"
 	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
-		t.Skipf("tmux cannot create sessions in this environment: %v", err)
+		t.Fatalf("tmux is required for this test but cannot create sessions in this environment: %v", err)
 	}
 	defer tmuxClient.KillSession(context.Background(), sessionName)
 
@@ -1105,7 +1105,7 @@ func TestHealthCheckCleansUpMarkedAgents(t *testing.T) {
 func TestMessageRoutingWithRealTmux(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	d, cleanup := setupTestDaemon(t)
@@ -1115,7 +1115,7 @@ func TestMessageRoutingWithRealTmux(t *testing.T) {
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-routing"
 	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
-		t.Skipf("tmux cannot create sessions in this environment: %v", err)
+		t.Fatalf("tmux is required for this test but cannot create sessions in this environment: %v", err)
 	}
 	defer tmuxClient.KillSession(context.Background(), sessionName)
 
@@ -1184,7 +1184,7 @@ func TestMessageRoutingWithRealTmux(t *testing.T) {
 func TestWakeLoopUpdatesNudgeTime(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	d, cleanup := setupTestDaemon(t)
@@ -1194,7 +1194,7 @@ func TestWakeLoopUpdatesNudgeTime(t *testing.T) {
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-wake"
 	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
-		t.Skipf("tmux cannot create sessions in this environment: %v", err)
+		t.Fatalf("tmux is required for this test but cannot create sessions in this environment: %v", err)
 	}
 	defer tmuxClient.KillSession(context.Background(), sessionName)
 
@@ -1244,7 +1244,7 @@ func TestWakeLoopUpdatesNudgeTime(t *testing.T) {
 func TestWakeLoopSkipsRecentlyNudgedAgents(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	d, cleanup := setupTestDaemon(t)
@@ -1254,7 +1254,7 @@ func TestWakeLoopSkipsRecentlyNudgedAgents(t *testing.T) {
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-wake-skip"
 	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
-		t.Skipf("tmux cannot create sessions in this environment: %v", err)
+		t.Fatalf("tmux is required for this test but cannot create sessions in this environment: %v", err)
 	}
 	defer tmuxClient.KillSession(context.Background(), sessionName)
 
@@ -1893,7 +1893,7 @@ func TestRestoreTrackedReposNoRepos(t *testing.T) {
 func TestRestoreTrackedReposExistingSession(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	d, cleanup := setupTestDaemon(t)
@@ -1903,7 +1903,7 @@ func TestRestoreTrackedReposExistingSession(t *testing.T) {
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-restore-existing"
 	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
-		t.Skipf("tmux cannot create sessions in this environment: %v", err)
+		t.Fatalf("tmux is required for this test but cannot create sessions in this environment: %v", err)
 	}
 	defer tmuxClient.KillSession(context.Background(), sessionName)
 
@@ -1953,7 +1953,7 @@ func TestRestoreRepoAgentsMissingRepoPath(t *testing.T) {
 func TestRestoreDeadAgentsWithExistingSession(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	d, cleanup := setupTestDaemon(t)
@@ -1963,7 +1963,7 @@ func TestRestoreDeadAgentsWithExistingSession(t *testing.T) {
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-restore-dead"
 	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
-		t.Skipf("tmux cannot create sessions in this environment: %v", err)
+		t.Fatalf("tmux is required for this test but cannot create sessions in this environment: %v", err)
 	}
 	defer tmuxClient.KillSession(context.Background(), sessionName)
 
@@ -2005,7 +2005,7 @@ func TestRestoreDeadAgentsWithExistingSession(t *testing.T) {
 func TestRestoreDeadAgentsSkipsAliveProcesses(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	d, cleanup := setupTestDaemon(t)
@@ -2015,7 +2015,7 @@ func TestRestoreDeadAgentsSkipsAliveProcesses(t *testing.T) {
 	// Note: In CI environments, tmux may be installed but unable to create sessions (no TTY)
 	sessionName := "mc-test-restore-alive"
 	if err := tmuxClient.CreateSession(context.Background(), sessionName, true); err != nil {
-		t.Skipf("tmux cannot create sessions in this environment: %v", err)
+		t.Fatalf("tmux is required for this test but cannot create sessions in this environment: %v", err)
 	}
 	defer tmuxClient.KillSession(context.Background(), sessionName)
 
@@ -2061,7 +2061,7 @@ func TestRestoreDeadAgentsSkipsAliveProcesses(t *testing.T) {
 func TestRestoreDeadAgentsSkipsTransientAgents(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	d, cleanup := setupTestDaemon(t)
@@ -2111,7 +2111,7 @@ func TestRestoreDeadAgentsSkipsTransientAgents(t *testing.T) {
 func TestRestoreDeadAgentsIncludesWorkspace(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	d, cleanup := setupTestDaemon(t)
@@ -2381,7 +2381,7 @@ func TestHandleListReposRichFormat(t *testing.T) {
 func TestHealthCheckAttemptsRestorationBeforeCleanup(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	d, cleanup := setupTestDaemon(t)

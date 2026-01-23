@@ -27,7 +27,7 @@ func TestAgentTemplatesCopiedOnInit(t *testing.T) {
 
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping integration test")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	// Create temp directory
@@ -363,7 +363,7 @@ func TestAgentsSpawnCommand(t *testing.T) {
 
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping integration test")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	// Create temp directory
@@ -487,7 +487,7 @@ func TestAgentDefinitionsSentToSupervisor(t *testing.T) {
 
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping integration test")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	// Create temp directory
@@ -593,7 +593,7 @@ func TestSpawnPersistentAgent(t *testing.T) {
 
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping integration test")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	tmpDir, err := os.MkdirTemp("", "persistent-agent-test-*")
@@ -681,7 +681,7 @@ func TestSpawnEphemeralAgent(t *testing.T) {
 
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping integration test")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	tmpDir, err := os.MkdirTemp("", "ephemeral-agent-test-*")

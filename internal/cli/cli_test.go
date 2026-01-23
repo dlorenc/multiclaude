@@ -875,7 +875,7 @@ func TestCLISocketCommunication(t *testing.T) {
 func TestCLIWorkCreateWithRealTmux(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping test")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	cli, d, cleanup := setupTestEnvironment(t)
@@ -1821,7 +1821,7 @@ func TestCLIRemoveWorkerNonexistent(t *testing.T) {
 func TestCLIRemoveWorkerWithRealTmux(t *testing.T) {
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping test")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	cli, d, cleanup := setupTestEnvironment(t)

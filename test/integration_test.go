@@ -27,7 +27,7 @@ func setupIntegrationTest(t *testing.T, repoName string) (*cli.CLI, *daemon.Daem
 
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping integration test")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	// Create temp directory
@@ -253,7 +253,7 @@ func TestRepoInitializationIntegration(t *testing.T) {
 
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping integration test")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	// Create temp directory
@@ -419,7 +419,7 @@ func TestRepoInitializationWithMergeQueueDisabled(t *testing.T) {
 
 	tmuxClient := tmux.NewClient()
 	if !tmuxClient.IsTmuxAvailable() {
-		t.Skip("tmux not available, skipping integration test")
+		t.Fatal("tmux is required for this test but not available")
 	}
 
 	// Create temp directory

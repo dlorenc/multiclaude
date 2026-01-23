@@ -12,18 +12,18 @@ import (
 
 // TestMain ensures clean tmux environment for tests
 func TestMain(m *testing.M) {
-	// Skip tmux integration tests in CI environments unless TMUX_TESTS=1 is set
+	// Fail loudly in CI environments unless TMUX_TESTS=1 is set
 	// CI environments (like GitHub Actions) often have tmux installed but without
 	// proper terminal support, causing flaky session creation failures
 	if os.Getenv("CI") != "" && os.Getenv("TMUX_TESTS") != "1" {
-		fmt.Fprintln(os.Stderr, "Skipping tmux tests in CI (set TMUX_TESTS=1 to enable)")
-		os.Exit(0)
+		fmt.Fprintln(os.Stderr, "FAIL: tmux is required for these tests but TMUX_TESTS=1 is not set in CI")
+		os.Exit(1)
 	}
 
 	// Check if tmux is available
 	if exec.Command("tmux", "-V").Run() != nil {
-		fmt.Fprintln(os.Stderr, "Warning: tmux not available, skipping tmux tests")
-		os.Exit(0)
+		fmt.Fprintln(os.Stderr, "FAIL: tmux is required for these tests but not available")
+		os.Exit(1)
 	}
 
 	// Verify we can actually create sessions (not just that tmux is installed)
@@ -31,8 +31,8 @@ func TestMain(m *testing.M) {
 	testSession := fmt.Sprintf("test-tmux-probe-%d", time.Now().UnixNano())
 	cmd := exec.Command("tmux", "new-session", "-d", "-s", testSession)
 	if err := cmd.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "Warning: tmux cannot create sessions (no terminal?), skipping tmux tests")
-		os.Exit(0)
+		fmt.Fprintln(os.Stderr, "FAIL: tmux is required for these tests but cannot create sessions (no terminal?)")
+		os.Exit(1)
 	}
 	// Clean up probe session
 	exec.Command("tmux", "kill-session", "-t", testSession).Run()
