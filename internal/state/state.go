@@ -21,6 +21,19 @@ const (
 	AgentTypeGenericPersistent AgentType = "generic-persistent"
 )
 
+// IsPersistent returns true if this agent type represents a persistent agent
+// that should be auto-restarted when dead. Persistent agents include supervisor,
+// merge-queue, workspace, and generic-persistent. Transient agents (worker, review)
+// are not auto-restarted.
+func (t AgentType) IsPersistent() bool {
+	switch t {
+	case AgentTypeSupervisor, AgentTypeMergeQueue, AgentTypeWorkspace, AgentTypeGenericPersistent:
+		return true
+	default:
+		return false
+	}
+}
+
 // TrackMode defines which PRs the merge queue should track
 type TrackMode string
 

@@ -1544,3 +1544,31 @@ func TestUpdateTaskHistorySummary(t *testing.T) {
 		t.Error("UpdateTaskHistorySummary should fail for nonexistent task")
 	}
 }
+
+func TestAgentTypeIsPersistent(t *testing.T) {
+	tests := []struct {
+		agentType  AgentType
+		persistent bool
+	}{
+		// Persistent agents should return true
+		{AgentTypeSupervisor, true},
+		{AgentTypeMergeQueue, true},
+		{AgentTypeWorkspace, true},
+		{AgentTypeGenericPersistent, true},
+		// Transient agents should return false
+		{AgentTypeWorker, false},
+		{AgentTypeReview, false},
+		// Unknown types should return false (safe default)
+		{AgentType("unknown"), false},
+		{AgentType(""), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.agentType), func(t *testing.T) {
+			got := tt.agentType.IsPersistent()
+			if got != tt.persistent {
+				t.Errorf("AgentType(%q).IsPersistent() = %v, want %v", tt.agentType, got, tt.persistent)
+			}
+		})
+	}
+}

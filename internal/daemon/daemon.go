@@ -1698,9 +1698,8 @@ func (d *Daemon) restoreDeadAgents(repoName string, repo *state.Repository) {
 		// Process is dead but window exists - restart persistent agents with --resume
 		d.logger.Info("Agent %s process (PID %d) is dead, attempting restart", agentName, agent.PID)
 
-		// For persistent agents (supervisor, merge-queue, workspace, generic-persistent), auto-restart
-		// For transient agents (workers, review), they will be cleaned up by health check
-		if agent.Type == state.AgentTypeSupervisor || agent.Type == state.AgentTypeMergeQueue || agent.Type == state.AgentTypeWorkspace || agent.Type == state.AgentTypeGenericPersistent {
+		// For persistent agents, auto-restart. For transient agents, they will be cleaned up by health check
+		if agent.Type.IsPersistent() {
 			if err := d.restartAgent(repoName, agentName, agent, repo); err != nil {
 				d.logger.Error("Failed to restart agent %s: %v", agentName, err)
 			} else {
