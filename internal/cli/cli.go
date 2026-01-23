@@ -4964,15 +4964,9 @@ func ParseFlags(args []string) (map[string]string, []string) {
 	return flags, positional
 }
 
-// writePromptFile writes the agent prompt to a temporary file and returns the path
-func (c *CLI) writePromptFile(repoPath string, agentType state.AgentType, agentName string) (string, error) {
-	// Get the complete prompt (default + custom + CLI docs)
-	promptText, err := prompts.GetPrompt(repoPath, agentType, c.documentation)
-	if err != nil {
-		return "", fmt.Errorf("failed to get prompt: %w", err)
-	}
-
-	// Create a prompt file in the prompts directory
+// savePromptToFile writes prompt text to the prompts directory and returns the path.
+// This is a common helper used by various prompt-writing functions.
+func (c *CLI) savePromptToFile(agentName, promptText string) (string, error) {
 	promptDir := filepath.Join(c.paths.Root, "prompts")
 	if err := os.MkdirAll(promptDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create prompt directory: %w", err)
@@ -4986,13 +4980,9 @@ func (c *CLI) writePromptFile(repoPath string, agentType state.AgentType, agentN
 	return promptPath, nil
 }
 
-// writeMergeQueuePromptFile writes a merge-queue prompt file with tracking mode configuration.
-// It reads the merge-queue prompt from agent definitions (configurable agent system).
-func (c *CLI) writeMergeQueuePromptFile(repoPath string, agentName string, mqConfig state.MergeQueueConfig) (string, error) {
-	// Determine the repo name from the repoPath
-	repoName := filepath.Base(repoPath)
-
-	// Read merge-queue prompt from agent definitions
+// getAgentDefinition finds an agent definition by name, copying templates if needed.
+// Returns the prompt content or an error if not found.
+func (c *CLI) getAgentDefinition(repoName, repoPath, agentDefName string) (string, error) {
 	localAgentsDir := c.paths.RepoAgentsDir(repoName)
 	reader := agents.NewReader(localAgentsDir, repoPath)
 	definitions, err := reader.ReadAllDefinitions()
@@ -5000,70 +4990,76 @@ func (c *CLI) writeMergeQueuePromptFile(repoPath string, agentName string, mqCon
 		return "", fmt.Errorf("failed to read agent definitions: %w", err)
 	}
 
-	// Find the merge-queue definition
-	var promptText string
+	// Find the definition
 	for _, def := range definitions {
-		if def.Name == "merge-queue" {
-			promptText = def.Content
-			break
+		if def.Name == agentDefName {
+			return def.Content, nil
 		}
 	}
 
-	// If no merge-queue definition found, try to copy from templates and retry
-	if promptText == "" {
-		// Copy templates to local agents dir if it doesn't exist
-		if _, err := os.Stat(localAgentsDir); os.IsNotExist(err) {
-			if err := templates.CopyAgentTemplates(localAgentsDir); err != nil {
-				return "", fmt.Errorf("failed to copy agent templates: %w", err)
-			}
-			// Re-read definitions
-			definitions, err = reader.ReadAllDefinitions()
-			if err != nil {
-				return "", fmt.Errorf("failed to read agent definitions after template copy: %w", err)
-			}
-			for _, def := range definitions {
-				if def.Name == "merge-queue" {
-					promptText = def.Content
-					break
-				}
+	// If not found, try to copy from templates and retry
+	if _, err := os.Stat(localAgentsDir); os.IsNotExist(err) {
+		if err := templates.CopyAgentTemplates(localAgentsDir); err != nil {
+			return "", fmt.Errorf("failed to copy agent templates: %w", err)
+		}
+		// Re-read definitions
+		definitions, err = reader.ReadAllDefinitions()
+		if err != nil {
+			return "", fmt.Errorf("failed to read agent definitions after template copy: %w", err)
+		}
+		for _, def := range definitions {
+			if def.Name == agentDefName {
+				return def.Content, nil
 			}
 		}
 	}
 
-	if promptText == "" {
-		return "", fmt.Errorf("no merge-queue agent definition found")
-	}
+	return "", fmt.Errorf("no %s agent definition found", agentDefName)
+}
 
-	// Add CLI documentation
+// appendDocsAndSlashCommands adds CLI documentation and slash commands to prompt text.
+func (c *CLI) appendDocsAndSlashCommands(promptText string) string {
 	if c.documentation != "" {
 		promptText += fmt.Sprintf("\n\n---\n\n%s", c.documentation)
 	}
 
-	// Add slash commands section
 	slashCommands := prompts.GetSlashCommandsPrompt()
 	if slashCommands != "" {
 		promptText += fmt.Sprintf("\n\n---\n\n%s", slashCommands)
 	}
 
-	// Note: Custom prompts from <repo>/.multiclaude/REVIEWER.md are deprecated.
-	// Users should customize via <repo>/.multiclaude/agents/merge-queue.md instead.
+	return promptText
+}
+
+// writePromptFile writes the agent prompt to a temporary file and returns the path
+func (c *CLI) writePromptFile(repoPath string, agentType state.AgentType, agentName string) (string, error) {
+	// Get the complete prompt (default + custom + CLI docs)
+	promptText, err := prompts.GetPrompt(repoPath, agentType, c.documentation)
+	if err != nil {
+		return "", fmt.Errorf("failed to get prompt: %w", err)
+	}
+
+	return c.savePromptToFile(agentName, promptText)
+}
+
+// writeMergeQueuePromptFile writes a merge-queue prompt file with tracking mode configuration.
+// It reads the merge-queue prompt from agent definitions (configurable agent system).
+func (c *CLI) writeMergeQueuePromptFile(repoPath string, agentName string, mqConfig state.MergeQueueConfig) (string, error) {
+	repoName := filepath.Base(repoPath)
+
+	promptText, err := c.getAgentDefinition(repoName, repoPath, "merge-queue")
+	if err != nil {
+		return "", err
+	}
+
+	// Add CLI documentation and slash commands
+	promptText = c.appendDocsAndSlashCommands(promptText)
 
 	// Add tracking mode configuration to the prompt
 	trackingConfig := prompts.GenerateTrackingModePrompt(string(mqConfig.TrackMode))
 	promptText = trackingConfig + "\n\n" + promptText
 
-	// Create a prompt file in the prompts directory
-	promptDir := filepath.Join(c.paths.Root, "prompts")
-	if err := os.MkdirAll(promptDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create prompt directory: %w", err)
-	}
-
-	promptPath := filepath.Join(promptDir, fmt.Sprintf("%s.md", agentName))
-	if err := os.WriteFile(promptPath, []byte(promptText), 0644); err != nil {
-		return "", fmt.Errorf("failed to write prompt file: %w", err)
-	}
-
-	return promptPath, nil
+	return c.savePromptToFile(agentName, promptText)
 }
 
 // WorkerConfig holds configuration for creating worker prompts
@@ -5074,64 +5070,15 @@ type WorkerConfig struct {
 // writeWorkerPromptFile writes a worker prompt file with optional configuration.
 // It reads the worker prompt from agent definitions (configurable agent system).
 func (c *CLI) writeWorkerPromptFile(repoPath string, agentName string, config WorkerConfig) (string, error) {
-	// Determine the repo name from the repoPath
 	repoName := filepath.Base(repoPath)
 
-	// Read worker prompt from agent definitions
-	localAgentsDir := c.paths.RepoAgentsDir(repoName)
-	reader := agents.NewReader(localAgentsDir, repoPath)
-	definitions, err := reader.ReadAllDefinitions()
+	promptText, err := c.getAgentDefinition(repoName, repoPath, "worker")
 	if err != nil {
-		return "", fmt.Errorf("failed to read agent definitions: %w", err)
+		return "", err
 	}
 
-	// Find the worker definition
-	var promptText string
-	for _, def := range definitions {
-		if def.Name == "worker" {
-			promptText = def.Content
-			break
-		}
-	}
-
-	// If no worker definition found, try to copy from templates and retry
-	if promptText == "" {
-		// Copy templates to local agents dir if it doesn't exist
-		if _, err := os.Stat(localAgentsDir); os.IsNotExist(err) {
-			if err := templates.CopyAgentTemplates(localAgentsDir); err != nil {
-				return "", fmt.Errorf("failed to copy agent templates: %w", err)
-			}
-			// Re-read definitions
-			definitions, err = reader.ReadAllDefinitions()
-			if err != nil {
-				return "", fmt.Errorf("failed to read agent definitions after template copy: %w", err)
-			}
-			for _, def := range definitions {
-				if def.Name == "worker" {
-					promptText = def.Content
-					break
-				}
-			}
-		}
-	}
-
-	if promptText == "" {
-		return "", fmt.Errorf("no worker agent definition found")
-	}
-
-	// Add CLI documentation
-	if c.documentation != "" {
-		promptText += fmt.Sprintf("\n\n---\n\n%s", c.documentation)
-	}
-
-	// Add slash commands section
-	slashCommands := prompts.GetSlashCommandsPrompt()
-	if slashCommands != "" {
-		promptText += fmt.Sprintf("\n\n---\n\n%s", slashCommands)
-	}
-
-	// Note: Custom prompts from <repo>/.multiclaude/WORKER.md are deprecated.
-	// Users should customize via <repo>/.multiclaude/agents/worker.md instead.
+	// Add CLI documentation and slash commands
+	promptText = c.appendDocsAndSlashCommands(promptText)
 
 	// Add push-to configuration if specified
 	if config.PushToBranch != "" {
@@ -5154,18 +5101,7 @@ Do NOT create a new PR. The existing PR will be updated automatically when you p
 		promptText = pushToConfig + promptText
 	}
 
-	// Create a prompt file in the prompts directory
-	promptDir := filepath.Join(c.paths.Root, "prompts")
-	if err := os.MkdirAll(promptDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create prompt directory: %w", err)
-	}
-
-	promptPath := filepath.Join(promptDir, fmt.Sprintf("%s.md", agentName))
-	if err := os.WriteFile(promptPath, []byte(promptText), 0644); err != nil {
-		return "", fmt.Errorf("failed to write prompt file: %w", err)
-	}
-
-	return promptPath, nil
+	return c.savePromptToFile(agentName, promptText)
 }
 
 // setupOutputCapture sets up tmux pipe-pane to capture agent output to a log file.

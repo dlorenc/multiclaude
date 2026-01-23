@@ -264,10 +264,7 @@ func (d *Daemon) checkAgentHealth() {
 				d.logger.Error("Failed to restore repo %s: %v, marking all agents for cleanup", repoName, err)
 				// Only mark for cleanup if restoration failed
 				for agentName := range repo.Agents {
-					if deadAgents[repoName] == nil {
-						deadAgents[repoName] = []string{}
-					}
-					deadAgents[repoName] = append(deadAgents[repoName], agentName)
+					appendToSliceMap(deadAgents, repoName, agentName)
 				}
 			} else {
 				d.logger.Info("Successfully restored tmux session and agents for repo %s", repoName)
@@ -280,10 +277,7 @@ func (d *Daemon) checkAgentHealth() {
 			// Check if agent is marked as ready for cleanup
 			if agent.ReadyForCleanup {
 				d.logger.Info("Agent %s is ready for cleanup", agentName)
-				if deadAgents[repoName] == nil {
-					deadAgents[repoName] = []string{}
-				}
-				deadAgents[repoName] = append(deadAgents[repoName], agentName)
+				appendToSliceMap(deadAgents, repoName, agentName)
 				continue
 			}
 
@@ -296,10 +290,7 @@ func (d *Daemon) checkAgentHealth() {
 
 			if !hasWindow {
 				d.logger.Warn("Agent %s window not found, marking for cleanup", agentName)
-				if deadAgents[repoName] == nil {
-					deadAgents[repoName] = []string{}
-				}
-				deadAgents[repoName] = append(deadAgents[repoName], agentName)
+				appendToSliceMap(deadAgents, repoName, agentName)
 				continue
 			}
 
@@ -2056,6 +2047,14 @@ func isProcessAlive(pid int) bool {
 	// Send signal 0 to check if process exists (doesn't actually signal, just checks)
 	err = process.Signal(syscall.Signal(0))
 	return err == nil
+}
+
+// appendToSliceMap appends a value to a slice in a map, initializing the slice if needed.
+func appendToSliceMap(m map[string][]string, key, value string) {
+	if m[key] == nil {
+		m[key] = []string{}
+	}
+	m[key] = append(m[key], value)
 }
 
 // Run runs the daemon in the foreground
