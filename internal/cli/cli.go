@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dlorenc/multiclaude/internal/agents"
 	"github.com/dlorenc/multiclaude/internal/bugreport"
 	"github.com/dlorenc/multiclaude/internal/daemon"
 	"github.com/dlorenc/multiclaude/internal/errors"
@@ -630,6 +631,22 @@ func (c *CLI) registerCommands() {
 		Usage:       "multiclaude version [--json]",
 		Run:         c.versionCommand,
 	}
+
+	// Agents command - for managing agent definitions
+	agentsCmd := &Command{
+		Name:        "agents",
+		Description: "Manage agent definitions",
+		Subcommands: make(map[string]*Command),
+	}
+
+	agentsCmd.Subcommands["list"] = &Command{
+		Name:        "list",
+		Description: "List available agent definitions for a repository",
+		Usage:       "multiclaude agents list [--repo <repo>]",
+		Run:         c.listAgentDefinitions,
+	}
+
+	c.rootCmd.Subcommands["agents"] = agentsCmd
 }
 
 // Daemon command implementations
@@ -1997,6 +2014,67 @@ func (c *CLI) listWorkers(args []string) error {
 			format.Cell(truncTask),
 		)
 	}
+	table.Print()
+
+	return nil
+}
+
+// listAgentDefinitions lists available agent definitions for a repository
+func (c *CLI) listAgentDefinitions(args []string) error {
+	flags, _ := ParseFlags(args)
+
+	// Determine repository
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
+	}
+
+	// Get paths to agent definition directories
+	localAgentsDir := c.paths.RepoAgentsDir(repoName)
+	repoPath := c.paths.RepoDir(repoName)
+
+	// Read and merge agent definitions
+	reader := agents.NewReader(localAgentsDir, repoPath)
+	defs, err := reader.ReadAllDefinitions()
+	if err != nil {
+		return errors.Wrap(errors.CategoryRuntime, "failed to read agent definitions", err)
+	}
+
+	if len(defs) == 0 {
+		fmt.Println("No agent definitions found.")
+		fmt.Printf("\nAgent definitions are stored in:\n")
+		fmt.Printf("  Local: %s\n", localAgentsDir)
+		fmt.Printf("  Repo:  %s/.multiclaude/agents/\n", repoPath)
+		return nil
+	}
+
+	fmt.Printf("Agent definitions for %s:\n\n", repoName)
+
+	// Create colored table
+	table := format.NewColoredTable("Name", "Source", "Title", "Description")
+
+	for _, def := range defs {
+		source := string(def.Source)
+		title := def.ParseTitle()
+		desc := def.ParseDescription()
+
+		// Truncate description if too long
+		desc = format.Truncate(desc, 50)
+
+		// Color the source based on type
+		sourceCell := format.Cell(source)
+		if def.Source == agents.SourceRepo {
+			sourceCell = format.ColorCell(source, format.Green)
+		}
+
+		table.AddRow(
+			format.Cell(def.Name),
+			sourceCell,
+			format.Cell(title),
+			format.Cell(desc),
+		)
+	}
+
 	table.Print()
 
 	return nil

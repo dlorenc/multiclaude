@@ -1061,11 +1061,20 @@ func TestNewWithPaths(t *testing.T) {
 	}
 
 	// Check specific commands exist
-	expectedCommands := []string{"start", "daemon", "init", "list", "work", "agent", "attach", "cleanup", "repair", "docs"}
+	expectedCommands := []string{"start", "daemon", "init", "list", "work", "agent", "agents", "attach", "cleanup", "repair", "docs"}
 	for _, cmd := range expectedCommands {
 		if _, exists := cli.rootCmd.Subcommands[cmd]; !exists {
 			t.Errorf("Expected command %s to be registered", cmd)
 		}
+	}
+
+	// Check agents subcommands
+	agentsCmd, exists := cli.rootCmd.Subcommands["agents"]
+	if !exists {
+		t.Fatal("agents command should be registered")
+	}
+	if _, exists := agentsCmd.Subcommands["list"]; !exists {
+		t.Error("agents list subcommand should be registered")
 	}
 }
 
@@ -2615,5 +2624,94 @@ func TestIsDevVersion(t *testing.T) {
 				t.Errorf("IsDevVersion() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestListAgentDefinitions(t *testing.T) {
+	// Create temp directory structure
+	tmpDir, err := os.MkdirTemp("", "cli-agents-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	paths := config.NewTestPaths(tmpDir)
+
+	// Create necessary directories
+	if err := paths.EnsureDirectories(); err != nil {
+		t.Fatal(err)
+	}
+
+	repoName := "test-repo"
+
+	// Create local agents directory
+	localAgentsDir := paths.RepoAgentsDir(repoName)
+	if err := os.MkdirAll(localAgentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a local agent definition
+	workerContent := `# Worker Agent
+
+A task-based worker.
+`
+	if err := os.WriteFile(filepath.Join(localAgentsDir, "worker.md"), []byte(workerContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create state file with test repo
+	st := state.New(paths.StateFile)
+	if err := st.AddRepo(repoName, &state.Repository{
+		GithubURL:   "https://github.com/test/test-repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create repo directory (for checked-in definitions lookup)
+	repoPath := paths.RepoDir(repoName)
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create checked-in agent definition directory
+	repoAgentsDir := filepath.Join(repoPath, ".multiclaude", "agents")
+	if err := os.MkdirAll(repoAgentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create checked-in agent definition that should override local
+	workerRepoContent := `# Worker Agent (Team Version)
+
+A team-customized worker.
+`
+	if err := os.WriteFile(filepath.Join(repoAgentsDir, "worker.md"), []byte(workerRepoContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a unique checked-in definition
+	customContent := `# Custom Bot
+
+A team-specific bot.
+`
+	if err := os.WriteFile(filepath.Join(repoAgentsDir, "custom-bot.md"), []byte(customContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create CLI
+	cli := NewWithPaths(paths)
+
+	// Change to repo directory to allow resolveRepo to work
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	if err := os.Chdir(repoPath); err != nil {
+		t.Fatalf("Failed to change to repo: %v", err)
+	}
+
+	// Run list agents definitions (this doesn't require daemon)
+	err = cli.listAgentDefinitions([]string{"--repo", repoName})
+	if err != nil {
+		t.Errorf("listAgentDefinitions failed: %v", err)
 	}
 }
