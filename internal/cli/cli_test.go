@@ -3552,7 +3552,6 @@ func TestCLIAckMessage(t *testing.T) {
 	})
 }
 
-
 // TestGetClaudeBinaryFunction tests the getClaudeBinary function
 func TestGetClaudeBinaryFunction(t *testing.T) {
 	cli, _, cleanup := setupTestEnvironment(t)
