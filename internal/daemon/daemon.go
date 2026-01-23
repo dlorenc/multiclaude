@@ -298,8 +298,8 @@ func (d *Daemon) checkAgentHealth() {
 				if !isProcessAlive(agent.PID) {
 					d.logger.Warn("Agent %s process (PID %d) not running", agentName, agent.PID)
 
-					// For persistent agents (supervisor, merge-queue, workspace), attempt auto-restart
-					if agent.Type == state.AgentTypeSupervisor || agent.Type == state.AgentTypeMergeQueue || agent.Type == state.AgentTypeWorkspace {
+					// For persistent agents (supervisor, merge-queue, workspace, generic-persistent), attempt auto-restart
+					if agent.Type == state.AgentTypeSupervisor || agent.Type == state.AgentTypeMergeQueue || agent.Type == state.AgentTypeWorkspace || agent.Type == state.AgentTypeGenericPersistent {
 						d.logger.Info("Attempting to auto-restart agent %s", agentName)
 						if err := d.restartAgent(repoName, agentName, agent, repo); err != nil {
 							d.logger.Error("Failed to restart agent %s: %v", agentName, err)
@@ -451,6 +451,8 @@ func (d *Daemon) wakeAgents() {
 				message = "Status check: Update on your progress?"
 			case state.AgentTypeReview:
 				message = "Status check: Update on your review progress?"
+			case state.AgentTypeGenericPersistent:
+				message = "Status check: Update on your progress?"
 			}
 
 			// Send message using atomic method to avoid race conditions (issue #63)
@@ -1489,12 +1491,11 @@ func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
 	// Determine agent type based on class
 	var agentType state.AgentType
 	if agentClass == "persistent" {
-		// For persistent agents, use a generic type or determine from name
+		// For persistent agents, use specific type if known or generic persistent
 		if agentName == "merge-queue" {
 			agentType = state.AgentTypeMergeQueue
 		} else {
-			// Generic persistent agent (future: could add a new type)
-			agentType = state.AgentTypeMergeQueue // Reuse for now, behavior is similar
+			agentType = state.AgentTypeGenericPersistent
 		}
 	} else {
 		// Ephemeral agents are workers or reviewers
@@ -1511,28 +1512,23 @@ func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
 
 	wt := worktree.NewManager(repoPath)
 
-	// Create branch name based on agent type
-	branchName := fmt.Sprintf("work/%s", agentName)
-	if agentType == state.AgentTypeMergeQueue {
-		// Persistent agents work on main
-		branchName = ""
-	}
-
-	// Create the worktree
-	if branchName != "" {
+	// Create worktree - persistent agents use repo dir, ephemeral get their own branch
+	if agentClass == "persistent" {
+		// Persistent agents work directly in the repo directory
+		worktreePath = repoPath
+	} else {
+		// Ephemeral agents get their own worktree with a new branch
+		branchName := fmt.Sprintf("work/%s", agentName)
 		if err := wt.CreateNewBranch(worktreePath, branchName, "HEAD"); err != nil {
 			return socket.Response{Success: false, Error: fmt.Sprintf("failed to create worktree: %v", err)}
 		}
-	} else {
-		// For persistent agents, just create worktree on current branch (or reuse repo dir)
-		worktreePath = repoPath
 	}
 
 	// Create tmux window with working directory
 	cmd := exec.Command("tmux", "new-window", "-d", "-t", repo.TmuxSession, "-n", agentName, "-c", worktreePath)
 	if err := cmd.Run(); err != nil {
-		// Clean up worktree on failure
-		if branchName != "" {
+		// Clean up worktree on failure (only for ephemeral agents that have their own worktree)
+		if agentClass != "persistent" {
 			wt.Remove(worktreePath, true)
 		}
 		return socket.Response{Success: false, Error: fmt.Sprintf("failed to create tmux window: %v", err)}
@@ -1565,7 +1561,7 @@ func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
 	if err := d.startAgentWithConfig(repoName, repo, cfg); err != nil {
 		// Clean up on failure
 		d.tmux.KillWindow(d.ctx, repo.TmuxSession, agentName)
-		if branchName != "" {
+		if agentClass != "persistent" {
 			wt.Remove(worktreePath, true)
 		}
 		return socket.Response{Success: false, Error: fmt.Sprintf("failed to start agent: %v", err)}
@@ -1720,9 +1716,9 @@ func (d *Daemon) restoreDeadAgents(repoName string, repo *state.Repository) {
 		// Process is dead but window exists - restart persistent agents with --resume
 		d.logger.Info("Agent %s process (PID %d) is dead, attempting restart", agentName, agent.PID)
 
-		// For persistent agents (supervisor, merge-queue, workspace), auto-restart
+		// For persistent agents (supervisor, merge-queue, workspace, generic-persistent), auto-restart
 		// For transient agents (workers, review), they will be cleaned up by health check
-		if agent.Type == state.AgentTypeSupervisor || agent.Type == state.AgentTypeMergeQueue || agent.Type == state.AgentTypeWorkspace {
+		if agent.Type == state.AgentTypeSupervisor || agent.Type == state.AgentTypeMergeQueue || agent.Type == state.AgentTypeWorkspace || agent.Type == state.AgentTypeGenericPersistent {
 			if err := d.restartAgent(repoName, agentName, agent, repo); err != nil {
 				d.logger.Error("Failed to restart agent %s: %v", agentName, err)
 			} else {
@@ -1864,33 +1860,21 @@ func (d *Daemon) sendAgentDefinitionsToSupervisor(repoName, repoPath string) err
 		return nil
 	}
 
-	// Build message with all definitions
+	// Build message with all definitions - send raw content for Claude to interpret
 	var sb strings.Builder
 	sb.WriteString("Agent definitions available for this repository:\n\n")
-	sb.WriteString("You are the orchestrator. Review these definitions and spawn agents as needed.\n")
-	sb.WriteString("Use the spawn_agent command (via socket) to spawn agents with their prompts.\n\n")
 
 	for i, def := range definitions {
-		title := def.ParseTitle()
-		class := def.ParseClass()
-		spawnOnInit := def.ParseSpawnOnInit()
-
-		sb.WriteString(fmt.Sprintf("--- Agent Definition %d: %s ---\n", i+1, def.Name))
-		sb.WriteString(fmt.Sprintf("Title: %s\n", title))
-		sb.WriteString(fmt.Sprintf("Class: %s\n", class))
-		sb.WriteString(fmt.Sprintf("Spawn on init: %v\n", spawnOnInit))
-		sb.WriteString(fmt.Sprintf("Source: %s\n\n", def.Source))
-		sb.WriteString("Full prompt content:\n")
+		sb.WriteString(fmt.Sprintf("--- Agent Definition %d: %s (source: %s) ---\n", i+1, def.Name, def.Source))
 		sb.WriteString(def.Content)
-		sb.WriteString("\n\n")
+		sb.WriteString("\n--- End of Definition ---\n\n")
 	}
 
-	sb.WriteString("--- End of Agent Definitions ---\n\n")
-	sb.WriteString("To spawn an agent, send a request to the daemon with:\n")
-	sb.WriteString("- Command: spawn_agent\n")
-	sb.WriteString("- Args: repo, name, class (persistent/ephemeral), prompt\n")
-	sb.WriteString("The daemon will create the worktree, tmux window, and start Claude.\n\n")
-	sb.WriteString("For agents marked 'Spawn on init: true', you should spawn them now.\n")
+	sb.WriteString("Review these definitions and determine which agents to spawn.\n")
+	sb.WriteString("For each agent, decide:\n")
+	sb.WriteString("- Class: Is it persistent (long-running, auto-restarts) or ephemeral (task-based, cleans up)?\n")
+	sb.WriteString("- Spawn now: Should this agent start immediately on repository init?\n\n")
+	sb.WriteString("To spawn an agent, use: multiclaude agent send-message daemon \"spawn_agent:<repo>:<name>:<class>:<prompt>\"\n")
 
 	// Send message to supervisor
 	msgMgr := d.getMessageManager()

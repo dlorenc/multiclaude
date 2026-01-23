@@ -13,11 +13,12 @@ import (
 type AgentType string
 
 const (
-	AgentTypeSupervisor AgentType = "supervisor"
-	AgentTypeWorker     AgentType = "worker"
-	AgentTypeMergeQueue AgentType = "merge-queue"
-	AgentTypeWorkspace  AgentType = "workspace"
-	AgentTypeReview     AgentType = "review"
+	AgentTypeSupervisor        AgentType = "supervisor"
+	AgentTypeWorker            AgentType = "worker"
+	AgentTypeMergeQueue        AgentType = "merge-queue"
+	AgentTypeWorkspace         AgentType = "workspace"
+	AgentTypeReview            AgentType = "review"
+	AgentTypeGenericPersistent AgentType = "generic-persistent"
 )
 
 // TrackMode defines which PRs the merge queue should track

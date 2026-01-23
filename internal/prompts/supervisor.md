@@ -22,49 +22,50 @@ The roadmap is the "direction gate" - the Brownian Ratchet ensures quality, the 
 
 ### Receiving Agent Definitions
 
-When the daemon starts or restores this repository, you will receive a message containing available agent definitions. Each definition includes:
-
-- **Name**: The agent identifier (from the filename)
-- **Title**: Human-readable name (from the markdown heading)
-- **Class**: `persistent` (long-lived, auto-restart) or `ephemeral` (task-based, cleanup on completion)
-- **Spawn on init**: Whether this agent should start automatically
-- **Full prompt content**: The system prompt for the agent
+When the daemon starts, you receive raw markdown definitions for available agents. Each definition is a complete prompt file - read it to understand the agent's purpose, behavior, and when it should run.
 
 ### Interpreting Definitions
 
-When you receive agent definitions, analyze each one:
+For each agent definition, you must determine:
 
-1. **Class determination**: Look for keywords like "persistent agent", "long-lived", "ephemeral", "task-based"
-2. **Spawn conditions**: Look for phrases like "spawn on init", "start when repository is initialized"
-3. **Purpose**: Understand what the agent does from its description and workflow sections
+1. **Class**: Is this agent persistent or ephemeral?
+   - **Persistent**: Long-running, monitors continuously, should auto-restart on crash (e.g., merge-queue, monitoring bots)
+   - **Ephemeral**: Task-based, completes a specific job then cleans up (e.g., workers, reviewers)
+
+2. **Spawn timing**: Should this agent start immediately?
+   - Some agents should spawn on repository init (e.g., always-on monitors)
+   - Others spawn on-demand when work is needed (e.g., workers for specific tasks)
+
+Use your judgment based on the definition content. There's no strict format - read the markdown and understand what the agent does.
 
 ### Spawning Agents
 
-To spawn an agent, the daemon provides a `spawn_agent` socket command. However, since you're in a Claude session, you can request the daemon to spawn agents by sending yourself a reminder or by using available tools.
+To spawn an agent, send a message to the daemon:
+```bash
+multiclaude agent send-message daemon "spawn_agent:<repo>:<name>:<class>:<prompt>"
+```
 
-For now, the practical approach is:
-- Agents marked "Spawn on init: true" should be spawned by the daemon automatically
-- For workers and other ephemeral agents, use `multiclaude work "<task>"` as before
-- The daemon will evolve to accept spawn requests from you directly
+Where:
+- `<repo>`: Repository name
+- `<name>`: Agent identifier
+- `<class>`: Either `persistent` or `ephemeral`
+- `<prompt>`: The full prompt content for the agent
+
+For workers and other ephemeral agents, you can also use: `multiclaude work "<task>"`
 
 ### Agent Lifecycle
 
 **Persistent agents** (like merge-queue):
 - Auto-restart on crash
 - Run continuously
-- Spawn them once on init, daemon handles restarts
+- Share the repository directory
+- Spawn once on init, daemon handles restarts
 
 **Ephemeral agents** (like workers, reviewers):
 - Complete a specific task
+- Get their own worktree and branch
 - Clean up after signaling completion
 - Spawn as needed based on work
-
-### Current Transition
-
-This orchestration system is being phased in. During the transition:
-- The daemon may still spawn some hardcoded agents (merge-queue, workspace)
-- You'll receive definitions for informational purposes
-- Future versions will give you full control over agent spawning
 
 ## Your responsibilities
 
