@@ -837,6 +837,56 @@ func TestBranchExists(t *testing.T) {
 	}
 }
 
+// TestCreateWorktreeForExistingBranch tests creating a worktree for a branch
+// that already exists locally. This is the scenario that occurs when using
+// --push-to with a branch that has already been checked out locally (fix for #278).
+func TestCreateWorktreeForExistingBranch(t *testing.T) {
+	repoPath, cleanup := createTestRepo(t)
+	defer cleanup()
+
+	manager := NewManager(repoPath)
+
+	// Create a branch first
+	branchName := "existing-branch"
+	createBranch(t, repoPath, branchName)
+
+	// Verify branch exists
+	exists, err := manager.BranchExists(branchName)
+	if err != nil {
+		t.Fatalf("Failed to check branch existence: %v", err)
+	}
+	if !exists {
+		t.Fatal("Branch should exist after creation")
+	}
+
+	// Create worktree for the existing branch using Create() (not CreateNewBranch())
+	wtPath := filepath.Join(repoPath, "wt-existing")
+	if err := manager.Create(wtPath, branchName); err != nil {
+		t.Fatalf("Failed to create worktree for existing branch: %v", err)
+	}
+
+	// Verify worktree directory exists
+	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
+		t.Error("Worktree directory was not created")
+	}
+
+	// Verify worktree is registered in git
+	wtExists, err := manager.Exists(wtPath)
+	if err != nil {
+		t.Fatalf("Failed to check worktree existence: %v", err)
+	}
+	if !wtExists {
+		t.Error("Worktree not registered in git")
+	}
+
+	// Verify that using CreateNewBranch() would fail for an existing branch
+	wtPath2 := filepath.Join(repoPath, "wt-should-fail")
+	err = manager.CreateNewBranch(wtPath2, branchName, "main")
+	if err == nil {
+		t.Error("CreateNewBranch should fail when branch already exists")
+	}
+}
+
 func TestRenameBranch(t *testing.T) {
 	repoPath, cleanup := createTestRepo(t)
 	defer cleanup()

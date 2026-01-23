@@ -1938,9 +1938,23 @@ func (c *CLI) createWorker(args []string) error {
 		// Create a worktree that checks out the remote branch into a local branch
 		branchName = pushTo
 		fmt.Printf("Creating worktree at: %s (checking out %s)\n", wtPath, startBranch)
-		// Use git worktree add with -b to create local branch tracking the remote
-		if err := wt.CreateNewBranch(wtPath, branchName, startBranch); err != nil {
+
+		// Check if the local branch already exists
+		branchExists, err := wt.BranchExists(branchName)
+		if err != nil {
 			return errors.WorktreeCreationFailed(err)
+		}
+
+		if branchExists {
+			// Branch exists locally, check it out
+			if err := wt.Create(wtPath, branchName); err != nil {
+				return errors.WorktreeCreationFailed(err)
+			}
+		} else {
+			// Branch doesn't exist, create it from the start point
+			if err := wt.CreateNewBranch(wtPath, branchName, startBranch); err != nil {
+				return errors.WorktreeCreationFailed(err)
+			}
 		}
 	} else {
 		// Normal case: create a new branch for this worker
