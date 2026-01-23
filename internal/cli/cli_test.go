@@ -2957,3 +2957,265 @@ func TestResetAgentDefinitions(t *testing.T) {
 		}
 	})
 }
+
+// TestCLISetCurrentRepo tests the setCurrentRepo command
+func TestCLISetCurrentRepo(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Add a test repo to daemon's state via socket
+	client := socket.NewClient(d.GetPaths().DaemonSock)
+	_, err := client.Send(socket.Request{
+		Command: "add_repo",
+		Args: map[string]interface{}{
+			"name":         "test-repo",
+			"github_url":   "https://github.com/test/repo",
+			"tmux_session": "mc-test-repo",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to add repo via socket: %v", err)
+	}
+
+	t.Run("sets current repo successfully", func(t *testing.T) {
+		err := cli.setCurrentRepo([]string{"test-repo"})
+		if err != nil {
+			t.Fatalf("setCurrentRepo() error = %v", err)
+		}
+
+		// Verify it was set via daemon
+		resp, err := client.Send(socket.Request{Command: "get_current_repo"})
+		if err != nil {
+			t.Fatalf("Failed to get current repo: %v", err)
+		}
+		if currentRepo, ok := resp.Data.(string); !ok || currentRepo != "test-repo" {
+			t.Errorf("CurrentRepo = %v, want test-repo", resp.Data)
+		}
+	})
+
+	t.Run("returns error when no repo name provided", func(t *testing.T) {
+		err := cli.setCurrentRepo([]string{})
+		if err == nil {
+			t.Error("setCurrentRepo() should return error when no repo name provided")
+		}
+	})
+
+	t.Run("returns error for nonexistent repo", func(t *testing.T) {
+		err := cli.setCurrentRepo([]string{"nonexistent-repo"})
+		if err == nil {
+			t.Error("setCurrentRepo() should return error for nonexistent repo")
+		}
+	})
+}
+
+// TestCLIGetCurrentRepo tests the getCurrentRepo command
+func TestCLIGetCurrentRepo(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	t.Run("shows message when no repo set", func(t *testing.T) {
+		// Ensure no current repo is set - this should not error,
+		// just show a message
+		err := cli.getCurrentRepo([]string{})
+		// This command prints output but doesn't return an error
+		// when no repo is set, so we just check it doesn't panic
+		_ = err // Ignore error as it may or may not error depending on daemon state
+	})
+
+	t.Run("shows current repo when set", func(t *testing.T) {
+		// Add and set a current repo via daemon
+		client := socket.NewClient(d.GetPaths().DaemonSock)
+		_, err := client.Send(socket.Request{
+			Command: "add_repo",
+			Args: map[string]interface{}{
+				"name":         "test-repo",
+				"github_url":   "https://github.com/test/repo",
+				"tmux_session": "mc-test-repo",
+			},
+		})
+		if err != nil {
+			t.Fatalf("Failed to add repo: %v", err)
+		}
+
+		// Set it as current
+		_, err = client.Send(socket.Request{
+			Command: "set_current_repo",
+			Args:    map[string]interface{}{"name": "test-repo"},
+		})
+		if err != nil {
+			t.Fatalf("Failed to set current repo: %v", err)
+		}
+
+		err = cli.getCurrentRepo([]string{})
+		if err != nil {
+			t.Fatalf("getCurrentRepo() error = %v", err)
+		}
+	})
+}
+
+// TestCLIClearCurrentRepo tests the clearCurrentRepo command
+func TestCLIClearCurrentRepo(t *testing.T) {
+	cli, d, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Set a current repo first
+	st, _ := state.Load(d.GetPaths().StateFile)
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	st.AddRepo("test-repo", repo)
+	st.CurrentRepo = "test-repo"
+	st.Save()
+
+	t.Run("clears current repo", func(t *testing.T) {
+		err := cli.clearCurrentRepo([]string{})
+		if err != nil {
+			t.Fatalf("clearCurrentRepo() error = %v", err)
+		}
+
+		// Verify it was cleared
+		st, _ := state.Load(d.GetPaths().StateFile)
+		if st.CurrentRepo != "" {
+			t.Errorf("CurrentRepo = %v, want empty string", st.CurrentRepo)
+		}
+	})
+}
+
+// TestRemoveDirectoryIfExists tests the removeDirectoryIfExists helper
+func TestRemoveDirectoryIfExists(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-remove-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	t.Run("removes existing directory", func(t *testing.T) {
+		testDir := filepath.Join(tmpDir, "test-dir")
+		if err := os.Mkdir(testDir, 0755); err != nil {
+			t.Fatalf("Failed to create test dir: %v", err)
+		}
+
+		removeDirectoryIfExists(testDir, "test directory")
+
+		if _, err := os.Stat(testDir); !os.IsNotExist(err) {
+			t.Error("Directory should be removed")
+		}
+	})
+
+	t.Run("handles nonexistent directory gracefully", func(t *testing.T) {
+		nonexistentDir := filepath.Join(tmpDir, "nonexistent")
+		// Should not panic or error
+		removeDirectoryIfExists(nonexistentDir, "nonexistent directory")
+	})
+}
+
+// TestCLIAddWorkspace tests the addWorkspace command
+func TestCLIAddWorkspace(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Create and add a test repo
+	repoName := "workspace-test-repo"
+
+	t.Run("returns error for invalid workspace name", func(t *testing.T) {
+		err := cli.addWorkspace([]string{"invalid name with spaces", "--repo", repoName})
+		if err == nil {
+			t.Error("addWorkspace() should return error for invalid name")
+		}
+	})
+
+	t.Run("returns error when no name provided", func(t *testing.T) {
+		err := cli.addWorkspace([]string{"--repo", repoName})
+		if err == nil {
+			t.Error("addWorkspace() should return error when no name provided")
+		}
+	})
+
+	// Note: Full workspace creation requires tmux and proper daemon state,
+	// which is tested in integration tests. Here we test the validation logic.
+}
+
+// TestCLIRemoveWorkspace tests the removeWorkspace command
+func TestCLIRemoveWorkspace(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	repoName := "remove-workspace-test"
+
+	t.Run("returns error when no name provided", func(t *testing.T) {
+		err := cli.removeWorkspace([]string{"--repo", repoName})
+		if err == nil {
+			t.Error("removeWorkspace() should return error when no name provided")
+		}
+	})
+
+	t.Run("returns error for nonexistent workspace", func(t *testing.T) {
+		err := cli.removeWorkspace([]string{"nonexistent-workspace", "--repo", repoName})
+		if err == nil {
+			t.Error("removeWorkspace() should return error for nonexistent workspace")
+		}
+	})
+
+	// Note: Full workspace removal requires tmux and proper daemon state,
+	// which is tested in integration tests. Here we test the validation logic.
+}
+
+// TestCLIShowHistory tests the showHistory command
+func TestCLIShowHistory(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	repoName := "history-test-repo"
+
+	t.Run("returns error for invalid status filter", func(t *testing.T) {
+		err := cli.showHistory([]string{"--repo", repoName, "--status", "invalid"})
+		if err == nil {
+			t.Error("showHistory() should return error for invalid status filter")
+		}
+	})
+
+	// Note: Full history display requires daemon state with task history,
+	// which is tested in integration tests. Here we test the validation logic.
+}
+
+// TestCLIGetPRStatusForBranch tests the getPRStatusForBranch helper
+func TestCLIGetPRStatusForBranch(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Create a test repo
+	repoPath := cli.paths.RepoDir("pr-status-test")
+	setupTestRepo(t, repoPath)
+
+	t.Run("returns existing PR URL when provided", func(t *testing.T) {
+		status, link := cli.getPRStatusForBranch(repoPath, "test-branch", "https://github.com/test/repo/pull/123")
+		if status != "unknown" {
+			t.Errorf("status = %v, want unknown", status)
+		}
+		if link != "#123" {
+			t.Errorf("link = %v, want #123", link)
+		}
+	})
+
+	t.Run("returns no-pr when branch is empty", func(t *testing.T) {
+		status, link := cli.getPRStatusForBranch(repoPath, "", "")
+		if status != "no-pr" {
+			t.Errorf("status = %v, want no-pr", status)
+		}
+		if link != "" {
+			t.Errorf("link = %v, want empty", link)
+		}
+	})
+
+	t.Run("handles branch with no PR", func(t *testing.T) {
+		status, link := cli.getPRStatusForBranch(repoPath, "nonexistent-branch", "")
+		if status != "no-pr" {
+			t.Errorf("status = %v, want no-pr", status)
+		}
+		if link != "" {
+			t.Errorf("link = %v, want empty", link)
+		}
+	})
+}
