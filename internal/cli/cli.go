@@ -4215,6 +4215,48 @@ func (c *CLI) cleanupMergedBranches(dryRun bool, verbose bool) error {
 	return nil
 }
 
+// cleanupOrphanedBranchesWithPrefix removes orphaned branches matching the given prefix
+func (c *CLI) cleanupOrphanedBranchesWithPrefix(wt *worktree.Manager, branchPrefix, repoName string, dryRun, verbose bool) (removed int, issues int) {
+	orphanedBranches, err := wt.FindOrphanedBranches(branchPrefix)
+	if err != nil && verbose {
+		fmt.Printf("  Warning: failed to find orphaned %s branches: %v\n", branchPrefix, err)
+		return 0, 0
+	}
+
+	if len(orphanedBranches) == 0 {
+		if verbose {
+			branchType := "work"
+			if branchPrefix == "workspace/" {
+				branchType = "workspace"
+			}
+			fmt.Printf("  No orphaned %s branches\n", branchType)
+		}
+		return 0, 0
+	}
+
+	branchType := "work"
+	if branchPrefix == "workspace/" {
+		branchType = "workspace"
+	}
+	fmt.Printf("\nOrphaned %s branches (%d) for %s:\n", branchType, len(orphanedBranches), repoName)
+
+	for _, branch := range orphanedBranches {
+		if dryRun {
+			fmt.Printf("  Would delete branch: %s\n", branch)
+			issues++
+		} else {
+			if err := wt.DeleteBranch(branch); err != nil {
+				fmt.Printf("  Failed to delete %s: %v\n", branch, err)
+			} else {
+				fmt.Printf("  Deleted branch: %s\n", branch)
+				removed++
+			}
+		}
+	}
+
+	return removed, issues
+}
+
 func (c *CLI) localCleanup(dryRun bool, verbose bool) error {
 	// Clean up orphaned worktrees, tmux sessions, and other resources
 	fmt.Println("\nChecking for orphaned resources...")
@@ -4352,51 +4394,14 @@ func (c *CLI) localCleanup(dryRun bool, verbose bool) error {
 				}
 			}
 
-			// Clean up orphaned work/* branches (branches without corresponding worktrees)
-			orphanedBranches, err := wt.FindOrphanedBranches("work/")
-			if err != nil && verbose {
-				fmt.Printf("  Warning: failed to find orphaned branches: %v\n", err)
-			} else if len(orphanedBranches) > 0 {
-				fmt.Printf("\nOrphaned work branches (%d) for %s:\n", len(orphanedBranches), repoName)
-				for _, branch := range orphanedBranches {
-					if dryRun {
-						fmt.Printf("  Would delete branch: %s\n", branch)
-						totalIssues++
-					} else {
-						if err := wt.DeleteBranch(branch); err != nil {
-							fmt.Printf("  Failed to delete %s: %v\n", branch, err)
-						} else {
-							fmt.Printf("  Deleted branch: %s\n", branch)
-							totalRemoved++
-						}
-					}
-				}
-			} else if verbose {
-				fmt.Println("  No orphaned work branches")
-			}
+			// Clean up orphaned work/* and workspace/* branches
+			removed, issues := c.cleanupOrphanedBranchesWithPrefix(wt, "work/", repoName, dryRun, verbose)
+			totalRemoved += removed
+			totalIssues += issues
 
-			// Also clean up orphaned workspace/* branches
-			orphanedWorkspaces, err := wt.FindOrphanedBranches("workspace/")
-			if err != nil && verbose {
-				fmt.Printf("  Warning: failed to find orphaned workspace branches: %v\n", err)
-			} else if len(orphanedWorkspaces) > 0 {
-				fmt.Printf("\nOrphaned workspace branches (%d) for %s:\n", len(orphanedWorkspaces), repoName)
-				for _, branch := range orphanedWorkspaces {
-					if dryRun {
-						fmt.Printf("  Would delete branch: %s\n", branch)
-						totalIssues++
-					} else {
-						if err := wt.DeleteBranch(branch); err != nil {
-							fmt.Printf("  Failed to delete %s: %v\n", branch, err)
-						} else {
-							fmt.Printf("  Deleted branch: %s\n", branch)
-							totalRemoved++
-						}
-					}
-				}
-			} else if verbose {
-				fmt.Println("  No orphaned workspace branches")
-			}
+			removed, issues = c.cleanupOrphanedBranchesWithPrefix(wt, "workspace/", repoName, dryRun, verbose)
+			totalRemoved += removed
+			totalIssues += issues
 		}
 	}
 
