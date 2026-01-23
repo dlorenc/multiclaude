@@ -129,9 +129,9 @@ func TestLoadCustomPrompt(t *testing.T) {
 		}
 	})
 
-	t.Run("with custom reviewer prompt", func(t *testing.T) {
-		customContent := "Custom reviewer instructions"
-		promptPath := filepath.Join(multiclaudeDir, "REVIEWER.md")
+	t.Run("with custom merge-queue prompt", func(t *testing.T) {
+		customContent := "Custom merge-queue instructions"
+		promptPath := filepath.Join(multiclaudeDir, "MERGE-QUEUE.md")
 		if err := os.WriteFile(promptPath, []byte(customContent), 0644); err != nil {
 			t.Fatalf("failed to write custom prompt: %v", err)
 		}

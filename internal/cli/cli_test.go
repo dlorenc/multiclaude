@@ -2797,3 +2797,163 @@ func TestExecuteUnknownCommand(t *testing.T) {
 		t.Error("Execute should fail with unknown command")
 	}
 }
+
+func TestSpawnAgentFromFile(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantError string
+	}{
+		{
+			name:      "missing name flag",
+			args:      []string{"--class", "ephemeral", "--prompt-file", "/tmp/prompt.md"},
+			wantError: "--name is required",
+		},
+		{
+			name:      "missing class flag",
+			args:      []string{"--name", "test-agent", "--prompt-file", "/tmp/prompt.md"},
+			wantError: "--class is required",
+		},
+		{
+			name:      "missing prompt-file flag",
+			args:      []string{"--name", "test-agent", "--class", "ephemeral"},
+			wantError: "--prompt-file is required",
+		},
+		{
+			name:      "invalid class value",
+			args:      []string{"--name", "test-agent", "--class", "invalid", "--prompt-file", "/tmp/prompt.md"},
+			wantError: "--class must be 'persistent' or 'ephemeral'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cli, _, cleanup := setupTestEnvironment(t)
+			defer cleanup()
+
+			err := cli.spawnAgentFromFile(tt.args)
+			if err == nil {
+				t.Fatalf("spawnAgentFromFile() should fail with error containing %q", tt.wantError)
+			}
+			if !strings.Contains(err.Error(), tt.wantError) {
+				t.Errorf("spawnAgentFromFile() error = %q, want to contain %q", err.Error(), tt.wantError)
+			}
+		})
+	}
+}
+
+func TestSpawnAgentFromFilePromptNotFound(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Use a non-existent prompt file path
+	nonExistentPath := filepath.Join(cli.paths.Root, "nonexistent", "prompt.md")
+
+	// Create a test repo to satisfy the repo resolution
+	repoName := "test-repo"
+	repoPath := cli.paths.RepoDir(repoName)
+	setupTestRepo(t, repoPath)
+
+	// Add repo to state
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	st, _ := state.Load(cli.paths.StateFile)
+	st.AddRepo(repoName, repo)
+
+	args := []string{
+		"--name", "test-agent",
+		"--class", "ephemeral",
+		"--prompt-file", nonExistentPath,
+		"--repo", repoName,
+	}
+
+	err := cli.spawnAgentFromFile(args)
+	if err == nil {
+		t.Fatal("spawnAgentFromFile() should fail when prompt file doesn't exist")
+	}
+	if !strings.Contains(err.Error(), "failed to read prompt file") {
+		t.Errorf("spawnAgentFromFile() error = %q, want to contain 'failed to read prompt file'", err.Error())
+	}
+}
+
+func TestResetAgentDefinitions(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Create a test repo
+	repoName := "test-repo"
+	repoPath := cli.paths.RepoDir(repoName)
+	setupTestRepo(t, repoPath)
+
+	// Add repo to state
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test-repo",
+		Agents:      make(map[string]state.Agent),
+	}
+	st, _ := state.Load(cli.paths.StateFile)
+	st.AddRepo(repoName, repo)
+
+	t.Run("creates fresh when agents dir does not exist", func(t *testing.T) {
+		agentsDir := cli.paths.RepoAgentsDir(repoName)
+
+		// Ensure agents dir doesn't exist
+		os.RemoveAll(agentsDir)
+
+		// Run reset
+		err := cli.resetAgentDefinitions([]string{"--repo", repoName})
+		if err != nil {
+			t.Fatalf("resetAgentDefinitions() error = %v", err)
+		}
+
+		// Verify agents dir was created
+		if _, err := os.Stat(agentsDir); os.IsNotExist(err) {
+			t.Error("agents directory should exist after reset")
+		}
+
+		// Verify some templates were copied
+		entries, err := os.ReadDir(agentsDir)
+		if err != nil {
+			t.Fatalf("Failed to read agents dir: %v", err)
+		}
+		if len(entries) == 0 {
+			t.Error("agents directory should contain template files")
+		}
+	})
+
+	t.Run("removes and re-copies when agents dir exists", func(t *testing.T) {
+		agentsDir := cli.paths.RepoAgentsDir(repoName)
+
+		// Create agents dir with a custom file
+		if err := os.MkdirAll(agentsDir, 0755); err != nil {
+			t.Fatalf("Failed to create agents dir: %v", err)
+		}
+		customFile := filepath.Join(agentsDir, "custom-file.md")
+		if err := os.WriteFile(customFile, []byte("custom content"), 0644); err != nil {
+			t.Fatalf("Failed to write custom file: %v", err)
+		}
+
+		// Run reset
+		err := cli.resetAgentDefinitions([]string{"--repo", repoName})
+		if err != nil {
+			t.Fatalf("resetAgentDefinitions() error = %v", err)
+		}
+
+		// Verify custom file was removed
+		if _, err := os.Stat(customFile); !os.IsNotExist(err) {
+			t.Error("custom file should be removed after reset")
+		}
+
+		// Verify templates were copied
+		entries, err := os.ReadDir(agentsDir)
+		if err != nil {
+			t.Fatalf("Failed to read agents dir: %v", err)
+		}
+		if len(entries) == 0 {
+			t.Error("agents directory should contain template files after reset")
+		}
+	})
+}
