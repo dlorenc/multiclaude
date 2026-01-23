@@ -590,7 +590,7 @@ func TestSlashCommandsEmbeddedInPrompts(t *testing.T) {
 	}
 
 	// Verify multiclaude CLI commands are referenced
-	expectedCLICommands := []string{"multiclaude list", "multiclaude work list", "multiclaude agent list-messages"}
+	expectedCLICommands := []string{"multiclaude list", "multiclaude work list", "multiclaude message list"}
 	for _, cmd := range expectedCLICommands {
 		if !strings.Contains(slashPrompt, cmd) {
 			t.Errorf("Expected slash commands prompt to contain CLI command %q", cmd)
