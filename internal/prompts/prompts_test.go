@@ -502,3 +502,59 @@ func TestGetSlashCommandsPromptNonEmpty(t *testing.T) {
 		t.Errorf("GetSlashCommandsPrompt() seems too short (got %d bytes), expected substantial content", len(prompt))
 	}
 }
+
+// TestGenerateProviderInfoPrompt verifies that GenerateProviderInfoPrompt()
+// generates appropriate provider information for different providers.
+func TestGenerateProviderInfoPrompt(t *testing.T) {
+	t.Run("GitHub returns empty", func(t *testing.T) {
+		prompt := GenerateProviderInfoPrompt(state.ProviderGitHub, nil)
+		if prompt != "" {
+			t.Errorf("GitHub provider should return empty prompt, got: %s", prompt)
+		}
+	})
+
+	t.Run("ADO without config returns empty", func(t *testing.T) {
+		prompt := GenerateProviderInfoPrompt(state.ProviderAzureDevOps, nil)
+		if prompt != "" {
+			t.Errorf("ADO without config should return empty prompt, got: %s", prompt)
+		}
+	})
+
+	t.Run("ADO with config returns full prompt", func(t *testing.T) {
+		config := &state.ProviderConfig{
+			Organization: "my-org",
+			Project:      "my-project",
+			RepoName:     "my-repo",
+		}
+		prompt := GenerateProviderInfoPrompt(state.ProviderAzureDevOps, config)
+
+		// Check for key sections
+		expectedParts := []struct {
+			content     string
+			description string
+		}{
+			{"Git Hosting Provider: Azure DevOps", "header"},
+			{"my-org", "organization"},
+			{"my-project", "project"},
+			{"my-repo", "repository"},
+			{"AZURE_DEVOPS_PAT", "authentication"},
+			{"Command Reference Table", "command table"},
+			{"curl -s -u", "curl command format"},
+			{"dev.azure.com", "API base URL"},
+			{"List PRs", "PR list section"},
+			{"View PR Details", "PR view section"},
+			{"Complete (Merge)", "merge section"},
+		}
+
+		for _, part := range expectedParts {
+			if !strings.Contains(prompt, part.content) {
+				t.Errorf("ADO prompt should contain %s (%q)", part.description, part.content)
+			}
+		}
+
+		// Ensure GitHub CLI is explicitly mentioned as not working
+		if !strings.Contains(prompt, "NOT GitHub") || !strings.Contains(prompt, "'gh' CLI commands will NOT work") {
+			t.Error("ADO prompt should warn that gh CLI won't work")
+		}
+	})
+}

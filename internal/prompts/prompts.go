@@ -316,46 +316,93 @@ git checkout main && git merge --ff-only upstream/main && git push origin main
 // GenerateProviderInfoPrompt generates prompt text explaining the git hosting provider.
 // This helps agents understand which commands to use.
 func GenerateProviderInfoPrompt(providerType state.ProviderType, provConfig *state.ProviderConfig) string {
-	if providerType == state.ProviderAzureDevOps && provConfig != nil {
-		return fmt.Sprintf(`## Git Hosting Provider: Azure DevOps
+	if providerType != state.ProviderAzureDevOps || provConfig == nil {
+		// GitHub is the default - no special prompt needed as agents assume GitHub by default
+		return ""
+	}
 
-This repository is hosted on **Azure DevOps**.
+	// Use the ADO provider to generate accurate command examples
+	ado := provider.NewAzureDevOpsWithConfig(provConfig.Organization, provConfig.Project, provConfig.RepoName)
+
+	return fmt.Sprintf(`## Git Hosting Provider: Azure DevOps
+
+**IMPORTANT**: This repository is hosted on **Azure DevOps**, NOT GitHub.
+The standard 'gh' CLI commands will NOT work. Use the commands below instead.
 
 **Organization**: %s
 **Project**: %s
 **Repository**: %s
 
 ### Authentication
-All Azure DevOps API calls require the AZURE_DEVOPS_PAT environment variable to be set.
+All Azure DevOps API calls require the AZURE_DEVOPS_PAT environment variable:
+`+"```bash"+`
+export AZURE_DEVOPS_PAT="your-personal-access-token"
+`+"```"+`
 
 ### Key Differences from GitHub
 - Use curl with the Azure DevOps REST API instead of the 'gh' CLI
-- PRs are called "Pull Requests" and use a different API
+- PRs are called "Pull Requests" and use a different API structure
 - Labels are called "tags" in Azure DevOps
 - CI pipelines work differently than GitHub Actions
 
-### Common Commands
+### Command Reference Table
+
+Instead of GitHub CLI commands, use these Azure DevOps equivalents:
+
+| GitHub CLI Command | Azure DevOps Equivalent |
+|-------------------|------------------------|
+| `+"`gh pr list`"+` | See "List PRs" below |
+| `+"`gh pr view <N>`"+` | See "View PR" below |
+| `+"`gh pr create`"+` | See "Create PR" below |
+| `+"`gh pr checks <N>`"+` | See "Check PR Status" below |
+| `+"`gh pr comment <N>`"+` | See "Add Comment" below |
+| `+"`gh pr merge <N>`"+` | See "Complete/Merge PR" below |
+| `+"`gh run list`"+` | See "List CI Runs" below |
+
+### Detailed Commands
+
+**List PRs:**
 `+"```bash"+`
-# List open PRs
-curl -s -u ":$AZURE_DEVOPS_PAT" "https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests?api-version=7.0&searchCriteria.status=active"
-
-# View PR details
-curl -s -u ":$AZURE_DEVOPS_PAT" "https://dev.azure.com/%s/%s/_apis/git/pullrequests/{PR_NUMBER}?api-version=7.0"
-
-# Add a PR comment
-curl -s -u ":$AZURE_DEVOPS_PAT" -X POST "https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests/{PR_NUMBER}/threads?api-version=7.0" \
-  -H "Content-Type: application/json" \
-  -d '{"comments":[{"content":"Your comment here"}]}'
+%s
 `+"```"+`
-`,
-			provConfig.Organization, provConfig.Project, provConfig.RepoName,
-			provConfig.Organization, provConfig.Project, provConfig.RepoName,
-			provConfig.Organization, provConfig.Project,
-			provConfig.Organization, provConfig.Project, provConfig.RepoName)
-	}
 
-	// GitHub is the default - no special prompt needed as agents assume GitHub by default
-	return ""
+**View PR Details (replace {PR_NUMBER} with actual PR number):**
+`+"```bash"+`
+%s
+`+"```"+`
+
+**Check PR Status (merge readiness and reviews):**
+`+"```bash"+`
+%s
+`+"```"+`
+
+**Add a Comment to PR:**
+`+"```bash"+`
+%s
+`+"```"+`
+
+**Complete (Merge) a PR:**
+`+"```bash"+`
+%s
+`+"```"+`
+
+**List CI Runs (for main branch):**
+`+"```bash"+`
+%s
+`+"```"+`
+
+### Notes
+- Replace `+"`{PR_NUMBER}`"+` with the actual PR number (e.g., 123)
+- The AZURE_DEVOPS_PAT environment variable must be set for all API calls
+- All commands output JSON - use jq to parse and format as needed
+`,
+		provConfig.Organization, provConfig.Project, provConfig.RepoName,
+		ado.PRListCommand("multiclaude", ""),
+		strings.ReplaceAll(ado.PRViewCommand(0, ""), "/0?", "/{PR_NUMBER}?"),
+		strings.ReplaceAll(ado.PRChecksCommand(0), "/0?", "/{PR_NUMBER}?"),
+		strings.ReplaceAll(ado.PRCommentCommand(0, "Your comment here"), "/0/", "/{PR_NUMBER}/"),
+		strings.ReplaceAll(ado.PRMergeCommand(0), "/0?", "/{PR_NUMBER}?"),
+		ado.RunListCommand("main", 5))
 }
 
 // GetSlashCommandsPrompt returns a formatted prompt section containing all available

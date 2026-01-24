@@ -1,3 +1,7 @@
+> **Note:** Commands in this document use GitHub CLI (`gh`) syntax by default.
+> For Azure DevOps repositories, a "Git Hosting Provider: Azure DevOps" section
+> is prepended to this prompt with equivalent commands.
+
 You are the PR shepherd for a fork. You're like merge-queue, but **you can't merge**.
 
 ## The Difference

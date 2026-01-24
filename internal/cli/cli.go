@@ -2132,6 +2132,9 @@ func (c *CLI) createWorker(args []string) error {
 			"name": repoName,
 		},
 	})
+	// Extract provider info from daemon response
+	var providerType state.ProviderType
+	var providerConfig *state.ProviderConfig
 	if err == nil && configResp.Success {
 		if configMap, ok := configResp.Data.(map[string]interface{}); ok {
 			if isFork, ok := configMap["is_fork"].(bool); ok && isFork {
@@ -2140,12 +2143,25 @@ func (c *CLI) createWorker(args []string) error {
 				forkConfig.UpstreamOwner, _ = configMap["upstream_owner"].(string)
 				forkConfig.UpstreamRepo, _ = configMap["upstream_repo"].(string)
 			}
+			// Extract provider type
+			if provider, ok := configMap["provider"].(string); ok {
+				providerType = state.ProviderType(provider)
+			}
+			// Extract provider config (for Azure DevOps repos)
+			if provConfigMap, ok := configMap["provider_config"].(map[string]interface{}); ok {
+				providerConfig = &state.ProviderConfig{}
+				providerConfig.Organization, _ = provConfigMap["organization"].(string)
+				providerConfig.Project, _ = provConfigMap["project"].(string)
+				providerConfig.RepoName, _ = provConfigMap["repo_name"].(string)
+			}
 		}
 	}
 
-	// Write prompt file for worker (with push-to config and fork config if applicable)
+	// Write prompt file for worker (with push-to config, fork config, and provider config if applicable)
 	workerConfig := WorkerConfig{
-		ForkConfig: forkConfig,
+		ForkConfig:     forkConfig,
+		ProviderType:   providerType,
+		ProviderConfig: providerConfig,
 	}
 	if hasPushTo {
 		workerConfig.PushToBranch = pushTo
@@ -5397,8 +5413,10 @@ func (c *CLI) writePRShepherdPromptFile(repoPath string, agentName string, psCon
 
 // WorkerConfig holds configuration for creating worker prompts
 type WorkerConfig struct {
-	PushToBranch string           // Branch to push to instead of creating a new PR (for iterating on existing PRs)
-	ForkConfig   state.ForkConfig // Fork configuration (if working in a fork)
+	PushToBranch   string                // Branch to push to instead of creating a new PR (for iterating on existing PRs)
+	ForkConfig     state.ForkConfig      // Fork configuration (if working in a fork)
+	ProviderType   state.ProviderType    // Git hosting provider type (github or ado)
+	ProviderConfig *state.ProviderConfig // Provider-specific configuration (for Azure DevOps)
 }
 
 // writeWorkerPromptFile writes a worker prompt file with optional configuration.
@@ -5414,14 +5432,22 @@ func (c *CLI) writeWorkerPromptFile(repoPath string, agentName string, config Wo
 	// Add CLI documentation and slash commands
 	promptText = c.appendDocsAndSlashCommands(promptText)
 
+	// Add provider-specific information if Azure DevOps (GitHub is assumed default)
+	if config.ProviderType == state.ProviderAzureDevOps && config.ProviderConfig != nil {
+		providerPrompt := prompts.GenerateProviderInfoPrompt(config.ProviderType, config.ProviderConfig)
+		promptText = providerPrompt + "\n---\n\n" + promptText
+	}
+
 	// Add fork workflow context if working in a fork
 	if config.ForkConfig.IsFork {
-		// Get the fork owner from the GitHub URL
+		// Get the fork owner from the repo URL
 		forkOwner := c.extractOwnerFromGitHubURL(repoPath)
-		forkWorkflow := prompts.GenerateForkWorkflowPrompt(
+		forkWorkflow := prompts.GenerateForkWorkflowPromptWithProvider(
 			config.ForkConfig.UpstreamOwner,
 			config.ForkConfig.UpstreamRepo,
 			forkOwner,
+			config.ProviderType,
+			config.ProviderConfig,
 		)
 		promptText = forkWorkflow + "\n---\n\n" + promptText
 	}
