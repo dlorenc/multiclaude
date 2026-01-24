@@ -47,6 +47,21 @@ const (
 	TrackModeAssigned TrackMode = "assigned"
 )
 
+// ParseTrackMode parses a string into a TrackMode.
+// Returns an error if the string is not a valid track mode.
+func ParseTrackMode(s string) (TrackMode, error) {
+	switch s {
+	case "all":
+		return TrackModeAll, nil
+	case "author":
+		return TrackModeAuthor, nil
+	case "assigned":
+		return TrackModeAssigned, nil
+	default:
+		return "", fmt.Errorf("invalid track mode: %q (valid modes: all, author, assigned)", s)
+	}
+}
+
 // MergeQueueConfig holds configuration for the merge queue agent
 type MergeQueueConfig struct {
 	// Enabled determines whether the merge queue agent should run (default: true)

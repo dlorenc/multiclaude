@@ -983,6 +983,35 @@ func TestTrackModeConstants(t *testing.T) {
 	}
 }
 
+func TestParseTrackMode(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    TrackMode
+		wantErr bool
+	}{
+		{"all", TrackModeAll, false},
+		{"author", TrackModeAuthor, false},
+		{"assigned", TrackModeAssigned, false},
+		{"invalid", "", true},
+		{"ALL", "", true},      // case-sensitive
+		{"", "", true},         // empty string
+		{"  all  ", "", true},  // no whitespace trimming
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseTrackMode(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseTrackMode(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("ParseTrackMode(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCurrentRepo(t *testing.T) {
 	tmpDir := t.TempDir()
 	statePath := filepath.Join(tmpDir, "state.json")

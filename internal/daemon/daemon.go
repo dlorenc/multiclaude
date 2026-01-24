@@ -752,14 +752,11 @@ func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
 		mqConfig.Enabled = mqEnabled
 	}
 	if mqTrackMode, ok := req.Args["mq_track_mode"].(string); ok {
-		switch mqTrackMode {
-		case "all":
-			mqConfig.TrackMode = state.TrackModeAll
-		case "author":
-			mqConfig.TrackMode = state.TrackModeAuthor
-		case "assigned":
-			mqConfig.TrackMode = state.TrackModeAssigned
+		mode, err := state.ParseTrackMode(mqTrackMode)
+		if err != nil {
+			return socket.Response{Success: false, Error: err.Error()}
 		}
+		mqConfig.TrackMode = mode
 	}
 
 	// Parse fork configuration (optional)
@@ -783,14 +780,11 @@ func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
 		psConfig.Enabled = psEnabled
 	}
 	if psTrackMode, ok := req.Args["ps_track_mode"].(string); ok {
-		switch psTrackMode {
-		case "all":
-			psConfig.TrackMode = state.TrackModeAll
-		case "author":
-			psConfig.TrackMode = state.TrackModeAuthor
-		case "assigned":
-			psConfig.TrackMode = state.TrackModeAssigned
+		mode, err := state.ParseTrackMode(psTrackMode)
+		if err != nil {
+			return socket.Response{Success: false, Error: err.Error()}
 		}
+		psConfig.TrackMode = mode
 	}
 
 	// If in fork mode, disable merge-queue and enable pr-shepherd by default
@@ -1293,16 +1287,11 @@ func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
 		mqUpdated = true
 	}
 	if mqTrackMode, ok := req.Args["mq_track_mode"].(string); ok {
-		switch mqTrackMode {
-		case "all":
-			currentMQConfig.TrackMode = state.TrackModeAll
-		case "author":
-			currentMQConfig.TrackMode = state.TrackModeAuthor
-		case "assigned":
-			currentMQConfig.TrackMode = state.TrackModeAssigned
-		default:
-			return socket.Response{Success: false, Error: fmt.Sprintf("invalid track mode: %s", mqTrackMode)}
+		mode, err := state.ParseTrackMode(mqTrackMode)
+		if err != nil {
+			return socket.Response{Success: false, Error: err.Error()}
 		}
+		currentMQConfig.TrackMode = mode
 		mqUpdated = true
 	}
 
@@ -1326,16 +1315,11 @@ func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
 		psUpdated = true
 	}
 	if psTrackMode, ok := req.Args["ps_track_mode"].(string); ok {
-		switch psTrackMode {
-		case "all":
-			currentPSConfig.TrackMode = state.TrackModeAll
-		case "author":
-			currentPSConfig.TrackMode = state.TrackModeAuthor
-		case "assigned":
-			currentPSConfig.TrackMode = state.TrackModeAssigned
-		default:
-			return socket.Response{Success: false, Error: fmt.Sprintf("invalid track mode: %s", psTrackMode)}
+		mode, err := state.ParseTrackMode(psTrackMode)
+		if err != nil {
+			return socket.Response{Success: false, Error: err.Error()}
 		}
+		currentPSConfig.TrackMode = mode
 		psUpdated = true
 	}
 
