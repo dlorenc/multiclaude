@@ -391,3 +391,51 @@ func WorkspaceNotFound(name, repo string) *CLIError {
 		Suggestion: fmt.Sprintf("multiclaude workspace list --repo %s", repo),
 	}
 }
+
+// GitHub CLI authentication error constructors
+
+// GitHubCLINotFound creates an error for when the gh CLI is not installed
+func GitHubCLINotFound() *CLIError {
+	return &CLIError{
+		Category:   CategoryConfig,
+		Message:    "GitHub CLI (gh) not found in PATH",
+		Suggestion: "install gh CLI: https://cli.github.com/",
+	}
+}
+
+// GitHubNotAuthenticated creates an error for when the user is not logged in
+func GitHubNotAuthenticated() *CLIError {
+	return &CLIError{
+		Category:   CategoryConfig,
+		Message:    "not authenticated with GitHub",
+		Suggestion: "gh auth login",
+	}
+}
+
+// GitHubAuthScopesMissing creates an error for missing OAuth scopes
+func GitHubAuthScopesMissing(missing []string) *CLIError {
+	return &CLIError{
+		Category:   CategoryConfig,
+		Message:    fmt.Sprintf("missing required OAuth scopes: %s", strings.Join(missing, ", ")),
+		Suggestion: "gh auth refresh -s repo",
+	}
+}
+
+// GitHubRepoAccessDenied creates an error for insufficient repository permissions
+func GitHubRepoAccessDenied(owner, repo, requiredPerm string) *CLIError {
+	return &CLIError{
+		Category:   CategoryConfig,
+		Message:    fmt.Sprintf("insufficient permissions on %s/%s (requires %s)", owner, repo, requiredPerm),
+		Suggestion: "request access from repository owner or check repository visibility",
+	}
+}
+
+// GitHubAPIFailed creates an error for GitHub API failures
+func GitHubAPIFailed(operation string, cause error) *CLIError {
+	return &CLIError{
+		Category:   CategoryRuntime,
+		Message:    fmt.Sprintf("GitHub API call failed: %s", operation),
+		Cause:      cause,
+		Suggestion: "check your network connection and GitHub status",
+	}
+}

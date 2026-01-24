@@ -577,3 +577,108 @@ func TestWorkspaceNotFound(t *testing.T) {
 		t.Errorf("expected workspace list suggestion, got: %s", formatted)
 	}
 }
+
+// GitHub CLI error constructor tests
+
+func TestGitHubCLINotFound(t *testing.T) {
+	err := GitHubCLINotFound()
+
+	if err.Category != CategoryConfig {
+		t.Errorf("expected CategoryConfig, got %v", err.Category)
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "gh") {
+		t.Errorf("expected 'gh' in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "cli.github.com") {
+		t.Errorf("expected install URL in suggestion, got: %s", formatted)
+	}
+}
+
+func TestGitHubNotAuthenticated(t *testing.T) {
+	err := GitHubNotAuthenticated()
+
+	if err.Category != CategoryConfig {
+		t.Errorf("expected CategoryConfig, got %v", err.Category)
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "not authenticated") {
+		t.Errorf("expected 'not authenticated' in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "gh auth login") {
+		t.Errorf("expected 'gh auth login' suggestion, got: %s", formatted)
+	}
+}
+
+func TestGitHubAuthScopesMissing(t *testing.T) {
+	missing := []string{"repo", "read:org"}
+	err := GitHubAuthScopesMissing(missing)
+
+	if err.Category != CategoryConfig {
+		t.Errorf("expected CategoryConfig, got %v", err.Category)
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "repo") {
+		t.Errorf("expected 'repo' in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "read:org") {
+		t.Errorf("expected 'read:org' in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "gh auth refresh") {
+		t.Errorf("expected 'gh auth refresh' suggestion, got: %s", formatted)
+	}
+}
+
+func TestGitHubRepoAccessDenied(t *testing.T) {
+	err := GitHubRepoAccessDenied("owner", "repo", "push")
+
+	if err.Category != CategoryConfig {
+		t.Errorf("expected CategoryConfig, got %v", err.Category)
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "owner/repo") {
+		t.Errorf("expected 'owner/repo' in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "push") {
+		t.Errorf("expected 'push' in message, got: %s", formatted)
+	}
+}
+
+func TestGitHubAPIFailed(t *testing.T) {
+	cause := errors.New("connection refused")
+	err := GitHubAPIFailed("fetching repository", cause)
+
+	if err.Category != CategoryRuntime {
+		t.Errorf("expected CategoryRuntime, got %v", err.Category)
+	}
+	if err.Cause != cause {
+		t.Error("should wrap cause")
+	}
+	if err.Suggestion == "" {
+		t.Error("should have a suggestion")
+	}
+
+	formatted := Format(err)
+	if !strings.Contains(formatted, "fetching repository") {
+		t.Errorf("expected operation in message, got: %s", formatted)
+	}
+	if !strings.Contains(formatted, "connection refused") {
+		t.Errorf("expected cause in message, got: %s", formatted)
+	}
+}

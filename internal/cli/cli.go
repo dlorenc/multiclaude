@@ -19,6 +19,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/errors"
 	"github.com/dlorenc/multiclaude/internal/fork"
 	"github.com/dlorenc/multiclaude/internal/format"
+	"github.com/dlorenc/multiclaude/internal/github"
 	"github.com/dlorenc/multiclaude/internal/hooks"
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/names"
@@ -735,6 +736,22 @@ func (c *CLI) registerCommands() {
 	}
 
 	c.rootCmd.Subcommands["agents"] = agentsCmd
+
+	// Auth command - for GitHub authentication verification
+	authCmd := &Command{
+		Name:        "auth",
+		Description: "Manage GitHub authentication",
+		Subcommands: make(map[string]*Command),
+	}
+
+	authCmd.Subcommands["check"] = &Command{
+		Name:        "check",
+		Description: "Check GitHub CLI authentication status",
+		Usage:       "multiclaude auth check [owner/repo]",
+		Run:         c.authCheck,
+	}
+
+	c.rootCmd.Subcommands["auth"] = authCmd
 }
 
 // Daemon command implementations
@@ -5540,4 +5557,86 @@ func (c *CLI) extractOwnerFromGitHubURL(repoPath string) string {
 		return ""
 	}
 	return owner
+}
+
+// authCheck checks GitHub CLI authentication status and optionally repository permissions.
+func (c *CLI) authCheck(args []string) error {
+	var repoRef string
+	if len(args) > 0 {
+		repoRef = args[0]
+	}
+
+	fmt.Println("Checking GitHub CLI authentication...")
+	fmt.Println()
+
+	// Check basic authentication
+	auth, err := github.CheckAuth()
+	if err != nil {
+		if strings.Contains(err.Error(), "gh CLI not found") {
+			return errors.GitHubCLINotFound()
+		}
+		return errors.GitHubAPIFailed("checking auth status", err)
+	}
+
+	// Display authentication status
+	if auth.Authenticated {
+		fmt.Println("  Authenticated: yes")
+		if auth.Username != "" {
+			fmt.Printf("  Username: %s\n", auth.Username)
+		}
+		if len(auth.Scopes) > 0 {
+			fmt.Printf("  Token scopes: %s\n", strings.Join(auth.Scopes, ", "))
+		} else {
+			fmt.Println("  Token scopes: (none)")
+		}
+
+		// Check required scopes
+		scopeResult := github.CheckRequiredScopes(auth.Scopes)
+		if scopeResult.HasRequired {
+			fmt.Println("  Required scopes: present")
+		} else {
+			fmt.Printf("  Required scopes: MISSING (%s)\n", strings.Join(scopeResult.Missing, ", "))
+			fmt.Println()
+			fmt.Println("Warning: Missing required OAuth scopes.")
+			fmt.Println("Run: gh auth refresh -s repo")
+		}
+	} else {
+		fmt.Println("  Authenticated: no")
+		fmt.Println()
+		return errors.GitHubNotAuthenticated()
+	}
+
+	// Check repository permissions if repo specified
+	if repoRef != "" {
+		fmt.Println()
+		fmt.Printf("Checking permissions on %s...\n", repoRef)
+
+		owner, repo, err := github.ParseRepoRef(repoRef)
+		if err != nil {
+			return errors.InvalidArgument("repository", repoRef, "owner/repo format")
+		}
+
+		perms, err := github.CheckRepoPermissions(owner, repo)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found or not accessible") {
+				fmt.Printf("  Repository not found or not accessible\n")
+				return errors.GitHubRepoAccessDenied(owner, repo, "read")
+			}
+			return errors.GitHubAPIFailed("checking repository permissions", err)
+		}
+
+		fmt.Printf("  Pull: %t\n", perms.Pull)
+		fmt.Printf("  Push: %t\n", perms.Push)
+		fmt.Printf("  Maintain: %t\n", perms.Maintain)
+		fmt.Printf("  Admin: %t\n", perms.Admin)
+
+		if !perms.Push {
+			fmt.Println()
+			fmt.Println("Warning: You don't have push access to this repository.")
+			fmt.Println("Merge queue operations will fail without push permissions.")
+		}
+	}
+
+	fmt.Println()
+	return nil
 }
