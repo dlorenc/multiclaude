@@ -217,6 +217,20 @@ func TestAzureDevOpsParseURL(t *testing.T) {
 			wantRepo:    "my-repo-name",
 		},
 		{
+			name:        "SSH with URL-encoded space in project",
+			url:         "git@ssh.dev.azure.com:v3/k2intel/K2%20Engineering/cms-backend",
+			wantOrg:     "k2intel",
+			wantProject: "K2 Engineering", // Should be decoded
+			wantRepo:    "cms-backend",
+		},
+		{
+			name:        "HTTPS with URL-encoded space in project",
+			url:         "https://dev.azure.com/myorg/My%20Project/_git/myrepo",
+			wantOrg:     "myorg",
+			wantProject: "My Project", // Should be decoded
+			wantRepo:    "myrepo",
+		},
+		{
 			name:    "Invalid URL - GitHub",
 			url:     "https://github.com/owner/repo",
 			wantErr: true,
@@ -488,4 +502,75 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestAzureDevOpsURLEncodingInCloneURL(t *testing.T) {
+	ado := NewAzureDevOps()
+
+	tests := []struct {
+		name         string
+		url          string
+		wantProject  string
+		wantCloneURL string
+	}{
+		{
+			name:         "SSH with URL-encoded space",
+			url:          "git@ssh.dev.azure.com:v3/k2intel/K2%20Engineering/cms-backend",
+			wantProject:  "K2 Engineering",
+			wantCloneURL: "https://dev.azure.com/k2intel/K2%20Engineering/_git/cms-backend",
+		},
+		{
+			name:         "HTTPS with URL-encoded space",
+			url:          "https://dev.azure.com/myorg/My%20Project/_git/myrepo",
+			wantProject:  "My Project",
+			wantCloneURL: "https://dev.azure.com/myorg/My%20Project/_git/myrepo",
+		},
+		{
+			name:         "No encoding needed",
+			url:          "https://dev.azure.com/myorg/MyProject/_git/myrepo",
+			wantProject:  "MyProject",
+			wantCloneURL: "https://dev.azure.com/myorg/MyProject/_git/myrepo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info, err := ado.ParseURL(tt.url)
+			if err != nil {
+				t.Fatalf("ParseURL() error = %v", err)
+			}
+			if info.Project != tt.wantProject {
+				t.Errorf("ParseURL().Project = %q, want %q", info.Project, tt.wantProject)
+			}
+			if info.CloneURL != tt.wantCloneURL {
+				t.Errorf("ParseURL().CloneURL = %q, want %q", info.CloneURL, tt.wantCloneURL)
+			}
+		})
+	}
+}
+
+func TestAzureDevOpsCommandsWithSpacesInProject(t *testing.T) {
+	// Test that commands with spaces in project name have properly encoded URLs
+	ado := NewAzureDevOpsWithConfig("k2intel", "K2 Engineering", "cms-backend")
+
+	t.Run("PRListCommand URL encoding", func(t *testing.T) {
+		cmd := ado.PRListCommand("", "")
+		if !contains(cmd, "K2%20Engineering") {
+			t.Errorf("PRListCommand() should URL-encode project name with space, got: %s", cmd)
+		}
+	})
+
+	t.Run("PRViewCommand URL encoding", func(t *testing.T) {
+		cmd := ado.PRViewCommand(123, "")
+		if !contains(cmd, "K2%20Engineering") {
+			t.Errorf("PRViewCommand() should URL-encode project name with space, got: %s", cmd)
+		}
+	})
+
+	t.Run("getAPIBaseURL URL encoding", func(t *testing.T) {
+		baseURL := ado.getAPIBaseURL()
+		if !contains(baseURL, "K2%20Engineering") {
+			t.Errorf("getAPIBaseURL() should URL-encode project name with space, got: %s", baseURL)
+		}
+	})
 }
