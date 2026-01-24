@@ -62,53 +62,69 @@ func urlDecodeOrKeep(s string) string {
 }
 
 // buildADORepoInfo creates a RepoInfo with proper URL decoding for display and
-// URL encoding for the clone URL.
-func buildADORepoInfo(org, project, repo string) *RepoInfo {
+// URL encoding for the clone URL. If useSSH is true, generates an SSH clone URL
+// instead of HTTPS, preserving the user's preference for SSH authentication.
+func buildADORepoInfo(org, project, repo string, useSSH bool) *RepoInfo {
 	// Decode values for storage (used in display and API calls that encode themselves)
 	decodedOrg := urlDecodeOrKeep(org)
 	decodedProject := urlDecodeOrKeep(project)
 	decodedRepo := urlDecodeOrKeep(repo)
 
-	// Clone URL uses URL-encoded values for proper HTTP handling
+	var cloneURL string
+	if useSSH {
+		// SSH URL format: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
+		// SSH URLs use URL-encoded values for projects with spaces/special chars
+		cloneURL = fmt.Sprintf("git@ssh.dev.azure.com:v3/%s/%s/%s",
+			url.PathEscape(decodedOrg),
+			url.PathEscape(decodedProject),
+			url.PathEscape(decodedRepo))
+	} else {
+		// HTTPS URL uses URL-encoded values for proper HTTP handling
+		cloneURL = fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s",
+			url.PathEscape(decodedOrg),
+			url.PathEscape(decodedProject),
+			url.PathEscape(decodedRepo))
+	}
+
 	return &RepoInfo{
 		Provider: TypeAzureDevOps,
 		Owner:    decodedOrg,
 		Project:  decodedProject,
 		Repo:     decodedRepo,
-		CloneURL: fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s",
-			url.PathEscape(decodedOrg),
-			url.PathEscape(decodedProject),
-			url.PathEscape(decodedRepo)),
+		CloneURL: cloneURL,
 	}
 }
 
 // ParseURL parses an Azure DevOps repository URL.
+// If the input URL is SSH format, the returned CloneURL will also be SSH format.
+// If the input URL is HTTPS format, the returned CloneURL will be HTTPS format.
 func (a *AzureDevOps) ParseURL(repoURL string) (*RepoInfo, error) {
 	repoURL = normalizeGitURL(repoURL)
 
 	// Try HTTPS format: https://dev.azure.com/{org}/{project}/_git/{repo}
 	if matches := adoHTTPSRegex.FindStringSubmatch(repoURL); matches != nil {
-		return buildADORepoInfo(matches[1], matches[2], matches[3]), nil
+		return buildADORepoInfo(matches[1], matches[2], matches[3], false), nil
 	}
 
 	// Try with .git suffix
 	if matches := adoHTTPSRegex.FindStringSubmatch(repoURL + ".git"); matches != nil {
-		return buildADORepoInfo(matches[1], matches[2], matches[3]), nil
+		return buildADORepoInfo(matches[1], matches[2], matches[3], false), nil
 	}
 
 	// Try SSH format: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
+	// Preserve SSH format in the clone URL to respect user's authentication preference
 	if matches := adoSSHRegex.FindStringSubmatch(repoURL); matches != nil {
-		return buildADORepoInfo(matches[1], matches[2], matches[3]), nil
+		return buildADORepoInfo(matches[1], matches[2], matches[3], true), nil
 	}
 
 	// Try legacy format: https://{org}.visualstudio.com/{project}/_git/{repo}
 	if matches := adoLegacyRegex.FindStringSubmatch(repoURL); matches != nil {
-		return buildADORepoInfo(matches[1], matches[2], matches[3]), nil
+		return buildADORepoInfo(matches[1], matches[2], matches[3], false), nil
 	}
 
 	// Try legacy default project format: https://{org}.visualstudio.com/_git/{repo}
 	if matches := adoLegacyDefaultRegex.FindStringSubmatch(repoURL); matches != nil {
-		return buildADORepoInfo(matches[1], matches[1], matches[2]), nil
+		return buildADORepoInfo(matches[1], matches[1], matches[2], false), nil
 	}
 
 	return nil, fmt.Errorf("unable to parse Azure DevOps URL: %s", repoURL)
