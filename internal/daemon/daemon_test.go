@@ -3605,8 +3605,8 @@ func TestHandleUpdateRepoConfigMergeQueueTrackMode(t *testing.T) {
 	resp := d.handleUpdateRepoConfig(socket.Request{
 		Command: "update_repo_config",
 		Args: map[string]interface{}{
-			"name":           "test-repo",
-			"mq_track_mode":  "author",
+			"name":          "test-repo",
+			"mq_track_mode": "author",
 		},
 	})
 	if !resp.Success {
@@ -3641,9 +3641,9 @@ func TestHandleUpdateRepoConfigPRShepherd(t *testing.T) {
 	resp := d.handleUpdateRepoConfig(socket.Request{
 		Command: "update_repo_config",
 		Args: map[string]interface{}{
-			"name":           "test-repo",
-			"ps_enabled":     false,
-			"ps_track_mode":  "assigned",
+			"name":          "test-repo",
+			"ps_enabled":    false,
+			"ps_track_mode": "assigned",
 		},
 	})
 	if !resp.Success {
