@@ -8,7 +8,7 @@
 // Usage:
 //
 //	go run cmd/verify-docs/main.go
-//	go run cmd/verify-docs/main.go --fix  # Auto-update docs (future)
+//	go run cmd/verify-docs/main.go --fix  // Auto-update docs (future)
 package main
 
 import (
@@ -171,7 +171,8 @@ func verifyFilePaths() Verification {
 		"docs/extending/SOCKET_API.md",
 	}
 
-	filePattern := regexp.MustCompile("`((?:internal|pkg|cmd)/[^`]+\\.go)`")
+	// Use raw string literal for regex to avoid double escaping hell
+	filePattern := regexp.MustCompile(`((?:internal|pkg|cmd)/[^` + "`" + `]+\.go)`)
 
 	missing := []string{}
 
@@ -248,14 +249,14 @@ func parseStateStructsFromCode() (map[string][]string, error) {
 					continue
 				}
 
-			jsonName := jsonTag(field)
-			if jsonName == "" {
-				jsonName = toSnakeCase(name.Name)
-			}
-			if jsonName == "-" || jsonName == "" {
-				continue
-			}
-			fields = append(fields, jsonName)
+				jsonName := jsonTag(field)
+				if jsonName == "" {
+					jsonName = toSnakeCase(name.Name)
+				}
+				if jsonName == "-" || jsonName == "" {
+					continue
+				}
+				fields = append(fields, jsonName)
 			}
 		}
 
@@ -357,7 +358,10 @@ func parseSocketCommandsFromDocs() ([]string, error) {
 
 // parseListFromComment extracts a newline-delimited list from an HTML comment label.
 func parseListFromComment(content, label string) []string {
-	pattern := fmt.Sprintf("(?s)<!--\\s*%s:\\s*(.*?)\\n-->", regexp.QuoteMeta(label))
+	// Use fmt.Sprintf to construct regex, escaping label but using raw strings for regex syntax
+	// (?s) dot matches newline
+	// <!-- 	* label : 	* (.*?) -->
+	pattern := fmt.Sprintf(`(?s)<!--\s*%s:\s*(.*?)-->`, regexp.QuoteMeta(label))
 	re := regexp.MustCompile(pattern)
 	matches := re.FindStringSubmatch(content)
 	if len(matches) < 2 {
