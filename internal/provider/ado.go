@@ -171,7 +171,7 @@ func (a *AzureDevOps) DetectFork(repoPath string) (*ForkInfo, error) {
 
 // detectForkViaAPI uses the Azure DevOps REST API to check if a repo is a fork.
 func (a *AzureDevOps) detectForkViaAPI(org, project, repo string) (*ForkInfo, error) {
-	pat := os.Getenv("AZURE_DEVOPS_PAT")
+	pat := os.Getenv("AZURE_DEVOPS_EXT_PAT")
 	if pat == "" {
 		// No PAT, can't check API
 		return &ForkInfo{IsFork: false}, nil
@@ -229,70 +229,51 @@ func (a *AzureDevOps) detectForkViaAPI(org, project, repo string) (*ForkInfo, er
 	return info, nil
 }
 
-// getAPIBaseURL returns the base URL for Azure DevOps REST API calls.
-func (a *AzureDevOps) getAPIBaseURL() string {
-	return fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s",
-		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo))
-}
-
-// PRListCommand returns the curl command to list PRs in Azure DevOps.
-// Output is formatted with jq to match GitHub's `gh pr list` format:
+// PRListCommand returns the az devops CLI command to list PRs in Azure DevOps.
+// Output is formatted to match GitHub's `gh pr list` format:
 // number, title, branch, state, author.
 func (a *AzureDevOps) PRListCommand(label string, authorFilter string) string {
-	// Azure DevOps uses REST API with curl
-	// Note: ADO doesn't have labels like GitHub; we use tags instead
-	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests?api-version=7.0&searchCriteria.status=active",
-		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo))
+	// Use az repos pr list command
+	cmd := fmt.Sprintf(`az repos pr list --organization "https://dev.azure.com/%s" --project "%s" --repository "%s" --status active`,
+		a.Organization, a.Project, a.Repo)
 
-	// Format output similar to gh pr list: number, title, branch, state, author
-	jqFilter := `[.value[] | {number: .pullRequestId, title: .title, branch: (.sourceRefName | sub("refs/heads/"; "")), state: .status, author: .createdBy.displayName}]`
-
-	// Note: ADO doesn't support @me filter directly in API, use jq to filter by author
+	// Add author filter if specified (az repos pr list supports --creator option)
 	if authorFilter != "" && authorFilter != "@me" {
-		jqFilter = fmt.Sprintf(`[.value[] | select(.createdBy.displayName == "%s") | {number: .pullRequestId, title: .title, branch: (.sourceRefName | sub("refs/heads/"; "")), state: .status, author: .createdBy.displayName}]`, authorFilter)
+		cmd += fmt.Sprintf(` --creator "%s"`, authorFilter)
 	}
 
-	// Note: ADO uses tags instead of labels; filtering by tag requires additional API call
-	// For now, we return all PRs and agents can filter in subsequent processing
+	// Format output similar to gh pr list using jq
+	jqFilter := `[.[] | {number: .pullRequestId, title: .title, branch: (.sourceRefName | sub("refs/heads/"; "")), state: .status, author: .createdBy.displayName}]`
+	cmd += fmt.Sprintf(` | jq '%s'`, jqFilter)
 
-	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s" | jq '%s'`, apiURL, jqFilter)
+	return cmd
 }
 
-// PRCreateCommand returns the curl command to create a PR in Azure DevOps.
-// Unlike GitHub's `gh pr create` which is interactive, this returns a curl command
-// with placeholder variables that must be substituted: $PR_TITLE, $PR_BODY, $TARGET_BRANCH.
+// PRCreateCommand returns the az devops CLI command to create a PR in Azure DevOps.
+// Uses placeholder variables: $PR_TITLE, $PR_BODY, $TARGET_BRANCH.
 // Example usage: PR_TITLE="My PR" PR_BODY="Description" TARGET_BRANCH="main" eval "$cmd"
 func (a *AzureDevOps) PRCreateCommand(targetRepo, headBranch string) string {
-	// Azure DevOps PR creation via REST API
-	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests?api-version=7.0",
-		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo))
-
-	// Use environment variable placeholders for flexibility
-	// Agents should set PR_TITLE, PR_BODY, and optionally TARGET_BRANCH before executing
+	// Use az repos pr create command
 	targetBranch := "main"
 	if targetRepo != "" {
-		// targetRepo in ADO context could be used for the target branch
 		targetBranch = "${TARGET_BRANCH:-main}"
 	}
 
-	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" -X POST "%s" -H "Content-Type: application/json" -d "{
-  \"sourceRefName\": \"refs/heads/%s\",
-  \"targetRefName\": \"refs/heads/%s\",
-  \"title\": \"${PR_TITLE:-PR from %s}\",
-  \"description\": \"${PR_BODY:-}\"
-}"`, apiURL, headBranch, targetBranch, headBranch)
+	return fmt.Sprintf(`az repos pr create --organization "https://dev.azure.com/%s" --project "%s" --repository "%s" --source-branch "%s" --target-branch "%s" --title "${PR_TITLE:-PR from %s}" --description "${PR_BODY:-}"`,
+		a.Organization, a.Project, a.Repo, headBranch, targetBranch, headBranch)
 }
 
-// PRViewCommand returns the curl command to view a PR in Azure DevOps.
+// PRViewCommand returns the az devops CLI command to view a PR in Azure DevOps.
 // If jsonFields is specified, it filters the output to those fields using jq.
 // Supported fields mirror GitHub's gh pr view --json: title, state, author, body,
 // baseRefName, headRefName, url, number, reviewDecision, isDraft.
 func (a *AzureDevOps) PRViewCommand(prNumber int, jsonFields string) string {
-	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/pullrequests/%d?api-version=7.0",
-		url.PathEscape(a.Organization), url.PathEscape(a.Project), prNumber)
+	// Use az repos pr show command
+	cmd := fmt.Sprintf(`az repos pr show --id %d --organization "https://dev.azure.com/%s" --project "%s"`,
+		prNumber, a.Organization, a.Project)
 
 	if jsonFields == "" {
-		return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s"`, apiURL)
+		return cmd
 	}
 
 	// Map GitHub field names to ADO equivalents and create a jq filter
@@ -313,18 +294,17 @@ func (a *AzureDevOps) PRViewCommand(prNumber int, jsonFields string) string {
                    else "REVIEW_REQUIRED" end)
 }`
 
-	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s" | jq '%s'`, apiURL, jqFilter)
+	return fmt.Sprintf(`%s | jq '%s'`, cmd, jqFilter)
 }
 
-// PRChecksCommand returns the curl command to view PR status in Azure DevOps.
+// PRChecksCommand returns the az devops CLI command to view PR status in Azure DevOps.
 // This queries the PR itself and formats output similar to GitHub's `gh pr checks`,
 // showing merge status and reviewer votes. Unlike GitHub where CI status is tightly
 // coupled to PRs, ADO uses policy evaluations and external status checks.
 func (a *AzureDevOps) PRChecksCommand(prNumber int) string {
-	// Query the PR itself which contains merge status and reviewer information
-	// This is more useful than just /statuses which only shows external status checks
-	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/pullrequests/%d?api-version=7.0",
-		url.PathEscape(a.Organization), url.PathEscape(a.Project), prNumber)
+	// Use az repos pr show command which contains merge status and reviewer information
+	cmd := fmt.Sprintf(`az repos pr show --id %d --organization "https://dev.azure.com/%s" --project "%s"`,
+		prNumber, a.Organization, a.Project)
 
 	// Format output similar to gh pr checks: show merge status and reviewer votes
 	jqFilter := `{
@@ -345,11 +325,12 @@ func (a *AzureDevOps) PRChecksCommand(prNumber int) string {
   canMerge: (.mergeStatus == "succeeded" and .status == "active" and (.isDraft | not) and ([.reviewers[] | select(.vote <= -10)] | length == 0))
 }`
 
-	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s" | jq '%s'`, apiURL, jqFilter)
+	return fmt.Sprintf(`%s | jq '%s'`, cmd, jqFilter)
 }
 
 // PRCommentCommand returns the curl command to comment on a PR in Azure DevOps.
 // Creates a new comment thread on the PR (ADO comments are organized in threads).
+// Note: The az devops CLI doesn't have a direct comment command, so we use curl.
 func (a *AzureDevOps) PRCommentCommand(prNumber int, body string) string {
 	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests/%d/threads?api-version=7.0",
 		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo), prNumber)
@@ -362,56 +343,52 @@ func (a *AzureDevOps) PRCommentCommand(prNumber int, body string) string {
 	escapedBody = strings.ReplaceAll(escapedBody, "\r", `\r`)
 
 	// Use double quotes for the JSON body to allow shell variable expansion if needed
-	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" -X POST "%s" -H "Content-Type: application/json" -d "{\"comments\":[{\"commentType\":1,\"content\":\"%s\"}],\"status\":1}"`,
+	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_EXT_PAT" -X POST "%s" -H "Content-Type: application/json" -d "{\"comments\":[{\"commentType\":1,\"content\":\"%s\"}],\"status\":1}"`,
 		apiURL, escapedBody)
 }
 
 // PREditCommand returns the curl command to edit a PR in Azure DevOps.
+// Note: The az devops CLI doesn't support adding labels directly, so we use curl.
 func (a *AzureDevOps) PREditCommand(prNumber int, addLabel string) string {
 	// Azure DevOps uses labels/tags differently - this adds a tag
 	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests/%d/labels?api-version=7.0",
 		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo), prNumber)
 
-	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" -X POST "%s" -H "Content-Type: application/json" -d '{"name":"%s"}'`,
+	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_EXT_PAT" -X POST "%s" -H "Content-Type: application/json" -d '{"name":"%s"}'`,
 		apiURL, addLabel)
 }
 
-// PRMergeCommand returns the curl command to complete (merge) a PR in Azure DevOps.
-// This is a two-step command: first fetch the PR to get lastMergeSourceCommit (required
-// to prevent race conditions), then complete the PR. The commands are chained with &&.
+// PRMergeCommand returns the az devops CLI command to complete (merge) a PR in Azure DevOps.
+// Uses squash merge and deletes the source branch.
 func (a *AzureDevOps) PRMergeCommand(prNumber int) string {
-	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests/%d?api-version=7.0",
-		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo), prNumber)
-
-	// Two-step merge: fetch PR to get lastMergeSourceCommit, then complete
-	// This prevents race conditions where the PR could have changed between fetch and merge
-	return fmt.Sprintf(`LAST_MERGE_COMMIT=$(curl -s -u ":$AZURE_DEVOPS_PAT" "%s" | jq -r '.lastMergeSourceCommit.commitId') && curl -s -u ":$AZURE_DEVOPS_PAT" -X PATCH "%s" -H "Content-Type: application/json" -d "{\"status\":\"completed\",\"lastMergeSourceCommit\":{\"commitId\":\"$LAST_MERGE_COMMIT\"},\"completionOptions\":{\"deleteSourceBranch\":true,\"mergeStrategy\":\"squash\"}}"`,
-		apiURL, apiURL)
+	// Use az repos pr update to complete the PR
+	// --squash enables squash merge, --delete-source-branch removes the branch after merge
+	return fmt.Sprintf(`az repos pr update --id %d --organization "https://dev.azure.com/%s" --project "%s" --status completed --squash --delete-source-branch`,
+		prNumber, a.Organization, a.Project)
 }
 
-// RunListCommand returns the curl command to list CI builds in Azure DevOps.
-// Unlike the project-scoped pipelines API, this filters to the specific repository
-// to match GitHub's behavior where `gh run list` shows only the current repo's runs.
+// RunListCommand returns the az devops CLI command to list CI builds in Azure DevOps.
+// Filters to the specific repository to match GitHub's behavior.
 func (a *AzureDevOps) RunListCommand(branch string, limit int) string {
-	// Use builds API which supports repository filtering
-	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/build/builds?api-version=7.0",
-		url.PathEscape(a.Organization), url.PathEscape(a.Project))
+	// Use az pipelines runs list command
+	cmd := fmt.Sprintf(`az pipelines runs list --organization "https://dev.azure.com/%s" --project "%s"`,
+		a.Organization, a.Project)
 
 	if branch != "" {
-		apiURL += fmt.Sprintf("&branchName=refs/heads/%s", url.PathEscape(branch))
+		cmd += fmt.Sprintf(` --branch "%s"`, branch)
 	}
 
 	// Filter by repository name using jq to match GitHub's repo-scoped behavior
-	// The builds API returns all builds in the project, so we filter client-side
-	jqFilter := fmt.Sprintf(`[.value[] | select(.repository.name == "%s")]`, a.Repo)
+	jqFilter := fmt.Sprintf(`[.[] | select(.repository.name == "%s")]`, a.Repo)
 	if limit > 0 {
 		jqFilter += fmt.Sprintf(" | .[:%d]", limit)
 	}
 
-	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s" | jq '%s'`, apiURL, jqFilter)
+	return fmt.Sprintf(`%s | jq '%s'`, cmd, jqFilter)
 }
 
 // APICommand returns the curl command to call the Azure DevOps REST API.
+// Note: For raw API calls, we use curl since the az devops CLI may not expose all endpoints.
 func (a *AzureDevOps) APICommand(endpoint, jqFilter string) string {
 	var apiURL string
 	if strings.HasPrefix(endpoint, "https://") {
@@ -421,7 +398,7 @@ func (a *AzureDevOps) APICommand(endpoint, jqFilter string) string {
 			url.PathEscape(a.Organization), url.PathEscape(a.Project), endpoint)
 	}
 
-	cmd := fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s"`, apiURL)
+	cmd := fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_EXT_PAT" "%s"`, apiURL)
 	if jqFilter != "" {
 		cmd += fmt.Sprintf(" | jq %q", jqFilter)
 	}
@@ -434,10 +411,11 @@ func (a *AzureDevOps) ReviewCommand(prURL string) string {
 	return fmt.Sprintf("multiclaude review %s", prURL)
 }
 
-// ValidatePAT checks if the AZURE_DEVOPS_PAT environment variable is set.
+// ValidatePAT checks if the AZURE_DEVOPS_EXT_PAT environment variable is set.
+// This is the standard environment variable used by the Azure DevOps CLI extension.
 func ValidatePAT() error {
-	if os.Getenv("AZURE_DEVOPS_PAT") == "" {
-		return fmt.Errorf("AZURE_DEVOPS_PAT environment variable is not set. " +
+	if os.Getenv("AZURE_DEVOPS_EXT_PAT") == "" {
+		return fmt.Errorf("AZURE_DEVOPS_EXT_PAT environment variable is not set. " +
 			"Please set it to your Azure DevOps Personal Access Token")
 	}
 	return nil

@@ -263,7 +263,7 @@ git checkout main && git merge --ff-only upstream/main && git push origin main
 - **You cannot complete PRs** - upstream maintainers do that
 - Create branches on your fork (origin), target upstream for PRs
 - Keep rebasing onto upstream/main to avoid conflicts
-- Use the Azure DevOps REST API with AZURE_DEVOPS_PAT for automation
+- Use the Azure DevOps CLI (az devops) with AZURE_DEVOPS_EXT_PAT for automation
 `)
 	}
 
@@ -327,20 +327,20 @@ func GenerateProviderInfoPrompt(providerType state.ProviderType, provConfig *sta
 	return fmt.Sprintf(`## Git Hosting Provider: Azure DevOps
 
 **IMPORTANT**: This repository is hosted on **Azure DevOps**, NOT GitHub.
-The standard 'gh' CLI commands will NOT work. Use the commands below instead.
+The standard 'gh' CLI commands will NOT work. Use the Azure DevOps CLI (az devops) instead.
 
 **Organization**: %s
 **Project**: %s
 **Repository**: %s
 
 ### Authentication
-All Azure DevOps API calls require the AZURE_DEVOPS_PAT environment variable:
+All Azure DevOps CLI calls require the AZURE_DEVOPS_EXT_PAT environment variable:
 `+"```bash"+`
-export AZURE_DEVOPS_PAT="your-personal-access-token"
+export AZURE_DEVOPS_EXT_PAT="your-personal-access-token"
 `+"```"+`
 
 ### Key Differences from GitHub
-- Use curl with the Azure DevOps REST API instead of the 'gh' CLI
+- Use the Azure DevOps CLI (az repos, az pipelines) instead of the 'gh' CLI
 - PRs are called "Pull Requests" and use a different API structure
 - Labels are called "tags" in Azure DevOps
 - CI pipelines work differently than GitHub Actions
@@ -351,13 +351,12 @@ Instead of GitHub CLI commands, use these Azure DevOps equivalents:
 
 | GitHub CLI Command | Azure DevOps Equivalent |
 |-------------------|------------------------|
-| `+"`gh pr list`"+` | See "List PRs" below |
-| `+"`gh pr view <N>`"+` | See "View PR" below |
-| `+"`gh pr create`"+` | See "Create PR" below |
-| `+"`gh pr checks <N>`"+` | See "Check PR Status" below |
-| `+"`gh pr comment <N>`"+` | See "Add Comment" below |
-| `+"`gh pr merge <N>`"+` | See "Complete/Merge PR" below |
-| `+"`gh run list`"+` | See "List CI Runs" below |
+| `+"`gh pr list`"+` | `+"`az repos pr list`"+` |
+| `+"`gh pr view <N>`"+` | `+"`az repos pr show --id <N>`"+` |
+| `+"`gh pr create`"+` | `+"`az repos pr create`"+` |
+| `+"`gh pr checks <N>`"+` | `+"`az repos pr show --id <N>`"+` |
+| `+"`gh pr merge <N>`"+` | `+"`az repos pr update --id <N> --status completed`"+` |
+| `+"`gh run list`"+` | `+"`az pipelines runs list`"+` |
 
 ### Detailed Commands
 
@@ -376,7 +375,7 @@ Instead of GitHub CLI commands, use these Azure DevOps equivalents:
 %s
 `+"```"+`
 
-**Add a Comment to PR:**
+**Add a Comment to PR (uses curl as az devops CLI doesn't support comments):**
 `+"```bash"+`
 %s
 `+"```"+`
@@ -393,15 +392,15 @@ Instead of GitHub CLI commands, use these Azure DevOps equivalents:
 
 ### Notes
 - Replace `+"`{PR_NUMBER}`"+` with the actual PR number (e.g., 123)
-- The AZURE_DEVOPS_PAT environment variable must be set for all API calls
-- All commands output JSON - use jq to parse and format as needed
+- The AZURE_DEVOPS_EXT_PAT environment variable must be set for all CLI commands
+- Most commands output JSON - use jq to parse and format as needed
 `,
 		provConfig.Organization, provConfig.Project, provConfig.RepoName,
 		ado.PRListCommand("multiclaude", ""),
-		strings.ReplaceAll(ado.PRViewCommand(0, ""), "/0?", "/{PR_NUMBER}?"),
-		strings.ReplaceAll(ado.PRChecksCommand(0), "/0?", "/{PR_NUMBER}?"),
+		strings.ReplaceAll(ado.PRViewCommand(0, ""), "--id 0", "--id {PR_NUMBER}"),
+		strings.ReplaceAll(ado.PRChecksCommand(0), "--id 0", "--id {PR_NUMBER}"),
 		strings.ReplaceAll(ado.PRCommentCommand(0, "Your comment here"), "/0/", "/{PR_NUMBER}/"),
-		strings.ReplaceAll(ado.PRMergeCommand(0), "/0?", "/{PR_NUMBER}?"),
+		strings.ReplaceAll(ado.PRMergeCommand(0), "--id 0", "--id {PR_NUMBER}"),
 		ado.RunListCommand("main", 5))
 }
 
