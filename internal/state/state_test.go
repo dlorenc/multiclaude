@@ -993,9 +993,9 @@ func TestParseTrackMode(t *testing.T) {
 		{"author", TrackModeAuthor, false},
 		{"assigned", TrackModeAssigned, false},
 		{"invalid", "", true},
-		{"ALL", "", true},      // case-sensitive
-		{"", "", true},         // empty string
-		{"  all  ", "", true},  // no whitespace trimming
+		{"ALL", "", true},     // case-sensitive
+		{"", "", true},        // empty string
+		{"  all  ", "", true}, // no whitespace trimming
 	}
 
 	for _, tt := range tests {
