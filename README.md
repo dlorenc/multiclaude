@@ -42,9 +42,19 @@ That's it. You now have a supervisor, merge queue, and worker grinding away. Det
 
 ## Two Modes
 
-**Single Player** - Use the [merge-queue](internal/templates/agent-templates/merge-queue.md) agent. It auto-merges PRs when CI passes. You're the only human. Maximum velocity.
+**Single Player** - [Merge-queue](internal/templates/agent-templates/merge-queue.md) auto-merges PRs when CI passes. You're the only human. Maximum velocity.
 
-**Multiplayer** - Use the [pr-shepherd](internal/templates/agent-templates/pr-shepherd.md) agent. It coordinates with human reviewers, tracks approvals, and respects your team's review process. Multiple humans, multiple agents, one codebase.
+```bash
+multiclaude repo init https://github.com/you/repo  # your repo
+```
+
+**Multiplayer** - [PR-shepherd](internal/templates/agent-templates/pr-shepherd.md) coordinates with human reviewers, tracks approvals, respects your team's review process.
+
+```bash
+multiclaude repo init https://github.com/you/fork  # auto-detected as fork
+```
+
+Fork detection is automatic. If you're initializing a fork, multiclaude enables pr-shepherd and disables merge-queue (you can't merge to upstream anyway).
 
 ## Built-in Agents
 
@@ -107,7 +117,6 @@ Log off. The game keeps running. Come back to progress.
 - **[Agent Guide](docs/AGENTS.md)** - How agents work and customization
 - **[Architecture](docs/ARCHITECTURE.md)** - System design and internals
 - **[Workflows](docs/WORKFLOWS.md)** - Detailed examples and patterns
-- **[Extending](docs/EXTENSIBILITY.md)** - Build on top of multiclaude
 - **[vs Gastown](docs/GASTOWN.md)** - Comparison with Steve Yegge's orchestrator
 
 ## Public Libraries
