@@ -18,6 +18,18 @@ func NewManager(repoPath string) *Manager {
 	return &Manager{repoPath: repoPath}
 }
 
+// runGit runs a git command in the repository directory and returns output.
+// If the command fails, the error includes the command output for debugging.
+func (m *Manager) runGit(args ...string) ([]byte, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = m.repoPath
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return output, fmt.Errorf("git %s: %w\nOutput: %s", args[0], err, output)
+	}
+	return output, nil
+}
+
 // resolvePathWithSymlinks resolves a path to its absolute form and evaluates symlinks.
 // This is important on macOS where /var is a symlink to /private/var.
 // If symlink resolution fails (e.g., path doesn't exist), returns the absolute path.
@@ -38,22 +50,14 @@ func resolvePathWithSymlinks(path string) (string, error) {
 
 // Create creates a new git worktree
 func (m *Manager) Create(path, branch string) error {
-	cmd := exec.Command("git", "worktree", "add", path, branch)
-	cmd.Dir = m.repoPath
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to create worktree: %w\nOutput: %s", err, output)
-	}
-	return nil
+	_, err := m.runGit("worktree", "add", path, branch)
+	return err
 }
 
 // CreateNewBranch creates a new worktree with a new branch
 func (m *Manager) CreateNewBranch(path, newBranch, startPoint string) error {
-	cmd := exec.Command("git", "worktree", "add", "-b", newBranch, path, startPoint)
-	cmd.Dir = m.repoPath
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to create worktree with new branch: %w\nOutput: %s", err, output)
-	}
-	return nil
+	_, err := m.runGit("worktree", "add", "-b", newBranch, path, startPoint)
+	return err
 }
 
 // Remove removes a git worktree
@@ -62,13 +66,8 @@ func (m *Manager) Remove(path string, force bool) error {
 	if force {
 		args = append(args, "--force")
 	}
-
-	cmd := exec.Command("git", args...)
-	cmd.Dir = m.repoPath
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to remove worktree: %w\nOutput: %s", err, output)
-	}
-	return nil
+	_, err := m.runGit(args...)
+	return err
 }
 
 // List returns a list of all worktrees
@@ -110,12 +109,8 @@ func (m *Manager) Exists(path string) (bool, error) {
 
 // Prune removes worktree information for missing paths
 func (m *Manager) Prune() error {
-	cmd := exec.Command("git", "worktree", "prune")
-	cmd.Dir = m.repoPath
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to prune worktrees: %w\nOutput: %s", err, output)
-	}
-	return nil
+	_, err := m.runGit("worktree", "prune")
+	return err
 }
 
 // HasUncommittedChanges checks if a worktree has uncommitted changes
@@ -235,22 +230,14 @@ func (m *Manager) BranchExists(branchName string) (bool, error) {
 
 // RenameBranch renames a branch from oldName to newName
 func (m *Manager) RenameBranch(oldName, newName string) error {
-	cmd := exec.Command("git", "branch", "-m", oldName, newName)
-	cmd.Dir = m.repoPath
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to rename branch: %w\nOutput: %s", err, output)
-	}
-	return nil
+	_, err := m.runGit("branch", "-m", oldName, newName)
+	return err
 }
 
 // DeleteBranch force deletes a branch (git branch -D)
 func (m *Manager) DeleteBranch(branchName string) error {
-	cmd := exec.Command("git", "branch", "-D", branchName)
-	cmd.Dir = m.repoPath
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to delete branch: %w\nOutput: %s", err, output)
-	}
-	return nil
+	_, err := m.runGit("branch", "-D", branchName)
+	return err
 }
 
 // ListBranchesWithPrefix lists all branches that start with the given prefix
@@ -432,12 +419,8 @@ func (m *Manager) GetDefaultBranch(remote string) (string, error) {
 
 // FetchRemote fetches updates from a remote
 func (m *Manager) FetchRemote(remote string) error {
-	cmd := exec.Command("git", "fetch", remote)
-	cmd.Dir = m.repoPath
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to fetch from %s: %w\nOutput: %s", remote, err, output)
-	}
-	return nil
+	_, err := m.runGit("fetch", remote)
+	return err
 }
 
 // FindMergedUpstreamBranches finds local branches that have been merged into the upstream default branch.
@@ -494,12 +477,8 @@ func (m *Manager) FindMergedUpstreamBranches(branchPrefix string) ([]string, err
 
 // DeleteRemoteBranch deletes a branch from a remote
 func (m *Manager) DeleteRemoteBranch(remote, branchName string) error {
-	cmd := exec.Command("git", "push", remote, "--delete", branchName)
-	cmd.Dir = m.repoPath
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to delete remote branch: %w\nOutput: %s", err, output)
-	}
-	return nil
+	_, err := m.runGit("push", remote, "--delete", branchName)
+	return err
 }
 
 // CleanupMergedBranches finds and deletes local branches that have been merged upstream.

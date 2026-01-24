@@ -347,6 +347,15 @@ func NoRepositoriesFound() *CLIError {
 	}
 }
 
+// RepoNotFound creates an error for when a specific repository is not found
+func RepoNotFound(repo string) *CLIError {
+	return &CLIError{
+		Category:   CategoryNotFound,
+		Message:    fmt.Sprintf("repository '%s' not found", repo),
+		Suggestion: "multiclaude list",
+	}
+}
+
 // NoWorkersFound creates an error for when no workers exist in a repository
 func NoWorkersFound(repo string) *CLIError {
 	return &CLIError{
