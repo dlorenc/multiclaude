@@ -168,7 +168,7 @@ Do NOT process or attempt to merge PRs authored by others. Focus only on PRs cre
 			prov.PRListCommand("multiclaude", "@me"))
 
 	case "assigned":
-		// Note: ADO doesn't have assignee filter in the same way, so we adapt the message
+		// Note: ADO doesn't have assignee filter in the same way as GitHub
 		if providerType == state.ProviderAzureDevOps {
 			return fmt.Sprintf(`## PR Tracking Mode: Assigned Only
 
@@ -182,7 +182,8 @@ When listing and monitoring PRs, filter for PRs where you are a reviewer:
 Do NOT process or attempt to complete PRs unless they are assigned to you for review.`,
 				prov.PRListCommand("multiclaude", ""))
 		}
-		return fmt.Sprintf(`## PR Tracking Mode: Assigned Only
+		// GitHub: Use --assignee flag (not --author) for assigned mode
+		return `## PR Tracking Mode: Assigned Only
 
 **IMPORTANT**: This repository is configured to track only PRs where you (or the multiclaude system) are assigned.
 
@@ -191,7 +192,7 @@ When listing and monitoring PRs, use:
 gh pr list --assignee @me --label multiclaude
 ` + "```" + `
 
-Do NOT process or attempt to merge PRs unless they are assigned to you. Focus only on PRs explicitly assigned to multiclaude.`)
+Do NOT process or attempt to merge PRs unless they are assigned to you. Focus only on PRs explicitly assigned to multiclaude.`
 
 	default: // "all"
 		return fmt.Sprintf(`## PR Tracking Mode: All PRs
