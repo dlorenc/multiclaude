@@ -1,8 +1,15 @@
 # Socket API Reference
 
+> **NOTE: COMMAND VERIFICATION NEEDED**
+>
+> Not all commands documented here have been verified against the current codebase.
+> Hook-related commands (`get_hook_config`, `update_hook_config`) are **not implemented**
+> as the event hooks system does not exist. Other commands should be verified against
+> `internal/daemon/daemon.go` before use.
+
 **Extension Point:** Programmatic control via Unix socket IPC
 
-This guide documents the complete socket API for building custom control tools, automation scripts, and alternative CLIs. The socket API provides **full read-write access** to multiclaude state and operations.
+This guide documents the socket API for building custom control tools, automation scripts, and alternative CLIs. The socket API provides programmatic access to multiclaude state and operations.
 
 ## Overview
 

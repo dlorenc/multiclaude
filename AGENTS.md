@@ -41,7 +41,7 @@ The supervisor monitors all other agents and nudges them toward progress. It:
 
 **Key constraint**: The supervisor coordinates but doesn't execute. It communicates through `multiclaude message send` rather than taking direct action on PRs.
 
-### 2. Merge-Queue (`internal/prompts/merge-queue.md`)
+### 2. Merge-Queue (`internal/templates/agent-templates/merge-queue.md`)
 
 **Role**: The ratchet mechanism - converts passing PRs into permanent progress
 **Worktree**: Main repository
@@ -64,7 +64,7 @@ This is the most complex agent with multiple responsibilities:
 - Tracks PRs needing human input with `needs-human-input` label
 - Can close unsalvageable PRs but must preserve learnings in issues
 
-### 3. Worker (`internal/prompts/worker.md`)
+### 3. Worker (`internal/templates/agent-templates/worker.md`)
 
 **Role**: Execute specific tasks and create PRs
 **Worktree**: Isolated branch (`work/<worker-name>`)
@@ -100,7 +100,7 @@ The workspace is unique - it's the only agent that:
 - Can spawn workers on behalf of the user
 - Persists conversation history across sessions
 
-### 5. Review (`internal/prompts/review.md`)
+### 5. Review (`internal/templates/agent-templates/reviewer.md`)
 
 **Role**: Code review and quality gate
 **Worktree**: PR branch (ephemeral)
@@ -416,15 +416,13 @@ go test ./test/ -run TestDaemonCrashRecovery
    const AgentTypeMyAgent AgentType = "my-agent"
    ```
 
-2. **Create the prompt** at `internal/prompts/my-agent.md`
+2. **Create the prompt template** at `internal/templates/agent-templates/my-agent.md`
+   - Note: Only supervisor and workspace prompts are embedded directly in `internal/prompts/`
+   - Other agent types (worker, merge-queue, review) use templates that can be customized
 
-3. **Embed the prompt** in `internal/prompts/prompts.go`:
-   ```go
-   //go:embed my-agent.md
-   var defaultMyAgentPrompt string
-   ```
+3. **Add the template** to `internal/templates/templates.go` for embedding
 
-4. **Add prompt loading** in `GetDefaultPrompt()` and `LoadCustomPrompt()`
+4. **Add prompt loading** in `GetDefaultPrompt()` if needed (for embedded prompts only)
 
 5. **Add wake message** in `daemon.go:wakeAgents()` if needed
 

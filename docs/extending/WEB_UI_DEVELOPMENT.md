@@ -1,10 +1,17 @@
 # Web UI Development Guide
 
-**Extension Point:** Building web dashboards and monitoring UIs
+> **WARNING: REFERENCE IMPLEMENTATION DOES NOT EXIST**
+>
+> This document references `cmd/multiclaude-web` and `internal/dashboard/` which do **not exist** in the codebase.
+> Per ROADMAP.md, web interfaces and dashboards are explicitly out of scope for upstream multiclaude.
+>
+> This document is preserved as a design guide for potential fork implementations.
 
-This guide shows you how to build web-based user interfaces for multiclaude. The reference implementation (`cmd/multiclaude-web`) provides a complete working example in under 500 lines of code.
+**Extension Point:** Building web dashboards and monitoring UIs (FOR FORKS ONLY)
 
-**Note:** Web UIs are a **fork-only feature**. Upstream multiclaude explicitly rejects web interfaces per their ROADMAP.md. This guide is for fork maintainers and downstream projects.
+This guide shows you how to build web-based user interfaces for multiclaude in a fork.
+
+**IMPORTANT:** Web UIs are a **fork-only feature**. Upstream multiclaude explicitly rejects web interfaces per ROADMAP.md. This guide is for fork maintainers and downstream projects only.
 
 ## Overview
 

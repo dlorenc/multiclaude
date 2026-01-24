@@ -1,8 +1,16 @@
 # Event Hooks Integration Guide
 
-**Extension Point:** Event-driven notifications via hook scripts
+> **WARNING: THIS FEATURE IS NOT IMPLEMENTED**
+>
+> This document describes a **planned feature** that does not exist in the current codebase.
+> The `multiclaude hooks` command does not exist, and `internal/events/events.go` has not been implemented.
+> Per ROADMAP.md, notification systems are explicitly out of scope for upstream multiclaude.
+>
+> This document is preserved for potential fork implementations.
 
-This guide documents multiclaude's event system and how to build notification integrations (Slack, Discord, email, custom webhooks) using hook scripts. This is the **recommended approach for notifications** - fire-and-forget, zero dependencies, user-controlled.
+**Extension Point:** Event-driven notifications via hook scripts (PLANNED - NOT IMPLEMENTED)
+
+This guide documents a **planned** event system for building notification integrations (Slack, Discord, email, custom webhooks) using hook scripts.
 
 ## Overview
 

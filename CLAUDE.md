@@ -102,7 +102,8 @@ MULTICLAUDE_TEST_MODE=1 go test ./test/...  # Skip Claude startup
 | `internal/cli/cli.go` | **Large file** (~3700 lines) with all CLI commands |
 | `internal/daemon/daemon.go` | Daemon implementation with all loops |
 | `internal/state/state.go` | State struct with mutex-protected operations |
-| `internal/prompts/*.md` | Agent system prompts (embedded at compile) |
+| `internal/prompts/*.md` | Supervisor/workspace prompts (embedded at compile) |
+| `internal/templates/agent-templates/*.md` | Worker/merge-queue/reviewer prompt templates |
 | `pkg/tmux/client.go` | Public tmux library with `SendKeysLiteralWithEnter` |
 
 ## Patterns and Conventions
@@ -256,7 +257,7 @@ grep -r "socket.Request" docs/extending/
 ## Contributing Checklist
 
 When modifying agent behavior:
-- [ ] Update the relevant prompt in `internal/prompts/*.md`
+- [ ] Update the relevant prompt (supervisor/workspace in `internal/prompts/*.md`, others in `internal/templates/agent-templates/*.md`)
 - [ ] Run `go generate ./pkg/config` if CLI changed
 - [ ] Test with tmux: `go test ./test/...`
 - [ ] Check state persistence: `go test ./internal/state/...`
@@ -326,7 +327,9 @@ multiclaude cleanup            # Actually clean up
 
 ```bash
 # Prompts are embedded at compile time
-vim internal/prompts/worker.md
+# Supervisor/workspace prompts: internal/prompts/*.md
+# Worker/merge-queue/reviewer prompts: internal/templates/agent-templates/*.md
+vim internal/templates/agent-templates/worker.md
 go build ./cmd/multiclaude
 # New workers will use updated prompt
 ```

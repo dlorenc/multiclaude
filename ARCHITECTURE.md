@@ -281,22 +281,49 @@ The CLI handles user commands and communicates with the daemon.
 **Command Tree:**
 ```
 multiclaude
-├── start                    # Start daemon
+├── start                    # Start daemon (alias for daemon start)
 ├── stop-all [--clean]       # Stop everything
-├── init <url>               # Initialize repo
-├── list                     # List repos
-├── work <task>              # Create worker
+├── repo
+│   ├── init <url>           # Initialize repo
+│   ├── list                 # List repos
+│   ├── rm <name>            # Remove repo
+│   ├── use <name>           # Set default repo
+│   ├── current              # Show default repo
+│   ├── unset                # Clear default repo
+│   └── history              # Show task history
+├── worker
+│   ├── create <task>        # Create worker
 │   ├── list                 # List workers
 │   └── rm <name>            # Remove worker
+├── workspace
+│   ├── add <name>           # Add workspace
+│   ├── list                 # List workspaces
+│   ├── connect <name>       # Connect to workspace
+│   └── rm <name>            # Remove workspace
 ├── agent
-│   ├── send-message <to> <msg>
-│   ├── list-messages
-│   ├── read-message <id>
-│   ├── ack-message <id>
-│   ├── complete
-│   └── attach <name>        # Attach to tmux window
+│   ├── attach <name>        # Attach to tmux window
+│   ├── complete             # Signal completion
+│   ├── restart <name>       # Restart crashed agent
+│   ├── send-message         # (alias for message send)
+│   ├── list-messages        # (alias for message list)
+│   ├── read-message         # (alias for message read)
+│   └── ack-message          # (alias for message ack)
+├── message
+│   ├── send <to> <msg>      # Send message
+│   ├── list                 # List messages
+│   ├── read <id>            # Read message
+│   └── ack <id>             # Acknowledge message
+├── agents
+│   ├── list                 # List agent definitions
+│   ├── spawn                # Spawn from prompt file
+│   └── reset                # Reset to defaults
 ├── cleanup [--dry-run]      # Clean orphaned resources
 ├── repair                   # Fix state
+├── review <pr-url>          # Spawn review agent
+├── config                   # View/modify repo config
+├── logs                     # View agent logs
+├── bug                      # Generate diagnostic report
+├── version                  # Show version
 └── daemon
     ├── start
     ├── stop

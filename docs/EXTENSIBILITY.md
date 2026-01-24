@@ -1,5 +1,16 @@
 # Multiclaude Extensibility Guide
 
+> **NOTE: IMPLEMENTATION STATUS VARIES**
+>
+> Some extension points documented here are **not fully implemented**:
+> - **State File**: ✅ Implemented - works as documented
+> - **Event Hooks**: ❌ NOT IMPLEMENTED - `multiclaude hooks` command does not exist
+> - **Socket API**: ⚠️ Partially implemented - some commands may not exist
+> - **Web UI Reference**: ❌ NOT IMPLEMENTED - `cmd/multiclaude-web` does not exist
+>
+> Per ROADMAP.md, web interfaces and notification systems are **out of scope** for upstream multiclaude.
+> These docs are preserved for fork implementations.
+
 **Target Audience:** Future LLMs and developers building extensions for multiclaude
 
 This guide documents how to extend multiclaude **without modifying the core binary**. Multiclaude is designed with a clean separation between core orchestration and external integrations, allowing downstream projects to build custom notifications, web UIs, monitoring tools, and more.
@@ -7,10 +18,10 @@ This guide documents how to extend multiclaude **without modifying the core bina
 ## Philosophy
 
 **Zero-Modification Extension:** Multiclaude provides clean interfaces for external tools:
-- **State File**: Read-only JSON state for monitoring and visualization
-- **Event Hooks**: Execute custom scripts on lifecycle events
-- **Socket API**: Programmatic control via Unix socket IPC
-- **File System**: Standard directories for messages, logs, and worktrees
+- **State File**: Read-only JSON state for monitoring and visualization (✅ IMPLEMENTED)
+- **Event Hooks**: Execute custom scripts on lifecycle events (❌ NOT IMPLEMENTED)
+- **Socket API**: Programmatic control via Unix socket IPC (⚠️ PARTIAL)
+- **File System**: Standard directories for messages, logs, and worktrees (✅ IMPLEMENTED)
 
 **Fork-Friendly Architecture:** Extensions that upstream rejects (web UIs, notifications) can be maintained in forks without conflicts, as they operate entirely outside the core binary.
 

@@ -736,7 +736,10 @@ echo "$state" | jq -r '
 
 ### Example 3: Web Dashboard API
 
-See `internal/dashboard/api.go` for a complete implementation with:
+> **Note:** The reference implementation (`internal/dashboard/`, `cmd/multiclaude-web`) does not exist.
+> See WEB_UI_DEVELOPMENT.md for design patterns if building a dashboard in a fork.
+
+A web dashboard would typically include:
 - REST endpoints for repos, agents, history
 - Server-Sent Events for live updates
 - State watching with fsnotify
