@@ -101,65 +101,6 @@ func createTestRepoWithRemote(t *testing.T) (string, func()) {
 	return localDir, cleanup
 }
 
-// addCommitToRemote adds a commit to the remote by creating another clone,
-// committing, and pushing
-func addCommitToRemote(t *testing.T, localDir string, message string) {
-	t.Helper()
-
-	// Get the remote URL
-	cmd := exec.Command("git", "remote", "get-url", "origin")
-	cmd.Dir = localDir
-	output, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("Failed to get remote URL: %v", err)
-	}
-	remoteURL := strings.TrimSpace(string(output))
-
-	// Create a temp clone to make changes
-	tempClone, err := os.MkdirTemp("", "temp-clone-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp clone dir: %v", err)
-	}
-	defer os.RemoveAll(tempClone)
-
-	cmd = exec.Command("git", "clone", remoteURL, tempClone)
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to clone for remote commit: %v", err)
-	}
-
-	// Configure git user
-	cmd = exec.Command("git", "config", "user.name", "Test User")
-	cmd.Dir = tempClone
-	cmd.Run()
-	cmd = exec.Command("git", "config", "user.email", "test@example.com")
-	cmd.Dir = tempClone
-	cmd.Run()
-
-	// Create a new file and commit
-	newFile := filepath.Join(tempClone, message+".txt")
-	if err := os.WriteFile(newFile, []byte(message+"\n"), 0644); err != nil {
-		t.Fatalf("Failed to create file: %v", err)
-	}
-
-	cmd = exec.Command("git", "add", ".")
-	cmd.Dir = tempClone
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to git add: %v", err)
-	}
-
-	cmd = exec.Command("git", "commit", "-m", message)
-	cmd.Dir = tempClone
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to commit: %v", err)
-	}
-
-	cmd = exec.Command("git", "push", "origin", "main")
-	cmd.Dir = tempClone
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to push: %v", err)
-	}
-}
-
 func TestRefreshWorktree_DetachedHead(t *testing.T) {
 	repoPath, cleanup := createTestRepo(t)
 	defer cleanup()
