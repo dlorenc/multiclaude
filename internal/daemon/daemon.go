@@ -247,15 +247,9 @@ func (d *Daemon) checkAgentHealth() {
 
 	deadAgents := make(map[string][]string) // repo -> []agent names
 
-	// Get a snapshot of repos to avoid concurrent map access
-	repos := d.state.GetAllRepos()
+	// Get a snapshot of active (non-paused) repos
+	repos := d.state.GetActiveRepos()
 	for repoName, repo := range repos {
-		// Skip paused repos
-		if repo.Paused {
-			d.logger.Debug("Skipping health check for paused repo %s", repoName)
-			continue
-		}
-
 		// Check if tmux session exists
 		hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession)
 		if err != nil {
@@ -341,17 +335,11 @@ func (d *Daemon) routeMessages() {
 	// Get messages manager
 	msgMgr := d.getMessageManager()
 
-	// Get a snapshot of repos to avoid concurrent map access
-	repos := d.state.GetAllRepos()
+	// Get a snapshot of active (non-paused) repos
+	repos := d.state.GetActiveRepos()
 
 	// Check each repository
 	for repoName, repo := range repos {
-		// Skip paused repos
-		if repo.Paused {
-			d.logger.Debug("Skipping message routing for paused repo %s", repoName)
-			continue
-		}
-
 		// Check each agent for messages
 		for agentName, agent := range repo.Agents {
 			// Skip workspace agent - it should only receive direct user input
@@ -411,15 +399,9 @@ func (d *Daemon) wakeAgents() {
 
 	now := time.Now()
 
-	// Get a snapshot of repos to avoid concurrent map access
-	repos := d.state.GetAllRepos()
+	// Get a snapshot of active (non-paused) repos
+	repos := d.state.GetActiveRepos()
 	for repoName, repo := range repos {
-		// Skip paused repos
-		if repo.Paused {
-			d.logger.Debug("Skipping wake for paused repo %s", repoName)
-			continue
-		}
-
 		for agentName, agent := range repo.Agents {
 			// Skip workspace agent - it should only receive direct user input
 			if agent.Type == state.AgentTypeWorkspace {
@@ -498,7 +480,8 @@ func (d *Daemon) worktreeRefreshLoop() {
 func (d *Daemon) refreshWorktrees() {
 	d.logger.Debug("Checking worker worktrees for refresh")
 
-	repos := d.state.GetAllRepos()
+	// Get active (non-paused) repos
+	repos := d.state.GetActiveRepos()
 	for repoName, repo := range repos {
 		repoPath := d.paths.RepoDir(repoName)
 
@@ -1805,18 +1788,13 @@ func (d *Daemon) cleanupMergedBranches() {
 }
 
 // restoreTrackedRepos restores agents for tracked repos that are missing their tmux sessions
-// or have dead Claude processes
+// or have dead Claude processes. Paused repos are skipped - their agents won't be restored.
 func (d *Daemon) restoreTrackedRepos() {
 	d.logger.Info("Checking tracked repos for restoration")
 
-	repos := d.state.GetAllRepos()
+	// Get active (non-paused) repos - paused repos won't have agents restored
+	repos := d.state.GetActiveRepos()
 	for repoName, repo := range repos {
-		// Skip paused repos - don't restore their agents
-		if repo.Paused {
-			d.logger.Info("Skipping paused repo %s during restoration", repoName)
-			continue
-		}
-
 		// Check if tmux session exists
 		hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession)
 		if err != nil {

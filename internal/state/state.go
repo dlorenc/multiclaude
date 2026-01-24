@@ -370,6 +370,19 @@ func (s *State) GetAllRepos() map[string]*Repository {
 	return repos
 }
 
+// GetActiveRepos returns a snapshot of all non-paused repositories
+// Use this for daemon loops that should skip paused repos
+func (s *State) GetActiveRepos() map[string]*Repository {
+	allRepos := s.GetAllRepos()
+	activeRepos := make(map[string]*Repository, len(allRepos))
+	for name, repo := range allRepos {
+		if !repo.Paused {
+			activeRepos[name] = repo
+		}
+	}
+	return activeRepos
+}
+
 // AddAgent adds a new agent to a repository
 func (s *State) AddAgent(repoName, agentName string, agent Agent) error {
 	s.mu.Lock()

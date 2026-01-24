@@ -2320,3 +2320,50 @@ func TestGetAllReposCopiesPaused(t *testing.T) {
 		t.Error("GetAllRepos() did not deep copy - modifying snapshot affected original")
 	}
 }
+
+func TestGetActiveRepos(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Add an active repo
+	activeRepo := &Repository{
+		GithubURL:   "https://github.com/test/active",
+		TmuxSession: "mc-active",
+		Agents:      make(map[string]Agent),
+		Paused:      false,
+	}
+	if err := s.AddRepo("active-repo", activeRepo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Add a paused repo
+	pausedRepo := &Repository{
+		GithubURL:   "https://github.com/test/paused",
+		TmuxSession: "mc-paused",
+		Agents:      make(map[string]Agent),
+		Paused:      true,
+	}
+	if err := s.AddRepo("paused-repo", pausedRepo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// GetAllRepos should return both
+	allRepos := s.GetAllRepos()
+	if len(allRepos) != 2 {
+		t.Errorf("GetAllRepos() returned %d repos, want 2", len(allRepos))
+	}
+
+	// GetActiveRepos should only return the non-paused one
+	activeRepos := s.GetActiveRepos()
+	if len(activeRepos) != 1 {
+		t.Errorf("GetActiveRepos() returned %d repos, want 1", len(activeRepos))
+	}
+	if _, exists := activeRepos["active-repo"]; !exists {
+		t.Error("GetActiveRepos() should include active-repo")
+	}
+	if _, exists := activeRepos["paused-repo"]; exists {
+		t.Error("GetActiveRepos() should not include paused-repo")
+	}
+}
