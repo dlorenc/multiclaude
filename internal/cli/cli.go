@@ -5123,7 +5123,11 @@ func (c *CLI) showDocs(args []string) error {
 	return nil
 }
 
-// GenerateDocumentation generates markdown documentation for all CLI commands
+// GenerateDocumentation generates markdown documentation for all CLI commands.
+// NOTE: This markdown is injected into agent prompts and extension docs. When
+// adding or changing commands/flags, ensure docs/EXTENSION_DOCUMENTATION_SUMMARY.md
+// stays accurate and rerun `go run ./cmd/verify-docs` so downstream tools/LLMs
+// stay current.
 func (c *CLI) GenerateDocumentation() string {
 	var sb strings.Builder
 
