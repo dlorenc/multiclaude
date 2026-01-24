@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -51,66 +52,66 @@ func (a *AzureDevOps) Name() Type {
 	return TypeAzureDevOps
 }
 
+// urlDecodeOrKeep URL-decodes a string, returning the original if decoding fails.
+func urlDecodeOrKeep(s string) string {
+	decoded, err := url.PathUnescape(s)
+	if err != nil {
+		return s
+	}
+	return decoded
+}
+
+// buildADORepoInfo creates a RepoInfo with proper URL decoding for display and
+// URL encoding for the clone URL.
+func buildADORepoInfo(org, project, repo string) *RepoInfo {
+	// Decode values for storage (used in display and API calls that encode themselves)
+	decodedOrg := urlDecodeOrKeep(org)
+	decodedProject := urlDecodeOrKeep(project)
+	decodedRepo := urlDecodeOrKeep(repo)
+
+	// Clone URL uses URL-encoded values for proper HTTP handling
+	return &RepoInfo{
+		Provider: TypeAzureDevOps,
+		Owner:    decodedOrg,
+		Project:  decodedProject,
+		Repo:     decodedRepo,
+		CloneURL: fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s",
+			url.PathEscape(decodedOrg),
+			url.PathEscape(decodedProject),
+			url.PathEscape(decodedRepo)),
+	}
+}
+
 // ParseURL parses an Azure DevOps repository URL.
-func (a *AzureDevOps) ParseURL(url string) (*RepoInfo, error) {
-	url = normalizeGitURL(url)
+func (a *AzureDevOps) ParseURL(repoURL string) (*RepoInfo, error) {
+	repoURL = normalizeGitURL(repoURL)
 
 	// Try HTTPS format: https://dev.azure.com/{org}/{project}/_git/{repo}
-	if matches := adoHTTPSRegex.FindStringSubmatch(url); matches != nil {
-		return &RepoInfo{
-			Provider: TypeAzureDevOps,
-			Owner:    matches[1], // Organization
-			Project:  matches[2],
-			Repo:     matches[3],
-			CloneURL: fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s", matches[1], matches[2], matches[3]),
-		}, nil
+	if matches := adoHTTPSRegex.FindStringSubmatch(repoURL); matches != nil {
+		return buildADORepoInfo(matches[1], matches[2], matches[3]), nil
 	}
 
 	// Try with .git suffix
-	if matches := adoHTTPSRegex.FindStringSubmatch(url + ".git"); matches != nil {
-		return &RepoInfo{
-			Provider: TypeAzureDevOps,
-			Owner:    matches[1],
-			Project:  matches[2],
-			Repo:     matches[3],
-			CloneURL: fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s", matches[1], matches[2], matches[3]),
-		}, nil
+	if matches := adoHTTPSRegex.FindStringSubmatch(repoURL + ".git"); matches != nil {
+		return buildADORepoInfo(matches[1], matches[2], matches[3]), nil
 	}
 
 	// Try SSH format: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
-	if matches := adoSSHRegex.FindStringSubmatch(url); matches != nil {
-		return &RepoInfo{
-			Provider: TypeAzureDevOps,
-			Owner:    matches[1],
-			Project:  matches[2],
-			Repo:     matches[3],
-			CloneURL: fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s", matches[1], matches[2], matches[3]),
-		}, nil
+	if matches := adoSSHRegex.FindStringSubmatch(repoURL); matches != nil {
+		return buildADORepoInfo(matches[1], matches[2], matches[3]), nil
 	}
 
 	// Try legacy format: https://{org}.visualstudio.com/{project}/_git/{repo}
-	if matches := adoLegacyRegex.FindStringSubmatch(url); matches != nil {
-		return &RepoInfo{
-			Provider: TypeAzureDevOps,
-			Owner:    matches[1],
-			Project:  matches[2],
-			Repo:     matches[3],
-			CloneURL: fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s", matches[1], matches[2], matches[3]),
-		}, nil
+	if matches := adoLegacyRegex.FindStringSubmatch(repoURL); matches != nil {
+		return buildADORepoInfo(matches[1], matches[2], matches[3]), nil
 	}
 
 	// Try legacy default project format: https://{org}.visualstudio.com/_git/{repo}
-	if matches := adoLegacyDefaultRegex.FindStringSubmatch(url); matches != nil {
-		return &RepoInfo{
-			Provider: TypeAzureDevOps,
-			Owner:    matches[1],
-			Project:  matches[1], // Project same as org for default collection
-			Repo:     matches[2],
-			CloneURL: fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s", matches[1], matches[1], matches[2]),
-		}, nil
+	if matches := adoLegacyDefaultRegex.FindStringSubmatch(repoURL); matches != nil {
+		return buildADORepoInfo(matches[1], matches[1], matches[2]), nil
 	}
 
-	return nil, fmt.Errorf("unable to parse Azure DevOps URL: %s", url)
+	return nil, fmt.Errorf("unable to parse Azure DevOps URL: %s", repoURL)
 }
 
 // DetectFork checks if an Azure DevOps repository is a fork.
@@ -160,8 +161,9 @@ func (a *AzureDevOps) detectForkViaAPI(org, project, repo string) (*ForkInfo, er
 		return &ForkInfo{IsFork: false}, nil
 	}
 
-	// Azure DevOps API endpoint for repository info
-	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s?api-version=7.0", org, project, repo)
+	// Azure DevOps API endpoint for repository info (URL-encode parameters with spaces/special chars)
+	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s?api-version=7.0",
+		url.PathEscape(org), url.PathEscape(project), url.PathEscape(repo))
 
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
@@ -214,7 +216,7 @@ func (a *AzureDevOps) detectForkViaAPI(org, project, repo string) (*ForkInfo, er
 // getAPIBaseURL returns the base URL for Azure DevOps REST API calls.
 func (a *AzureDevOps) getAPIBaseURL() string {
 	return fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s",
-		a.Organization, a.Project, a.Repo)
+		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo))
 }
 
 // PRListCommand returns the curl command to list PRs in Azure DevOps.
@@ -222,7 +224,7 @@ func (a *AzureDevOps) PRListCommand(label string, authorFilter string) string {
 	// Azure DevOps uses REST API with curl
 	// Note: ADO doesn't have labels like GitHub; we use tags or search queries
 	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests?api-version=7.0&searchCriteria.status=active",
-		a.Organization, a.Project, a.Repo)
+		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo))
 
 	if authorFilter == "@me" {
 		// ADO uses creatorId, but for simplicity we filter client-side
@@ -236,7 +238,7 @@ func (a *AzureDevOps) PRListCommand(label string, authorFilter string) string {
 func (a *AzureDevOps) PRCreateCommand(targetRepo, headBranch string) string {
 	// Azure DevOps PR creation via REST API
 	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests?api-version=7.0",
-		a.Organization, a.Project, a.Repo)
+		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo))
 
 	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" -X POST "%s" -H "Content-Type: application/json" -d '{
   "sourceRefName": "refs/heads/%s",
@@ -249,7 +251,7 @@ func (a *AzureDevOps) PRCreateCommand(targetRepo, headBranch string) string {
 // PRViewCommand returns the curl command to view a PR in Azure DevOps.
 func (a *AzureDevOps) PRViewCommand(prNumber int, jsonFields string) string {
 	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/pullrequests/%d?api-version=7.0",
-		a.Organization, a.Project, prNumber)
+		url.PathEscape(a.Organization), url.PathEscape(a.Project), prNumber)
 
 	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s"`, apiURL)
 }
@@ -258,7 +260,7 @@ func (a *AzureDevOps) PRViewCommand(prNumber int, jsonFields string) string {
 func (a *AzureDevOps) PRChecksCommand(prNumber int) string {
 	// Azure DevOps uses build status on the PR
 	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests/%d/statuses?api-version=7.0",
-		a.Organization, a.Project, a.Repo, prNumber)
+		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo), prNumber)
 
 	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s"`, apiURL)
 }
@@ -266,7 +268,7 @@ func (a *AzureDevOps) PRChecksCommand(prNumber int) string {
 // PRCommentCommand returns the curl command to comment on a PR in Azure DevOps.
 func (a *AzureDevOps) PRCommentCommand(prNumber int, body string) string {
 	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests/%d/threads?api-version=7.0",
-		a.Organization, a.Project, a.Repo, prNumber)
+		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo), prNumber)
 
 	// Escape body for JSON
 	escapedBody := strings.ReplaceAll(body, `"`, `\"`)
@@ -280,7 +282,7 @@ func (a *AzureDevOps) PRCommentCommand(prNumber int, body string) string {
 func (a *AzureDevOps) PREditCommand(prNumber int, addLabel string) string {
 	// Azure DevOps uses labels/tags differently - this adds a tag
 	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests/%d/labels?api-version=7.0",
-		a.Organization, a.Project, a.Repo, prNumber)
+		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo), prNumber)
 
 	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" -X POST "%s" -H "Content-Type: application/json" -d '{"name":"%s"}'`,
 		apiURL, addLabel)
@@ -289,7 +291,7 @@ func (a *AzureDevOps) PREditCommand(prNumber int, addLabel string) string {
 // PRMergeCommand returns the curl command to complete (merge) a PR in Azure DevOps.
 func (a *AzureDevOps) PRMergeCommand(prNumber int) string {
 	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories/%s/pullrequests/%d?api-version=7.0",
-		a.Organization, a.Project, a.Repo, prNumber)
+		url.PathEscape(a.Organization), url.PathEscape(a.Project), url.PathEscape(a.Repo), prNumber)
 
 	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" -X PATCH "%s" -H "Content-Type: application/json" -d '{"status":"completed","completionOptions":{"deleteSourceBranch":true}}'`,
 		apiURL)
@@ -299,10 +301,10 @@ func (a *AzureDevOps) PRMergeCommand(prNumber int) string {
 func (a *AzureDevOps) RunListCommand(branch string, limit int) string {
 	// Azure DevOps uses pipelines API for CI runs
 	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/pipelines/runs?api-version=7.0",
-		a.Organization, a.Project)
+		url.PathEscape(a.Organization), url.PathEscape(a.Project))
 
 	if branch != "" {
-		apiURL += fmt.Sprintf("&branchName=refs/heads/%s", branch)
+		apiURL += fmt.Sprintf("&branchName=refs/heads/%s", url.PathEscape(branch))
 	}
 
 	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s"`, apiURL)
@@ -315,7 +317,7 @@ func (a *AzureDevOps) APICommand(endpoint, jqFilter string) string {
 		apiURL = endpoint
 	} else {
 		apiURL = fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/%s",
-			a.Organization, a.Project, endpoint)
+			url.PathEscape(a.Organization), url.PathEscape(a.Project), endpoint)
 	}
 
 	cmd := fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s"`, apiURL)
