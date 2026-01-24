@@ -882,8 +882,7 @@ MESSAGE="PR created: $(echo "$EVENT_JSON" | jq -r '.data.title')"
 
 - **[`EXTENSIBILITY.md`](../EXTENSIBILITY.md)** - Overview of extension points
 - **[`STATE_FILE_INTEGRATION.md`](STATE_FILE_INTEGRATION.md)** - For building monitoring tools
-- **[`examples/hooks/`](../../examples/hooks/)** - Working hook examples
-- `internal/events/events.go` - Event type definitions (canonical source)
+- Note: `examples/hooks/` and `internal/events/events.go` do not exist (hooks not implemented)
 
 ## Contributing Hook Examples
 

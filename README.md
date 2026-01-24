@@ -148,7 +148,7 @@ multiclaude stop-all --clean   # Stop and remove all state files
 
 ```bash
 multiclaude repo init <github-url>              # Initialize repository tracking
-multiclaude repo init <github-url> [path] [name] # With custom local path or name
+multiclaude repo init <github-url> [name]       # With custom name
 multiclaude repo list                           # List tracked repositories
 multiclaude repo rm <name>                      # Remove a tracked repository
 ```
@@ -199,7 +199,6 @@ tmux attach -t mc-<repo>                         # Attach to entire repo session
 
 ```bash
 multiclaude message send <to> "msg"        # Send message to another agent
-multiclaude message send --all "msg"       # Broadcast to all agents
 multiclaude message list                   # List incoming messages
 multiclaude message read <id>              # Read a specific message
 multiclaude message ack <id>               # Acknowledge a message

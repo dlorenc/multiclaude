@@ -84,6 +84,8 @@ multiclaude_dir=$(multiclaude config --paths | jq -r .state_file)
 - `worker`: Executes specific tasks
 - `workspace`: Interactive workspace agent
 - `review`: Reviews a specific PR
+- `pr-shepherd`: Monitors PRs in fork mode
+- `generic-persistent`: Custom persistent agents
 
 ### TaskHistoryEntry Object
 

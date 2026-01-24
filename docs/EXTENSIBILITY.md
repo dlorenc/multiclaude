@@ -378,12 +378,14 @@ paths := config.NewTestPaths(t.TempDir())
 
 ## Examples
 
-Complete working examples are provided in the repository:
+Public package examples are provided in the repository:
 
-- **`cmd/multiclaude-web/`** - Full web dashboard implementation
-- **`examples/hooks/slack-notify.sh`** - Slack notification hook
-- **`internal/dashboard/`** - State reader and API handler patterns
-- **`pkg/*/README.md`** - Public package usage examples
+- **`pkg/*/README.md`** - Public package usage examples (tmux, claude, config)
+
+Note: The following do not exist per ROADMAP.md (out of scope for upstream):
+- `cmd/multiclaude-web/` (web UI)
+- `examples/hooks/` (event hooks)
+- `internal/dashboard/` (dashboard backend)
 
 ## Support and Community
 

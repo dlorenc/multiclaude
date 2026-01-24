@@ -29,6 +29,19 @@ It is intended to help with debugging and understanding how multiclaude organize
 │       └── <agent-name>/
 │           └── msg-<uuid>.json
 │
+├── output/             # Agent output logs
+│   └── <repo-name>/
+│       ├── supervisor.log
+│       ├── merge-queue.log
+│       └── workers/
+│           └── <worker-name>.log
+│
+├── claude-config/      # Per-agent Claude configuration
+│   └── <repo-name>/
+│       └── <agent-name>/
+│           └── commands/   # Slash command files
+│               └── *.md
+│
 └── prompts/            # Generated agent prompts
     └── <agent-name>.md
 ```
@@ -178,7 +191,7 @@ The `state.json` file contains the daemon's persistent state. It is written atom
 | `repos.<name>.github_url` | `string` | GitHub URL of the repository |
 | `repos.<name>.tmux_session` | `string` | Name of the tmux session for this repo |
 | `repos.<name>.agents` | `map[string]Agent` | Map of agent name to agent state |
-| `repos.<name>.agents.<name>.type` | `string` | Agent type: supervisor, worker, merge-queue, or workspace |
+| `repos.<name>.agents.<name>.type` | `string` | Agent type: supervisor, worker, merge-queue, workspace, review, or pr-shepherd |
 | `repos.<name>.agents.<name>.worktree_path` | `string` | Absolute path to the agent's git worktree |
 | `repos.<name>.agents.<name>.tmux_window` | `string` | Tmux window name for this agent |
 | `repos.<name>.agents.<name>.session_id` | `string` | UUID for Claude session context |

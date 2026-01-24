@@ -111,6 +111,17 @@ Review agents are spawned by merge-queue to evaluate PRs before merge. They:
 - Report summary to merge-queue for merge decision
 - Default to non-blocking suggestions unless security/correctness issues
 
+### 6. PR Shepherd (`internal/templates/agent-templates/pr-shepherd.md`)
+
+**Role**: Monitors and manages PRs in fork mode
+**Worktree**: Main repository
+**Lifecycle**: Persistent (used when working with forks)
+
+The PR Shepherd is similar to the merge-queue but designed for fork workflows where you contribute to upstream repositories. It:
+- Monitors PRs created by workers
+- Tracks PR status on the upstream repository
+- Helps coordinate rebases and conflict resolution
+
 ## Agent Communication
 
 Agents communicate via filesystem-based messaging in `~/.multiclaude/messages/<repo>/<agent>/`.
@@ -133,10 +144,9 @@ pending → delivered → read → acked
 ```bash
 # From any agent:
 multiclaude message send <target> "<message>"
-multiclaude message send --all "<broadcast>"
 multiclaude message list
-multiclaude message ack <id>
 multiclaude message read <id>
+multiclaude message ack <id>
 ```
 
 Note: The old `agent send-message`, `agent list-messages`, `agent read-message`, and `agent ack-message` commands are still available as aliases for backward compatibility.
@@ -156,7 +166,7 @@ Messages are JSON files in `~/.multiclaude/messages/<repo>/<agent>/<msg-id>.json
 }
 ```
 
-The daemon routes messages every 2 minutes via `SendKeysLiteralWithEnter()` - this atomically sends text + Enter to avoid race conditions (see `pkg/tmux/client.go:264`).
+The daemon routes messages every 2 minutes via `SendKeysLiteralWithEnter()` - this atomically sends text + Enter to avoid race conditions (see `pkg/tmux/client.go:319`).
 
 ## Agent Slash Commands
 
