@@ -3,7 +3,6 @@ package provider
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -183,9 +182,4 @@ func normalizeGitURL(url string) string {
 	url = strings.TrimRight(url, "/")
 	url = strings.TrimSuffix(url, ".git")
 	return url
-}
-
-// compileRegex compiles a regex pattern, panicking on error (for package-level patterns).
-func compileRegex(pattern string) *regexp.Regexp {
-	return regexp.MustCompile(pattern)
 }

@@ -1074,7 +1074,7 @@ func (c *CLI) initRepo(args []string) error {
 	// Validate provider-specific requirements
 	if repoInfo.Provider == provider.TypeAzureDevOps {
 		if err := provider.ValidatePAT(); err != nil {
-			return fmt.Errorf("Azure DevOps requires authentication: %w", err)
+			return fmt.Errorf("azure DevOps requires authentication: %w", err)
 		}
 	}
 
