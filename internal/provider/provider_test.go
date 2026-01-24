@@ -419,11 +419,8 @@ func TestAzureDevOpsCommands(t *testing.T) {
 		if cmd == "" {
 			t.Error("PRListCommand() should not return empty string")
 		}
-		if !contains(cmd, "curl") {
-			t.Error("PRListCommand() should use curl")
-		}
-		if !contains(cmd, "AZURE_DEVOPS_PAT") {
-			t.Error("PRListCommand() should reference AZURE_DEVOPS_PAT")
+		if !contains(cmd, "az repos pr list") {
+			t.Errorf("PRListCommand() should use az repos pr list, got: %s", cmd)
 		}
 		// Should use jq to format output similar to gh pr list
 		if !contains(cmd, "jq") {
@@ -437,7 +434,10 @@ func TestAzureDevOpsCommands(t *testing.T) {
 
 	t.Run("PRViewCommand without fields", func(t *testing.T) {
 		cmd := ado.PRViewCommand(123, "")
-		if !contains(cmd, "pullrequests/123") {
+		if !contains(cmd, "az repos pr show") {
+			t.Errorf("PRViewCommand() should use az repos pr show, got: %s", cmd)
+		}
+		if !contains(cmd, "--id 123") {
 			t.Errorf("PRViewCommand() should contain PR number, got: %s", cmd)
 		}
 		// Without fields, should not use jq
@@ -448,7 +448,10 @@ func TestAzureDevOpsCommands(t *testing.T) {
 
 	t.Run("PRViewCommand with fields", func(t *testing.T) {
 		cmd := ado.PRViewCommand(123, "title,state,author")
-		if !contains(cmd, "pullrequests/123") {
+		if !contains(cmd, "az repos pr show") {
+			t.Errorf("PRViewCommand() should use az repos pr show, got: %s", cmd)
+		}
+		if !contains(cmd, "--id 123") {
 			t.Errorf("PRViewCommand() should contain PR number, got: %s", cmd)
 		}
 		// With fields, should use jq to format output
@@ -463,9 +466,12 @@ func TestAzureDevOpsCommands(t *testing.T) {
 
 	t.Run("PRChecksCommand", func(t *testing.T) {
 		cmd := ado.PRChecksCommand(123)
-		// Should query the PR itself for merge status and reviewer info
-		if !contains(cmd, "pullrequests/123") {
-			t.Errorf("PRChecksCommand() should query the PR, got: %s", cmd)
+		// Should use az repos pr show to query the PR for merge status and reviewer info
+		if !contains(cmd, "az repos pr show") {
+			t.Errorf("PRChecksCommand() should use az repos pr show, got: %s", cmd)
+		}
+		if !contains(cmd, "--id 123") {
+			t.Errorf("PRChecksCommand() should query the PR by ID, got: %s", cmd)
 		}
 		// Should use jq to format output with merge status and reviewer votes
 		if !contains(cmd, "jq") {
@@ -484,23 +490,33 @@ func TestAzureDevOpsCommands(t *testing.T) {
 
 	t.Run("PRCommentCommand", func(t *testing.T) {
 		cmd := ado.PRCommentCommand(123, "Test comment")
+		// PRCommentCommand uses curl since az devops CLI doesn't support comments
+		if !contains(cmd, "curl") {
+			t.Errorf("PRCommentCommand() should use curl, got: %s", cmd)
+		}
 		if !contains(cmd, "threads") {
 			t.Errorf("PRCommentCommand() should use threads API, got: %s", cmd)
+		}
+		if !contains(cmd, "AZURE_DEVOPS_EXT_PAT") {
+			t.Errorf("PRCommentCommand() should reference AZURE_DEVOPS_EXT_PAT, got: %s", cmd)
 		}
 	})
 
 	t.Run("PRMergeCommand", func(t *testing.T) {
 		cmd := ado.PRMergeCommand(123)
-		if !contains(cmd, "completed") {
+		// Should use az repos pr update to complete the PR
+		if !contains(cmd, "az repos pr update") {
+			t.Errorf("PRMergeCommand() should use az repos pr update, got: %s", cmd)
+		}
+		if !contains(cmd, "--id 123") {
+			t.Errorf("PRMergeCommand() should include PR ID, got: %s", cmd)
+		}
+		if !contains(cmd, "--status completed") {
 			t.Errorf("PRMergeCommand() should set status to completed, got: %s", cmd)
 		}
-		// Should fetch lastMergeSourceCommit first to prevent race conditions
-		if !contains(cmd, "lastMergeSourceCommit") {
-			t.Errorf("PRMergeCommand() should include lastMergeSourceCommit, got: %s", cmd)
-		}
-		// Should be a two-step command (fetch then merge)
-		if !contains(cmd, "&&") {
-			t.Errorf("PRMergeCommand() should chain commands with &&, got: %s", cmd)
+		// Should use squash merge
+		if !contains(cmd, "--squash") {
+			t.Errorf("PRMergeCommand() should include --squash, got: %s", cmd)
 		}
 	})
 
@@ -518,11 +534,11 @@ func TestAzureDevOpsCommands(t *testing.T) {
 		}
 	})
 
-	t.Run("RunListCommand uses builds API", func(t *testing.T) {
+	t.Run("RunListCommand uses az pipelines", func(t *testing.T) {
 		cmd := ado.RunListCommand("", 0)
-		// Should use builds API, not pipelines API
-		if !contains(cmd, "_apis/build/builds") {
-			t.Errorf("RunListCommand() should use builds API, got: %s", cmd)
+		// Should use az pipelines runs list
+		if !contains(cmd, "az pipelines runs list") {
+			t.Errorf("RunListCommand() should use az pipelines runs list, got: %s", cmd)
 		}
 		// Should filter by repository name using jq to match GitHub's repo-scoped behavior
 		if !contains(cmd, "jq") {
@@ -535,14 +551,12 @@ func TestAzureDevOpsCommands(t *testing.T) {
 
 	t.Run("RunListCommand with branch and limit", func(t *testing.T) {
 		cmd := ado.RunListCommand("main", 5)
-		if !contains(cmd, "branchName=refs/heads/main") {
+		if !contains(cmd, `--branch "main"`) {
 			t.Errorf("RunListCommand() should include branch filter, got: %s", cmd)
 		}
-		if !contains(cmd, ".[:%d]") || !contains(cmd, ".[:5]") {
-			// Check that limit is applied in jq filter
-			if !contains(cmd, "[:5]") {
-				t.Errorf("RunListCommand() should include limit in jq filter, got: %s", cmd)
-			}
+		// Check that limit is applied in jq filter
+		if !contains(cmd, "[:5]") {
+			t.Errorf("RunListCommand() should include limit in jq filter, got: %s", cmd)
 		}
 	})
 }
@@ -654,43 +668,46 @@ func TestAzureDevOpsURLEncodingInCloneURL(t *testing.T) {
 }
 
 func TestAzureDevOpsCommandsWithSpacesInProject(t *testing.T) {
-	// Test that commands with spaces in project name have properly encoded URLs
+	// Test that commands with spaces in project name have properly quoted strings
 	ado := NewAzureDevOpsWithConfig("k2intel", "K2 Engineering", "cms-backend")
 
-	t.Run("PRListCommand URL encoding", func(t *testing.T) {
+	t.Run("PRListCommand with spaces", func(t *testing.T) {
 		cmd := ado.PRListCommand("", "")
-		if !contains(cmd, "K2%20Engineering") {
-			t.Errorf("PRListCommand() should URL-encode project name with space, got: %s", cmd)
+		// Project name should be quoted in az devops CLI commands
+		if !contains(cmd, `--project "K2 Engineering"`) {
+			t.Errorf("PRListCommand() should quote project name with space, got: %s", cmd)
 		}
 	})
 
-	t.Run("PRViewCommand URL encoding", func(t *testing.T) {
+	t.Run("PRViewCommand with spaces", func(t *testing.T) {
 		cmd := ado.PRViewCommand(123, "")
-		if !contains(cmd, "K2%20Engineering") {
-			t.Errorf("PRViewCommand() should URL-encode project name with space, got: %s", cmd)
+		// Project name should be quoted in az devops CLI commands
+		if !contains(cmd, `--project "K2 Engineering"`) {
+			t.Errorf("PRViewCommand() should quote project name with space, got: %s", cmd)
 		}
 	})
 
-	t.Run("getAPIBaseURL URL encoding", func(t *testing.T) {
-		baseURL := ado.getAPIBaseURL()
-		if !contains(baseURL, "K2%20Engineering") {
-			t.Errorf("getAPIBaseURL() should URL-encode project name with space, got: %s", baseURL)
-		}
-	})
-
-	t.Run("RunListCommand URL encoding and repo filtering", func(t *testing.T) {
+	t.Run("RunListCommand with spaces and repo filtering", func(t *testing.T) {
 		cmd := ado.RunListCommand("main", 10)
-		// URL should be encoded
-		if !contains(cmd, "K2%20Engineering") {
-			t.Errorf("RunListCommand() should URL-encode project name with space, got: %s", cmd)
+		// Project name should be quoted in az devops CLI commands
+		if !contains(cmd, `--project "K2 Engineering"`) {
+			t.Errorf("RunListCommand() should quote project name with space, got: %s", cmd)
 		}
 		// Should filter by repository name (cms-backend)
 		if !contains(cmd, "cms-backend") {
 			t.Errorf("RunListCommand() should filter by repository name, got: %s", cmd)
 		}
-		// Should use builds API
-		if !contains(cmd, "_apis/build/builds") {
-			t.Errorf("RunListCommand() should use builds API, got: %s", cmd)
+		// Should use az pipelines runs list
+		if !contains(cmd, "az pipelines runs list") {
+			t.Errorf("RunListCommand() should use az pipelines runs list, got: %s", cmd)
+		}
+	})
+
+	t.Run("PRCommentCommand URL encoding", func(t *testing.T) {
+		// PRCommentCommand still uses curl, so it needs URL encoding
+		cmd := ado.PRCommentCommand(123, "Test comment")
+		if !contains(cmd, "K2%20Engineering") {
+			t.Errorf("PRCommentCommand() should URL-encode project name with space, got: %s", cmd)
 		}
 	})
 }
