@@ -447,6 +447,34 @@ func TestAzureDevOpsCommands(t *testing.T) {
 			t.Errorf("PRMergeCommand() should set status to completed, got: %s", cmd)
 		}
 	})
+
+	t.Run("RunListCommand uses builds API", func(t *testing.T) {
+		cmd := ado.RunListCommand("", 0)
+		// Should use builds API, not pipelines API
+		if !contains(cmd, "_apis/build/builds") {
+			t.Errorf("RunListCommand() should use builds API, got: %s", cmd)
+		}
+		// Should filter by repository name using jq to match GitHub's repo-scoped behavior
+		if !contains(cmd, "jq") {
+			t.Errorf("RunListCommand() should use jq for filtering, got: %s", cmd)
+		}
+		if !contains(cmd, "myrepo") {
+			t.Errorf("RunListCommand() should filter by repository name, got: %s", cmd)
+		}
+	})
+
+	t.Run("RunListCommand with branch and limit", func(t *testing.T) {
+		cmd := ado.RunListCommand("main", 5)
+		if !contains(cmd, "branchName=refs/heads/main") {
+			t.Errorf("RunListCommand() should include branch filter, got: %s", cmd)
+		}
+		if !contains(cmd, ".[:%d]") || !contains(cmd, ".[:5]") {
+			// Check that limit is applied in jq filter
+			if !contains(cmd, "[:5]") {
+				t.Errorf("RunListCommand() should include limit in jq filter, got: %s", cmd)
+			}
+		}
+	})
 }
 
 func TestGetProviderForURL(t *testing.T) {
@@ -571,6 +599,22 @@ func TestAzureDevOpsCommandsWithSpacesInProject(t *testing.T) {
 		baseURL := ado.getAPIBaseURL()
 		if !contains(baseURL, "K2%20Engineering") {
 			t.Errorf("getAPIBaseURL() should URL-encode project name with space, got: %s", baseURL)
+		}
+	})
+
+	t.Run("RunListCommand URL encoding and repo filtering", func(t *testing.T) {
+		cmd := ado.RunListCommand("main", 10)
+		// URL should be encoded
+		if !contains(cmd, "K2%20Engineering") {
+			t.Errorf("RunListCommand() should URL-encode project name with space, got: %s", cmd)
+		}
+		// Should filter by repository name (cms-backend)
+		if !contains(cmd, "cms-backend") {
+			t.Errorf("RunListCommand() should filter by repository name, got: %s", cmd)
+		}
+		// Should use builds API
+		if !contains(cmd, "_apis/build/builds") {
+			t.Errorf("RunListCommand() should use builds API, got: %s", cmd)
 		}
 	})
 }
