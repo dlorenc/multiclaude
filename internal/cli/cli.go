@@ -1084,8 +1084,19 @@ func (c *CLI) initRepo(args []string) error {
 		return errors.GitOperationFailed("clone", err)
 	}
 
-	// Detect if this is a fork
-	forkInfo, err := fork.DetectFork(repoPath)
+	// Detect if this is a fork using provider-aware detection
+	var forkInfo *fork.ForkInfo
+	prov, provErr := provider.GetProvider(repoInfo.Provider)
+	if provErr == nil {
+		// Use provider-specific configuration for ADO
+		if repoInfo.Provider == provider.TypeAzureDevOps {
+			prov = provider.NewAzureDevOpsWithConfig(repoInfo.Owner, repoInfo.Project, repoInfo.Repo)
+		}
+		forkInfo, err = fork.DetectForkWithProvider(repoPath, prov)
+	} else {
+		// Fallback to basic detection
+		forkInfo, err = fork.DetectFork(repoPath)
+	}
 	if err != nil {
 		fmt.Printf("Warning: Failed to detect fork status: %v\n", err)
 		forkInfo = &fork.ForkInfo{IsFork: false}
@@ -5515,9 +5526,10 @@ func (c *CLI) deleteBranch(repoPath, branch string) error {
 	return cmd.Run()
 }
 
-// extractOwnerFromGitHubURL extracts the owner from a repository's origin URL.
+// extractOwnerFromRepoURL extracts the owner from a repository's origin URL.
 // It first tries to get the origin URL from git remote, then parses it.
-func (c *CLI) extractOwnerFromGitHubURL(repoPath string) string {
+// Works with both GitHub and Azure DevOps URLs.
+func (c *CLI) extractOwnerFromRepoURL(repoPath string) string {
 	cmd := exec.Command("git", "remote", "get-url", "origin")
 	cmd.Dir = repoPath
 	output, err := cmd.Output()
@@ -5526,9 +5538,16 @@ func (c *CLI) extractOwnerFromGitHubURL(repoPath string) string {
 	}
 
 	originURL := strings.TrimSpace(string(output))
-	owner, _, err := fork.ParseGitHubURL(originURL)
+	// Use provider-aware URL parsing
+	repoInfo, err := provider.ParseURL(originURL)
 	if err != nil {
 		return ""
 	}
-	return owner
+	return repoInfo.Owner
+}
+
+// extractOwnerFromGitHubURL is deprecated, use extractOwnerFromRepoURL instead.
+// Kept for backwards compatibility.
+func (c *CLI) extractOwnerFromGitHubURL(repoPath string) string {
+	return c.extractOwnerFromRepoURL(repoPath)
 }
