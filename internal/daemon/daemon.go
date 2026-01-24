@@ -867,6 +867,14 @@ func (d *Daemon) handleAddAgent(req socket.Request) socket.Response {
 		return errResp
 	}
 
+	// Check if repo is paused
+	if d.state.IsPaused(repoName) {
+		return socket.Response{
+			Success: false,
+			Error:   fmt.Sprintf("repository %q is paused; resume it with 'multiclaude repo resume %s' or use --resume flag", repoName, repoName),
+		}
+	}
+
 	agentName, errResp, ok := getRequiredStringArg(req.Args, "agent", "agent name is required")
 	if !ok {
 		return errResp
@@ -1581,6 +1589,14 @@ func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
 	repoName, errResp, ok := getRequiredStringArg(req.Args, "repo", "repository name is required")
 	if !ok {
 		return errResp
+	}
+
+	// Check if repo is paused
+	if d.state.IsPaused(repoName) {
+		return socket.Response{
+			Success: false,
+			Error:   fmt.Sprintf("repository %q is paused; resume it with 'multiclaude repo resume %s' or use --resume flag", repoName, repoName),
+		}
 	}
 
 	agentName, errResp, ok := getRequiredStringArg(req.Args, "name", "agent name is required")
