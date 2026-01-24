@@ -40,8 +40,8 @@ func TestGetDefaultPrompt(t *testing.T) {
 func TestGetDefaultPromptContent(t *testing.T) {
 	// Verify supervisor prompt (hardcoded - has embedded content)
 	supervisorPrompt := GetDefaultPrompt(state.AgentTypeSupervisor)
-	if !strings.Contains(supervisorPrompt, "supervisor agent") {
-		t.Error("supervisor prompt should mention 'supervisor agent'")
+	if !strings.Contains(supervisorPrompt, "You are the supervisor") {
+		t.Error("supervisor prompt should mention 'You are the supervisor'")
 	}
 	if !strings.Contains(supervisorPrompt, "multiclaude message send") {
 		t.Error("supervisor prompt should mention message commands")
@@ -49,13 +49,13 @@ func TestGetDefaultPromptContent(t *testing.T) {
 
 	// Verify workspace prompt (hardcoded - has embedded content)
 	workspacePrompt := GetDefaultPrompt(state.AgentTypeWorkspace)
-	if !strings.Contains(workspacePrompt, "user workspace") {
-		t.Error("workspace prompt should mention 'user workspace'")
+	if !strings.Contains(workspacePrompt, "user's workspace") {
+		t.Error("workspace prompt should mention 'user's workspace'")
 	}
 	if !strings.Contains(workspacePrompt, "multiclaude message send") {
 		t.Error("workspace prompt should document inter-agent messaging capabilities")
 	}
-	if !strings.Contains(workspacePrompt, "Spawn and manage worker agents") {
+	if !strings.Contains(workspacePrompt, "Spawning Workers") {
 		t.Error("workspace prompt should document worker spawning capabilities")
 	}
 
@@ -246,7 +246,7 @@ func TestGetPrompt(t *testing.T) {
 		if prompt == "" {
 			t.Error("expected non-empty prompt")
 		}
-		if !strings.Contains(prompt, "supervisor agent") {
+		if !strings.Contains(prompt, "You are the supervisor") {
 			t.Error("prompt should contain default supervisor text")
 		}
 	})
@@ -269,7 +269,7 @@ func TestGetPrompt(t *testing.T) {
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
-		if !strings.Contains(prompt, "supervisor agent") {
+		if !strings.Contains(prompt, "You are the supervisor") {
 			t.Error("prompt should contain default supervisor text")
 		}
 		if !strings.Contains(prompt, "Use emojis") {
@@ -286,7 +286,7 @@ func TestGetPrompt(t *testing.T) {
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
-		if !strings.Contains(prompt, "supervisor agent") {
+		if !strings.Contains(prompt, "You are the supervisor") {
 			t.Error("prompt should contain default supervisor text")
 		}
 		if !strings.Contains(prompt, "CLI Documentation") {
