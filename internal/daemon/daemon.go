@@ -1811,6 +1811,12 @@ func (d *Daemon) restoreTrackedRepos() {
 
 	repos := d.state.GetAllRepos()
 	for repoName, repo := range repos {
+		// Skip paused repos - don't restore their agents
+		if repo.Paused {
+			d.logger.Info("Skipping paused repo %s during restoration", repoName)
+			continue
+		}
+
 		// Check if tmux session exists
 		hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession)
 		if err != nil {
