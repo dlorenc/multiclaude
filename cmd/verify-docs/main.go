@@ -171,8 +171,8 @@ func verifyFilePaths() Verification {
 		"docs/extending/SOCKET_API.md",
 	}
 
-	// Use raw string literal for regex to avoid double escaping hell
-	filePattern := regexp.MustCompile(`((?:internal|pkg|cmd)/[^` + "`" + `]+\.go)`)
+	// Use double-quoted string with explicit escapes for safety
+	filePattern := regexp.MustCompile("((?:internal|pkg|cmd)/[^`]+\\.go)")
 
 	missing := []string{}
 
@@ -358,10 +358,10 @@ func parseSocketCommandsFromDocs() ([]string, error) {
 
 // parseListFromComment extracts a newline-delimited list from an HTML comment label.
 func parseListFromComment(content, label string) []string {
-	// Use fmt.Sprintf to construct regex, escaping label but using raw strings for regex syntax
+	// Use fmt.Sprintf with double-quoted strings and explicit escapes
 	// (?s) dot matches newline
-	// <!-- 	* label : 	* (.*?) -->
-	pattern := fmt.Sprintf(`(?s)<!--\s*%s:\s*(.*?)-->`, regexp.QuoteMeta(label))
+	// <!-- \s* label : \s* (.*?) -->
+	pattern := fmt.Sprintf("(?s)<!--\\s*%s:\\s*(.*?)-->", regexp.QuoteMeta(label))
 	re := regexp.MustCompile(pattern)
 	matches := re.FindStringSubmatch(content)
 	if len(matches) < 2 {
