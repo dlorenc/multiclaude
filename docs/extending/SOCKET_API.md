@@ -1140,7 +1140,7 @@ client.setTimeout(60000);
 - **[`EXTENSIBILITY.md`](../EXTENSIBILITY.md)** - Overview of extension points
 - **[`STATE_FILE_INTEGRATION.md`](STATE_FILE_INTEGRATION.md)** - For read-only monitoring
 - `internal/socket/socket.go` - Socket implementation
-- `internal/daemon/daemon.go` - Request handlers (lines 607-685)
+- `internal/daemon/daemon.go` - Request handlers (lines 574-653)
 
 ## Contributing
 
