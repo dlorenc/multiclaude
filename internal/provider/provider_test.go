@@ -425,12 +425,60 @@ func TestAzureDevOpsCommands(t *testing.T) {
 		if !contains(cmd, "AZURE_DEVOPS_PAT") {
 			t.Error("PRListCommand() should reference AZURE_DEVOPS_PAT")
 		}
+		// Should use jq to format output similar to gh pr list
+		if !contains(cmd, "jq") {
+			t.Error("PRListCommand() should use jq for formatting")
+		}
+		// Should include GitHub-compatible field names
+		if !contains(cmd, "number") || !contains(cmd, "title") || !contains(cmd, "branch") {
+			t.Errorf("PRListCommand() should include number, title, branch fields, got: %s", cmd)
+		}
 	})
 
-	t.Run("PRViewCommand", func(t *testing.T) {
+	t.Run("PRViewCommand without fields", func(t *testing.T) {
 		cmd := ado.PRViewCommand(123, "")
 		if !contains(cmd, "pullrequests/123") {
 			t.Errorf("PRViewCommand() should contain PR number, got: %s", cmd)
+		}
+		// Without fields, should not use jq
+		if contains(cmd, "jq") {
+			t.Errorf("PRViewCommand() without fields should not use jq, got: %s", cmd)
+		}
+	})
+
+	t.Run("PRViewCommand with fields", func(t *testing.T) {
+		cmd := ado.PRViewCommand(123, "title,state,author")
+		if !contains(cmd, "pullrequests/123") {
+			t.Errorf("PRViewCommand() should contain PR number, got: %s", cmd)
+		}
+		// With fields, should use jq to format output
+		if !contains(cmd, "jq") {
+			t.Errorf("PRViewCommand() with fields should use jq, got: %s", cmd)
+		}
+		// Should include GitHub-compatible field names
+		if !contains(cmd, "reviewDecision") {
+			t.Errorf("PRViewCommand() should include reviewDecision field, got: %s", cmd)
+		}
+	})
+
+	t.Run("PRChecksCommand", func(t *testing.T) {
+		cmd := ado.PRChecksCommand(123)
+		// Should query the PR itself for merge status and reviewer info
+		if !contains(cmd, "pullrequests/123") {
+			t.Errorf("PRChecksCommand() should query the PR, got: %s", cmd)
+		}
+		// Should use jq to format output with merge status and reviewer votes
+		if !contains(cmd, "jq") {
+			t.Errorf("PRChecksCommand() should use jq for formatting, got: %s", cmd)
+		}
+		if !contains(cmd, "mergeStatus") {
+			t.Errorf("PRChecksCommand() should include mergeStatus, got: %s", cmd)
+		}
+		if !contains(cmd, "canMerge") {
+			t.Errorf("PRChecksCommand() should include canMerge, got: %s", cmd)
+		}
+		if !contains(cmd, "reviewers") {
+			t.Errorf("PRChecksCommand() should include reviewers, got: %s", cmd)
 		}
 	})
 
@@ -445,6 +493,28 @@ func TestAzureDevOpsCommands(t *testing.T) {
 		cmd := ado.PRMergeCommand(123)
 		if !contains(cmd, "completed") {
 			t.Errorf("PRMergeCommand() should set status to completed, got: %s", cmd)
+		}
+		// Should fetch lastMergeSourceCommit first to prevent race conditions
+		if !contains(cmd, "lastMergeSourceCommit") {
+			t.Errorf("PRMergeCommand() should include lastMergeSourceCommit, got: %s", cmd)
+		}
+		// Should be a two-step command (fetch then merge)
+		if !contains(cmd, "&&") {
+			t.Errorf("PRMergeCommand() should chain commands with &&, got: %s", cmd)
+		}
+	})
+
+	t.Run("PRCreateCommand", func(t *testing.T) {
+		cmd := ado.PRCreateCommand("", "feature-branch")
+		if !contains(cmd, "feature-branch") {
+			t.Errorf("PRCreateCommand() should include branch name, got: %s", cmd)
+		}
+		// Should use environment variable placeholders for flexibility
+		if !contains(cmd, "PR_TITLE") {
+			t.Errorf("PRCreateCommand() should use PR_TITLE placeholder, got: %s", cmd)
+		}
+		if !contains(cmd, "PR_BODY") {
+			t.Errorf("PRCreateCommand() should use PR_BODY placeholder, got: %s", cmd)
 		}
 	})
 
