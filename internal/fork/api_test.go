@@ -41,11 +41,11 @@ func TestDetectForkViaGitHubAPI_InvalidInput(t *testing.T) {
 // TestDetectForkResultParsing tests the JSON parsing of fork detection results
 func TestDetectForkResultParsing(t *testing.T) {
 	tests := []struct {
-		name         string
-		jsonInput    string
-		wantIsFork   bool
-		wantParent   string
-		wantErr      bool
+		name       string
+		jsonInput  string
+		wantIsFork bool
+		wantParent string
+		wantErr    bool
 	}{
 		{
 			name:       "not a fork",
@@ -102,12 +102,12 @@ func TestDetectForkResultParsing(t *testing.T) {
 // TestForkInfoConstruction tests ForkInfo struct initialization
 func TestForkInfoConstruction(t *testing.T) {
 	tests := []struct {
-		name           string
-		isFork         bool
-		parentOwner    string
-		parentRepo     string
-		parentURL      string
-		wantUpstream   string
+		name         string
+		isFork       bool
+		parentOwner  string
+		parentRepo   string
+		parentURL    string
+		wantUpstream string
 	}{
 		{
 			name:         "non-fork repo",
