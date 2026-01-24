@@ -612,10 +612,10 @@ func TestAzureDevOpsURLEncodingInCloneURL(t *testing.T) {
 		wantCloneURL string
 	}{
 		{
-			name:         "SSH with URL-encoded space",
+			name:         "SSH with URL-encoded space preserves SSH format",
 			url:          "git@ssh.dev.azure.com:v3/k2intel/K2%20Engineering/cms-backend",
 			wantProject:  "K2 Engineering",
-			wantCloneURL: "https://dev.azure.com/k2intel/K2%20Engineering/_git/cms-backend",
+			wantCloneURL: "git@ssh.dev.azure.com:v3/k2intel/K2%20Engineering/cms-backend",
 		},
 		{
 			name:         "HTTPS with URL-encoded space",
@@ -628,6 +628,12 @@ func TestAzureDevOpsURLEncodingInCloneURL(t *testing.T) {
 			url:          "https://dev.azure.com/myorg/MyProject/_git/myrepo",
 			wantProject:  "MyProject",
 			wantCloneURL: "https://dev.azure.com/myorg/MyProject/_git/myrepo",
+		},
+		{
+			name:         "SSH without encoding preserves SSH format",
+			url:          "git@ssh.dev.azure.com:v3/myorg/myproject/myrepo",
+			wantProject:  "myproject",
+			wantCloneURL: "git@ssh.dev.azure.com:v3/myorg/myproject/myrepo",
 		},
 	}
 
