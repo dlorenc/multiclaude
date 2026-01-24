@@ -463,6 +463,41 @@ func TestIsBehindMain_UpToDate(t *testing.T) {
 	}
 }
 
+func TestIsBehindMain_ActuallyBehind(t *testing.T) {
+	repoPath, cleanup := createTestRepoWithRemote(t)
+	defer cleanup()
+
+	manager := NewManager(repoPath)
+
+	// Create a worktree on a feature branch
+	wtPath := filepath.Join(repoPath, "wt-actually-behind")
+	if err := manager.CreateNewBranch(wtPath, "feature-branch", "main"); err != nil {
+		t.Fatalf("Failed to create worktree: %v", err)
+	}
+
+	// Add a commit to the remote (simulating other work being merged)
+	addCommitToRemote(t, repoPath, "remote-change")
+
+	// Fetch from remote to update refs
+	cmd := exec.Command("git", "fetch", "origin")
+	cmd.Dir = wtPath
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to fetch: %v", err)
+	}
+
+	// Now the worktree should be behind main
+	behind, count, err := IsBehindMain(wtPath, "origin", "main")
+	if err != nil {
+		t.Fatalf("IsBehindMain() failed: %v", err)
+	}
+	if !behind {
+		t.Error("Should be behind after remote commit")
+	}
+	if count != 1 {
+		t.Errorf("Expected 1 commit behind, got %d", count)
+	}
+}
+
 func TestRefreshWorktreeWithDefaults_NoRemote(t *testing.T) {
 	repoPath, cleanup := createTestRepo(t)
 	defer cleanup()
