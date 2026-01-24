@@ -189,7 +189,7 @@ cli := cli.NewWithPaths(paths)
 
 ## Agent System
 
-See `AGENTS.md` for detailed agent documentation including:
+See `docs/AGENTS.md` for detailed agent documentation including:
 - Agent types and their roles
 - Message routing implementation
 - Prompt system and customization
