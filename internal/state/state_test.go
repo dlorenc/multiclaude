@@ -2177,3 +2177,146 @@ func TestGetTaskHistoryNoLimit(t *testing.T) {
 		t.Errorf("GetTaskHistory() with limit=0 returned %d entries, want 5", len(history))
 	}
 }
+
+func TestPauseRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Test pausing non-existent repo
+	err := s.PauseRepo("nonexistent")
+	if err == nil {
+		t.Error("PauseRepo() should fail for nonexistent repo")
+	}
+
+	// Add a repo
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]Agent),
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Verify not paused initially
+	if s.IsPaused("test-repo") {
+		t.Error("Repository should not be paused initially")
+	}
+
+	// Pause the repo
+	if err := s.PauseRepo("test-repo"); err != nil {
+		t.Fatalf("PauseRepo() failed: %v", err)
+	}
+
+	// Verify paused
+	if !s.IsPaused("test-repo") {
+		t.Error("Repository should be paused after PauseRepo()")
+	}
+
+	// Verify persistence
+	loaded, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if !loaded.IsPaused("test-repo") {
+		t.Error("Paused state not persisted correctly")
+	}
+}
+
+func TestResumeRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Test resuming non-existent repo
+	err := s.ResumeRepo("nonexistent")
+	if err == nil {
+		t.Error("ResumeRepo() should fail for nonexistent repo")
+	}
+
+	// Add a paused repo
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]Agent),
+		Paused:      true,
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Verify paused initially
+	if !s.IsPaused("test-repo") {
+		t.Error("Repository should be paused initially")
+	}
+
+	// Resume the repo
+	if err := s.ResumeRepo("test-repo"); err != nil {
+		t.Fatalf("ResumeRepo() failed: %v", err)
+	}
+
+	// Verify not paused
+	if s.IsPaused("test-repo") {
+		t.Error("Repository should not be paused after ResumeRepo()")
+	}
+
+	// Verify persistence
+	loaded, err := Load(statePath)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if loaded.IsPaused("test-repo") {
+		t.Error("Resumed state not persisted correctly")
+	}
+}
+
+func TestIsPausedNonExistentRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Non-existent repo should return false (safe default)
+	if s.IsPaused("nonexistent") {
+		t.Error("IsPaused() should return false for nonexistent repo")
+	}
+}
+
+func TestGetAllReposCopiesPaused(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	s := New(statePath)
+
+	// Add a paused repo
+	repo := &Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-test",
+		Agents:      make(map[string]Agent),
+		Paused:      true,
+	}
+	if err := s.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("AddRepo() failed: %v", err)
+	}
+
+	// Get all repos
+	repos := s.GetAllRepos()
+
+	// Verify paused was copied
+	copiedRepo := repos["test-repo"]
+	if !copiedRepo.Paused {
+		t.Error("GetAllRepos() did not copy Paused field")
+	}
+
+	// Modify the copy and verify original is unchanged
+	copiedRepo.Paused = false
+
+	if !s.IsPaused("test-repo") {
+		t.Error("GetAllRepos() did not deep copy - modifying snapshot affected original")
+	}
+}

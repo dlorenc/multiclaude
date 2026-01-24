@@ -150,6 +150,7 @@ type Repository struct {
 	PRShepherdConfig PRShepherdConfig   `json:"pr_shepherd_config,omitempty"`
 	ForkConfig       ForkConfig         `json:"fork_config,omitempty"`
 	TargetBranch     string             `json:"target_branch,omitempty"` // Default branch for PRs (usually "main")
+	Paused           bool               `json:"paused,omitempty"`        // Whether the repo is paused (no agent polling)
 }
 
 // State represents the entire daemon state
@@ -353,6 +354,7 @@ func (s *State) GetAllRepos() map[string]*Repository {
 			PRShepherdConfig: repo.PRShepherdConfig,
 			ForkConfig:       repo.ForkConfig,
 			TargetBranch:     repo.TargetBranch,
+			Paused:           repo.Paused,
 		}
 		// Copy agents
 		for agentName, agent := range repo.Agents {
@@ -678,4 +680,45 @@ func (s *State) saveUnlocked() error {
 	}
 
 	return atomicWrite(s.path, data)
+}
+
+// PauseRepo pauses a repository, stopping agent polling
+func (s *State) PauseRepo(repoName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return fmt.Errorf("repository %q not found", repoName)
+	}
+
+	repo.Paused = true
+	return s.saveUnlocked()
+}
+
+// ResumeRepo resumes a paused repository
+func (s *State) ResumeRepo(repoName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return fmt.Errorf("repository %q not found", repoName)
+	}
+
+	repo.Paused = false
+	return s.saveUnlocked()
+}
+
+// IsPaused returns whether a repository is paused
+func (s *State) IsPaused(repoName string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	repo, exists := s.Repos[repoName]
+	if !exists {
+		return false
+	}
+
+	return repo.Paused
 }

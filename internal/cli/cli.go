@@ -426,6 +426,20 @@ func (c *CLI) registerCommands() {
 		Run:         c.showHistory,
 	}
 
+	repoCmd.Subcommands["pause"] = &Command{
+		Name:        "pause",
+		Description: "Pause a repository (stop agent polling)",
+		Usage:       "multiclaude repo pause [<name>]",
+		Run:         c.pauseRepo,
+	}
+
+	repoCmd.Subcommands["resume"] = &Command{
+		Name:        "resume",
+		Description: "Resume a paused repository",
+		Usage:       "multiclaude repo resume [<name>]",
+		Run:         c.resumeRepo,
+	}
+
 	c.rootCmd.Subcommands["repo"] = repoCmd
 
 	// Backward compatibility aliases for root-level repo commands
@@ -1510,9 +1524,14 @@ func (c *CLI) listRepos(args []string) error {
 				agentStr = fmt.Sprintf("%d (%d workers)", totalAgents, workerCount)
 			}
 
+			// Get paused status
+			paused, _ := repoMap["paused"].(bool)
+
 			// Format status
 			var statusCell format.ColoredCell
-			if sessionHealthy {
+			if paused {
+				statusCell = format.ColorCell("⏸ paused", format.Yellow)
+			} else if sessionHealthy {
 				statusCell = format.ColorCell(format.ColoredStatus(format.StatusHealthy), nil)
 			} else {
 				statusCell = format.ColorCell(format.ColoredStatus(format.StatusError), nil)
@@ -1720,6 +1739,56 @@ func (c *CLI) clearCurrentRepo(args []string) error {
 	}
 
 	fmt.Println("Current repository cleared")
+	return nil
+}
+
+func (c *CLI) pauseRepo(args []string) error {
+	var repoName string
+	var err error
+
+	if len(args) >= 1 {
+		repoName = args[0]
+	} else {
+		// Try to resolve from context
+		repoName, err = c.resolveRepo(nil)
+		if err != nil {
+			return errors.InvalidUsage("usage: multiclaude repo pause [<name>]\n\nProvide a repo name or run from within a multiclaude worktree")
+		}
+	}
+
+	_, err = c.sendDaemonRequest("pause_repo", map[string]interface{}{
+		"name": repoName,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Repository %s paused (agents will stop polling)\n", repoName)
+	return nil
+}
+
+func (c *CLI) resumeRepo(args []string) error {
+	var repoName string
+	var err error
+
+	if len(args) >= 1 {
+		repoName = args[0]
+	} else {
+		// Try to resolve from context
+		repoName, err = c.resolveRepo(nil)
+		if err != nil {
+			return errors.InvalidUsage("usage: multiclaude repo resume [<name>]\n\nProvide a repo name or run from within a multiclaude worktree")
+		}
+	}
+
+	_, err = c.sendDaemonRequest("resume_repo", map[string]interface{}{
+		"name": repoName,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Repository %s resumed (agents will resume polling)\n", repoName)
 	return nil
 }
 

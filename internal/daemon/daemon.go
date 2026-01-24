@@ -250,6 +250,12 @@ func (d *Daemon) checkAgentHealth() {
 	// Get a snapshot of repos to avoid concurrent map access
 	repos := d.state.GetAllRepos()
 	for repoName, repo := range repos {
+		// Skip paused repos
+		if repo.Paused {
+			d.logger.Debug("Skipping health check for paused repo %s", repoName)
+			continue
+		}
+
 		// Check if tmux session exists
 		hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession)
 		if err != nil {
@@ -340,6 +346,12 @@ func (d *Daemon) routeMessages() {
 
 	// Check each repository
 	for repoName, repo := range repos {
+		// Skip paused repos
+		if repo.Paused {
+			d.logger.Debug("Skipping message routing for paused repo %s", repoName)
+			continue
+		}
+
 		// Check each agent for messages
 		for agentName, agent := range repo.Agents {
 			// Skip workspace agent - it should only receive direct user input
@@ -402,6 +414,12 @@ func (d *Daemon) wakeAgents() {
 	// Get a snapshot of repos to avoid concurrent map access
 	repos := d.state.GetAllRepos()
 	for repoName, repo := range repos {
+		// Skip paused repos
+		if repo.Paused {
+			d.logger.Debug("Skipping wake for paused repo %s", repoName)
+			continue
+		}
+
 		for agentName, agent := range repo.Agents {
 			// Skip workspace agent - it should only receive direct user input
 			if agent.Type == state.AgentTypeWorkspace {
@@ -644,6 +662,12 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	case "spawn_agent":
 		return d.handleSpawnAgent(req)
 
+	case "pause_repo":
+		return d.handlePauseRepo(req)
+
+	case "resume_repo":
+		return d.handleResumeRepo(req)
+
 	default:
 		return socket.Response{
 			Success: false,
@@ -723,6 +747,7 @@ func (d *Daemon) handleListRepos(req socket.Request) socket.Response {
 			"upstream_owner":     repo.ForkConfig.UpstreamOwner,
 			"upstream_repo":      repo.ForkConfig.UpstreamRepo,
 			"pr_management_mode": prManagementMode,
+			"paused":             repo.Paused,
 		})
 	}
 
@@ -1381,6 +1406,36 @@ func (d *Daemon) handleClearCurrentRepo(req socket.Request) socket.Response {
 
 	d.logger.Info("Cleared current repository")
 	return socket.Response{Success: true}
+}
+
+// handlePauseRepo pauses a repository (stops agent polling)
+func (d *Daemon) handlePauseRepo(req socket.Request) socket.Response {
+	name, errResp, ok := getRequiredStringArg(req.Args, "name", "repository name is required")
+	if !ok {
+		return errResp
+	}
+
+	if err := d.state.PauseRepo(name); err != nil {
+		return socket.Response{Success: false, Error: err.Error()}
+	}
+
+	d.logger.Info("Paused repository: %s", name)
+	return socket.Response{Success: true, Data: name}
+}
+
+// handleResumeRepo resumes a paused repository
+func (d *Daemon) handleResumeRepo(req socket.Request) socket.Response {
+	name, errResp, ok := getRequiredStringArg(req.Args, "name", "repository name is required")
+	if !ok {
+		return errResp
+	}
+
+	if err := d.state.ResumeRepo(name); err != nil {
+		return socket.Response{Success: false, Error: err.Error()}
+	}
+
+	d.logger.Info("Resumed repository: %s", name)
+	return socket.Response{Success: true, Data: name}
 }
 
 // cleanupDeadAgents removes dead agents from state
