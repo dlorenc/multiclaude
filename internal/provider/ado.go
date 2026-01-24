@@ -297,17 +297,26 @@ func (a *AzureDevOps) PRMergeCommand(prNumber int) string {
 		apiURL)
 }
 
-// RunListCommand returns the curl command to list pipeline runs in Azure DevOps.
+// RunListCommand returns the curl command to list CI builds in Azure DevOps.
+// Unlike the project-scoped pipelines API, this filters to the specific repository
+// to match GitHub's behavior where `gh run list` shows only the current repo's runs.
 func (a *AzureDevOps) RunListCommand(branch string, limit int) string {
-	// Azure DevOps uses pipelines API for CI runs
-	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/pipelines/runs?api-version=7.0",
+	// Use builds API which supports repository filtering
+	apiURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/build/builds?api-version=7.0",
 		url.PathEscape(a.Organization), url.PathEscape(a.Project))
 
 	if branch != "" {
 		apiURL += fmt.Sprintf("&branchName=refs/heads/%s", url.PathEscape(branch))
 	}
 
-	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s"`, apiURL)
+	// Filter by repository name using jq to match GitHub's repo-scoped behavior
+	// The builds API returns all builds in the project, so we filter client-side
+	jqFilter := fmt.Sprintf(`[.value[] | select(.repository.name == "%s")]`, a.Repo)
+	if limit > 0 {
+		jqFilter += fmt.Sprintf(" | .[:%d]", limit)
+	}
+
+	return fmt.Sprintf(`curl -s -u ":$AZURE_DEVOPS_PAT" "%s" | jq '%s'`, apiURL, jqFilter)
 }
 
 // APICommand returns the curl command to call the Azure DevOps REST API.
