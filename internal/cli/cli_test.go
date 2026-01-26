@@ -2292,6 +2292,73 @@ func TestNormalizeGitHubURL(t *testing.T) {
 	}
 }
 
+func TestParseGitHubURL(t *testing.T) {
+	tests := []struct {
+		name      string
+		url       string
+		wantOwner string
+		wantRepo  string
+	}{
+		{
+			name:      "HTTPS URL",
+			url:       "https://github.com/dustinkirkland/libcensus",
+			wantOwner: "dustinkirkland",
+			wantRepo:  "libcensus",
+		},
+		{
+			name:      "HTTPS URL with .git",
+			url:       "https://github.com/dustinkirkland/libcensus.git",
+			wantOwner: "dustinkirkland",
+			wantRepo:  "libcensus",
+		},
+		{
+			name:      "SSH URL",
+			url:       "git@github.com:dustinkirkland/libcensus",
+			wantOwner: "dustinkirkland",
+			wantRepo:  "libcensus",
+		},
+		{
+			name:      "SSH URL with .git",
+			url:       "git@github.com:dustinkirkland/libcensus.git",
+			wantOwner: "dustinkirkland",
+			wantRepo:  "libcensus",
+		},
+		{
+			name:      "HTTP URL",
+			url:       "http://github.com/user/repo",
+			wantOwner: "user",
+			wantRepo:  "repo",
+		},
+		{
+			name:      "git:// protocol",
+			url:       "git://github.com/user/repo.git",
+			wantOwner: "user",
+			wantRepo:  "repo",
+		},
+		{
+			name:      "empty string",
+			url:       "",
+			wantOwner: "",
+			wantRepo:  "",
+		},
+		{
+			name:      "invalid URL",
+			url:       "not-a-url",
+			wantOwner: "",
+			wantRepo:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotOwner, gotRepo := parseGitHubURL(tt.url)
+			if gotOwner != tt.wantOwner || gotRepo != tt.wantRepo {
+				t.Errorf("parseGitHubURL(%q) = (%q, %q), want (%q, %q)", tt.url, gotOwner, gotRepo, tt.wantOwner, tt.wantRepo)
+			}
+		})
+	}
+}
+
 func TestExtractRepoNameFromURL(t *testing.T) {
 	tests := []struct {
 		name string

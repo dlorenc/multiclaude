@@ -1088,8 +1088,55 @@ func (c *CLI) initRepo(args []string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return errors.GitOperationFailed("clone", err)
+	cloneErr := cmd.Run()
+	if cloneErr != nil {
+		// Check if this is a "repository not found" error by examining stderr
+		// Run the command again to capture stderr
+		checkCmd := exec.Command("git", "clone", githubURL, repoPath)
+		checkOutput, _ := checkCmd.CombinedOutput()
+		outputStr := string(checkOutput)
+
+		// If repository doesn't exist, offer to create it
+		if strings.Contains(outputStr, "Repository not found") || strings.Contains(outputStr, "repository not found") {
+			// Extract owner and repo from URL
+			owner, repo := parseGitHubURL(githubURL)
+			if owner != "" && repo != "" {
+				fmt.Printf("\n⚠ Repository %s/%s does not exist.\n", owner, repo)
+				fmt.Print("Would you like to create it? [y/N]: ")
+
+				var response string
+				fmt.Scanln(&response)
+				response = strings.ToLower(strings.TrimSpace(response))
+
+				if response == "y" || response == "yes" {
+					// Create the repository using gh CLI with a README to avoid empty repo
+					fmt.Printf("Creating repository %s/%s with initial commit...\n", owner, repo)
+					createCmd := exec.Command("gh", "repo", "create", fmt.Sprintf("%s/%s", owner, repo), "--private", "--add-readme")
+					createCmd.Stdin = os.Stdin
+					createCmd.Stdout = os.Stdout
+					createCmd.Stderr = os.Stderr
+					if err := createCmd.Run(); err != nil {
+						return fmt.Errorf("failed to create repository: %w", err)
+					}
+
+					// Retry the clone
+					fmt.Println("Retrying clone...")
+					retryCmd := exec.Command("git", "clone", githubURL, repoPath)
+					retryCmd.Stdin = os.Stdin
+					retryCmd.Stdout = os.Stdout
+					retryCmd.Stderr = os.Stderr
+					if err := retryCmd.Run(); err != nil {
+						return errors.GitOperationFailed("clone", err)
+					}
+				} else {
+					return fmt.Errorf("repository does not exist and was not created")
+				}
+			} else {
+				return errors.GitOperationFailed("clone", cloneErr)
+			}
+		} else {
+			return errors.GitOperationFailed("clone", cloneErr)
+		}
 	}
 
 	// Check if repository is empty (has no commits)
@@ -3574,40 +3621,47 @@ func normalizeGitHubURL(url string) string {
 	return ""
 }
 
-// extractRepoNameFromURL extracts the repository name from a GitHub URL.
+// parseGitHubURL extracts the owner and repository name from a GitHub URL.
 // It handles both SSH (git@github.com:user/repo.git) and HTTPS (https://github.com/user/repo) formats.
-// Returns the repo name (e.g., "repo") or empty string if URL format is invalid.
-func extractRepoNameFromURL(url string) string {
+// Returns (owner, repo) or ("", "") if URL format is invalid.
+func parseGitHubURL(url string) (string, string) {
 	url = strings.TrimSpace(url)
 	url = strings.TrimRight(url, "/")
 	lowerURL := strings.ToLower(url)
 
+	var path string
+
 	// Handle SSH format: git@github.com:user/repo.git
 	if strings.HasPrefix(lowerURL, "git@github.com:") {
-		path := url[len("git@github.com:"):]
-		path = strings.TrimSuffix(path, ".git")
-		parts := strings.Split(path, "/")
-		if len(parts) >= 2 {
-			return parts[len(parts)-1]
-		}
-		return ""
-	}
-
-	// Handle HTTPS/HTTP/git:// formats
-	for _, prefix := range []string{"https://github.com/", "http://github.com/", "git://github.com/"} {
-		if strings.HasPrefix(lowerURL, prefix) {
-			path := url[len(prefix):]
-			path = strings.TrimSuffix(path, ".git")
-			parts := strings.Split(path, "/")
-			if len(parts) >= 2 {
-				return parts[len(parts)-1]
+		path = url[len("git@github.com:"):]
+	} else {
+		// Handle HTTPS/HTTP/git:// formats
+		for _, prefix := range []string{"https://github.com/", "http://github.com/", "git://github.com/"} {
+			if strings.HasPrefix(lowerURL, prefix) {
+				path = url[len(prefix):]
+				break
 			}
-			return ""
 		}
 	}
 
-	// Return empty string for unrecognized formats
-	return ""
+	if path == "" {
+		return "", ""
+	}
+
+	path = strings.TrimSuffix(path, ".git")
+	parts := strings.Split(path, "/")
+	if len(parts) >= 2 {
+		return parts[0], parts[1]
+	}
+	return "", ""
+}
+
+// extractRepoNameFromURL extracts the repository name from a GitHub URL.
+// It handles both SSH (git@github.com:user/repo.git) and HTTPS (https://github.com/user/repo) formats.
+// Returns the repo name (e.g., "repo") or empty string if URL format is invalid.
+func extractRepoNameFromURL(url string) string {
+	_, repo := parseGitHubURL(url)
+	return repo
 }
 
 // findRepoFromGitRemote looks for a git remote in the current directory
