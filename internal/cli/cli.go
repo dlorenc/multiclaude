@@ -1092,6 +1092,7 @@ func (c *CLI) initRepo(args []string) error {
 	fmt.Printf("Cloning to: %s\n", repoPath)
 
 	cmd := exec.Command("git", "clone", githubURL, repoPath)
+	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -1958,6 +1959,7 @@ func (c *CLI) createWorker(args []string) error {
 	fmt.Println("Fetching latest from origin...")
 	fetchCmd := exec.Command("git", "fetch", "origin")
 	fetchCmd.Dir = repoPath
+	fetchCmd.Stdin = os.Stdin
 	if err := fetchCmd.Run(); err != nil {
 		// Best effort - don't fail if offline or fetch fails
 		fmt.Printf("Warning: failed to fetch from origin: %v (continuing with local refs)\n", err)
@@ -3941,6 +3943,7 @@ func (c *CLI) reviewPR(args []string) error {
 	localRef := fmt.Sprintf("refs/multiclaude/pr-%s", prNumber)
 	cmd := exec.Command("git", "fetch", "origin", fmt.Sprintf("%s:%s", prRef, localRef))
 	cmd.Dir = repoPath
+	cmd.Stdin = os.Stdin
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return errors.Wrap(errors.CategoryRuntime, fmt.Sprintf("failed to fetch PR #%s: %s", prNumber, strings.TrimSpace(string(output))), err).
 			WithSuggestion("ensure the PR exists and you have access to the repository")
