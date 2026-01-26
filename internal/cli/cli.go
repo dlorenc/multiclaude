@@ -3016,7 +3016,7 @@ func (c *CLI) hibernateRepo(args []string) error {
 			"repo":              repoName,
 			"hibernated_at":     time.Now().Format(time.RFC3339),
 			"agents_hibernated": len(agentsToHibernate),
-			"agents_archived": archivedAgents,
+			"agents_archived":   archivedAgents,
 		}
 		summaryData, _ := json.MarshalIndent(summary, "", "  ")
 		os.WriteFile(summaryPath, summaryData, 0644)
@@ -3051,8 +3051,8 @@ func (c *CLI) hibernateRepo(args []string) error {
 			}
 		}
 
-		// Unregister from daemon
-		client.Send(socket.Request{
+		// Unregister from daemon (ignore errors during cleanup)
+		_, _ = client.Send(socket.Request{
 			Command: "remove_agent",
 			Args: map[string]interface{}{
 				"repo":  repoName,
