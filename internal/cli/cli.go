@@ -1036,19 +1036,12 @@ func (c *CLI) initRepo(args []string) error {
 	if len(posArgs) >= 2 {
 		repoName = posArgs[1]
 	} else {
-		// Extract repo name from URL (e.g., github.com/user/repo -> repo)
-		// A valid GitHub URL has format: https://github.com/owner/repo
-		// When split by "/": ["https:", "", "github.com", "owner", "repo"] - 5+ parts
-		parts := strings.Split(githubURL, "/")
-		if len(parts) < 5 {
+		// Extract repo name from URL
+		// Supports both SSH (git@github.com:user/repo) and HTTPS (https://github.com/user/repo) formats
+		repoName = extractRepoNameFromURL(githubURL)
+		if repoName == "" {
 			return errors.InvalidUsage("could not determine repository name from URL; please provide a name: multiclaude init <url> <name>")
 		}
-		repoName = strings.TrimSuffix(parts[len(parts)-1], ".git")
-	}
-
-	// Validate repository name before any operations
-	if repoName == "" {
-		return errors.InvalidUsage("could not determine repository name from URL; please provide a name: multiclaude init <url> <name>")
 	}
 
 	// Parse merge queue configuration flags
@@ -3568,6 +3561,42 @@ func normalizeGitHubURL(url string) string {
 	}
 
 	// Return empty string for non-GitHub URLs
+	return ""
+}
+
+// extractRepoNameFromURL extracts the repository name from a GitHub URL.
+// It handles both SSH (git@github.com:user/repo.git) and HTTPS (https://github.com/user/repo) formats.
+// Returns the repo name (e.g., "repo") or empty string if URL format is invalid.
+func extractRepoNameFromURL(url string) string {
+	url = strings.TrimSpace(url)
+	url = strings.TrimRight(url, "/")
+	lowerURL := strings.ToLower(url)
+
+	// Handle SSH format: git@github.com:user/repo.git
+	if strings.HasPrefix(lowerURL, "git@github.com:") {
+		path := url[len("git@github.com:"):]
+		path = strings.TrimSuffix(path, ".git")
+		parts := strings.Split(path, "/")
+		if len(parts) >= 2 {
+			return parts[len(parts)-1]
+		}
+		return ""
+	}
+
+	// Handle HTTPS/HTTP/git:// formats
+	for _, prefix := range []string{"https://github.com/", "http://github.com/", "git://github.com/"} {
+		if strings.HasPrefix(lowerURL, prefix) {
+			path := url[len(prefix):]
+			path = strings.TrimSuffix(path, ".git")
+			parts := strings.Split(path, "/")
+			if len(parts) >= 2 {
+				return parts[len(parts)-1]
+			}
+			return ""
+		}
+	}
+
+	// Return empty string for unrecognized formats
 	return ""
 }
 

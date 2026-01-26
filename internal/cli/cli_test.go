@@ -2141,6 +2141,16 @@ func TestInitRepoNameParsing(t *testing.T) {
 			wantError: false, // TrimRight removes all trailing slashes
 		},
 		{
+			name:      "SSH URL without .git suffix",
+			url:       "git@github.com:user/repo",
+			wantError: false,
+		},
+		{
+			name:      "SSH URL with .git suffix",
+			url:       "git@github.com:user/repo.git",
+			wantError: false,
+		},
+		{
 			name:        "URL that is just slashes",
 			url:         "///",
 			wantError:   true,
@@ -2277,6 +2287,99 @@ func TestNormalizeGitHubURL(t *testing.T) {
 			got := normalizeGitHubURL(tt.url)
 			if got != tt.want {
 				t.Errorf("normalizeGitHubURL(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractRepoNameFromURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{
+			name: "HTTPS URL",
+			url:  "https://github.com/user/repo",
+			want: "repo",
+		},
+		{
+			name: "HTTPS URL with .git",
+			url:  "https://github.com/user/repo.git",
+			want: "repo",
+		},
+		{
+			name: "SSH URL",
+			url:  "git@github.com:user/repo",
+			want: "repo",
+		},
+		{
+			name: "SSH URL with .git",
+			url:  "git@github.com:user/repo.git",
+			want: "repo",
+		},
+		{
+			name: "HTTP URL",
+			url:  "http://github.com/user/repo",
+			want: "repo",
+		},
+		{
+			name: "git:// protocol",
+			url:  "git://github.com/user/repo.git",
+			want: "repo",
+		},
+		{
+			name: "URL with trailing slash",
+			url:  "https://github.com/user/repo/",
+			want: "repo",
+		},
+		{
+			name: "organization repo",
+			url:  "https://github.com/dlorenc/multiclaude",
+			want: "multiclaude",
+		},
+		{
+			name: "organization repo SSH",
+			url:  "git@github.com:dlorenc/multiclaude.git",
+			want: "multiclaude",
+		},
+		{
+			name: "whitespace trimmed",
+			url:  "  https://github.com/user/repo  ",
+			want: "repo",
+		},
+		{
+			name: "empty string",
+			url:  "",
+			want: "",
+		},
+		{
+			name: "invalid URL",
+			url:  "not-a-url",
+			want: "",
+		},
+		{
+			name: "non-GitHub URL",
+			url:  "https://gitlab.com/user/repo",
+			want: "",
+		},
+		{
+			name: "incomplete HTTPS URL",
+			url:  "https://github.com/user",
+			want: "",
+		},
+		{
+			name: "incomplete SSH URL",
+			url:  "git@github.com:user",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractRepoNameFromURL(tt.url)
+			if got != tt.want {
+				t.Errorf("extractRepoNameFromURL(%q) = %q, want %q", tt.url, got, tt.want)
 			}
 		})
 	}
