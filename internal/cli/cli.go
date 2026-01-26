@@ -1092,6 +1092,16 @@ func (c *CLI) initRepo(args []string) error {
 		return errors.GitOperationFailed("clone", err)
 	}
 
+	// Check if repository is empty (has no commits)
+	checkHeadCmd := exec.Command("git", "rev-parse", "--verify", "HEAD")
+	checkHeadCmd.Dir = repoPath
+	if err := checkHeadCmd.Run(); err != nil {
+		return errors.Wrap(errors.CategoryUsage,
+			"cannot initialize empty repository (no commits found)",
+			err).
+			WithSuggestion("push at least one commit to the repository before initializing with multiclaude")
+	}
+
 	// Detect if this is a fork
 	forkInfo, err := fork.DetectFork(repoPath)
 	if err != nil {
