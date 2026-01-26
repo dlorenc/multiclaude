@@ -644,6 +644,9 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	case "spawn_agent":
 		return d.handleSpawnAgent(req)
 
+	case "trigger_refresh":
+		return d.handleTriggerRefresh(req)
+
 	default:
 		return socket.Response{
 			Success: false,
@@ -1144,6 +1147,19 @@ func (d *Daemon) handleTriggerCleanup(req socket.Request) socket.Response {
 	return socket.Response{
 		Success: true,
 		Data:    "Cleanup triggered",
+	}
+}
+
+// handleTriggerRefresh manually triggers worktree refresh for all agents
+func (d *Daemon) handleTriggerRefresh(req socket.Request) socket.Response {
+	d.logger.Info("Manual worktree refresh triggered")
+
+	// Run refresh in background so we can return immediately
+	go d.refreshWorktrees()
+
+	return socket.Response{
+		Success: true,
+		Data:    "Worktree refresh triggered",
 	}
 }
 

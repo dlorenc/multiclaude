@@ -625,6 +625,13 @@ func (c *CLI) registerCommands() {
 		Run:         c.repair,
 	}
 
+	c.rootCmd.Subcommands["refresh"] = &Command{
+		Name:        "refresh",
+		Description: "Sync agent worktrees with main branch",
+		Usage:       "multiclaude refresh",
+		Run:         c.refresh,
+	}
+
 	// Claude restart command - for resuming Claude after exit
 	c.rootCmd.Subcommands["claude"] = &Command{
 		Name:        "claude",
@@ -4873,6 +4880,34 @@ func (c *CLI) repair(args []string) error {
 			fmt.Printf("  Fixed %d issue(s)\n", int(fixed))
 		}
 	}
+
+	return nil
+}
+
+// refresh triggers an immediate worktree sync for all agents
+func (c *CLI) refresh(args []string) error {
+	// Connect to daemon
+	client := socket.NewClient(c.paths.DaemonSock)
+	_, err := client.Send(socket.Request{Command: "ping"})
+	if err != nil {
+		return errors.DaemonNotRunning()
+	}
+
+	fmt.Println("Triggering worktree refresh...")
+
+	resp, err := client.Send(socket.Request{
+		Command: "trigger_refresh",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to trigger refresh: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("refresh failed: %s", resp.Error)
+	}
+
+	fmt.Println("✓ Worktree refresh triggered")
+	fmt.Println("  Agent worktrees will be synced with main branch in the background.")
+	fmt.Println("  Agents will receive a notification when their worktree is refreshed.")
 
 	return nil
 }
