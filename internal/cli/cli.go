@@ -1932,10 +1932,42 @@ func (c *CLI) createWorker(args []string) error {
 		return errors.NotInRepo()
 	}
 
-	// Generate worker name (Docker-style)
-	workerName := names.Generate()
+	// Get existing agents to ensure unique naming
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "list_agents",
+		Args: map[string]interface{}{
+			"repo": repoName,
+		},
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("getting existing agents", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to get existing agents", fmt.Errorf("%s", resp.Error))
+	}
+
+	// Extract existing worker names for uniqueness check
+	var existingNames []string
+	if agents, ok := resp.Data.([]interface{}); ok {
+		for _, agent := range agents {
+			if agentMap, ok := agent.(map[string]interface{}); ok {
+				if agentName, ok := agentMap["name"].(string); ok {
+					existingNames = append(existingNames, agentName)
+				}
+			}
+		}
+	}
+
+	// Generate worker name from task description
+	var workerName string
 	if name, ok := flags["name"]; ok {
+		// Manual override via --name flag
 		workerName = name
+	} else {
+		// Generate task-based name and ensure uniqueness
+		workerName = names.FromTask(task)
+		workerName = names.EnsureUnique(workerName, existingNames)
 	}
 
 	// Check for --push-to flag (for iterating on existing PRs)
@@ -2022,8 +2054,8 @@ func (c *CLI) createWorker(args []string) error {
 	}
 
 	// Get repository info to determine tmux session
-	client := socket.NewClient(c.paths.DaemonSock)
-	resp, err := client.Send(socket.Request{
+	client = socket.NewClient(c.paths.DaemonSock)
+	resp, err = client.Send(socket.Request{
 		Command: "list_agents",
 		Args: map[string]interface{}{
 			"repo": repoName,
