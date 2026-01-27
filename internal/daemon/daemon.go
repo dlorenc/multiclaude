@@ -1240,10 +1240,10 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 	return socket.Response{
 		Success: true,
 		Data: map[string]interface{}{
-			"agents_removed":      agentsRemoved,
-			"issues_fixed":        issuesFixed,
-			"agents_created":      agentsCreated,
-			"workspaces_created":  workspacesCreated,
+			"agents_removed":     agentsRemoved,
+			"issues_fixed":       issuesFixed,
+			"agents_created":     agentsCreated,
+			"workspaces_created": workspacesCreated,
 		},
 	}
 }
