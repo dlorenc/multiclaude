@@ -130,8 +130,8 @@ func TestAgentTemplatesCopiedOnInit(t *testing.T) {
 	}
 }
 
-// TestAgentDefinitionMerging verifies that repo definitions override local definitions
-// when both exist with the same name.
+// TestAgentDefinitionMerging verifies that repo definitions are appended to local definitions
+// when both exist with the same name (preserving base template instructions).
 func TestAgentDefinitionMerging(t *testing.T) {
 	// Create temp directories
 	tmpDir, err := os.MkdirTemp("", "agent-merge-test-*")
@@ -148,8 +148,8 @@ func TestAgentDefinitionMerging(t *testing.T) {
 	os.MkdirAll(localAgentsDir, 0755)
 	os.MkdirAll(repoAgentsDir, 0755)
 
-	// Create local definition for "worker"
-	localWorkerContent := "# Worker (Local)\n\nThis is the local worker definition."
+	// Create local definition for "worker" (base template)
+	localWorkerContent := "# Worker (Local)\n\nThis is the local worker definition.\n\n## Critical Instructions\n\nRun `multiclaude agent complete` when done."
 	if err := os.WriteFile(filepath.Join(localAgentsDir, "worker.md"), []byte(localWorkerContent), 0644); err != nil {
 		t.Fatalf("Failed to write local worker: %v", err)
 	}
@@ -160,8 +160,8 @@ func TestAgentDefinitionMerging(t *testing.T) {
 		t.Fatalf("Failed to write local-only: %v", err)
 	}
 
-	// Create repo definition for "worker" (should override local)
-	repoWorkerContent := "# Worker (Repo Override)\n\nThis is the repo worker definition that overrides local."
+	// Create repo definition for "worker" (custom additions)
+	repoWorkerContent := "# Additional Team Instructions\n\nAlso follow the team coding style guide."
 	if err := os.WriteFile(filepath.Join(repoAgentsDir, "worker.md"), []byte(repoWorkerContent), 0644); err != nil {
 		t.Fatalf("Failed to write repo worker: %v", err)
 	}
@@ -190,13 +190,25 @@ func TestAgentDefinitionMerging(t *testing.T) {
 		defMap[def.Name] = def
 	}
 
-	// Test 1: "worker" should be from repo (overrides local)
+	// Test 1: "worker" should be merged (contains both local base AND repo custom content)
 	if workerDef, ok := defMap["worker"]; ok {
-		if workerDef.Source != agents.SourceRepo {
-			t.Errorf("worker definition source = %s, want repo", workerDef.Source)
+		if workerDef.Source != agents.SourceMerged {
+			t.Errorf("worker definition source = %s, want merged", workerDef.Source)
 		}
-		if !strings.Contains(workerDef.Content, "Repo Override") {
-			t.Error("worker definition should contain repo content, not local")
+		// Should contain LOCAL (base) content - critical instructions preserved
+		if !strings.Contains(workerDef.Content, "multiclaude agent complete") {
+			t.Error("merged worker should contain base template's critical instructions")
+		}
+		if !strings.Contains(workerDef.Content, "local worker definition") {
+			t.Error("merged worker should contain base template content")
+		}
+		// Should contain REPO (custom) content
+		if !strings.Contains(workerDef.Content, "team coding style guide") {
+			t.Error("merged worker should contain repo custom content")
+		}
+		// Should contain the separator
+		if !strings.Contains(workerDef.Content, "## Custom Instructions") {
+			t.Error("merged worker should contain the Custom Instructions separator")
 		}
 	} else {
 		t.Error("worker definition should exist")
@@ -580,8 +592,8 @@ func TestAgentDefinitionsSentToSupervisor(t *testing.T) {
 		if def.Content == "" {
 			t.Error("Definition content should not be empty")
 		}
-		if def.Source != agents.SourceLocal && def.Source != agents.SourceRepo {
-			t.Errorf("Definition source = %s, want local or repo", def.Source)
+		if def.Source != agents.SourceLocal && def.Source != agents.SourceRepo && def.Source != agents.SourceMerged {
+			t.Errorf("Definition source = %s, want local, repo, or merged", def.Source)
 		}
 	}
 }

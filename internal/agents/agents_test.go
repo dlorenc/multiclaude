@@ -3,6 +3,7 @@ package agents
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -165,16 +166,23 @@ func TestMergeDefinitions(t *testing.T) {
 		defMap[def.Name] = def
 	}
 
-	// Check that repo definition wins for worker
+	// Check that worker is merged (base + custom appended)
 	worker, ok := defMap["worker"]
 	if !ok {
 		t.Fatal("worker not found in merged")
 	}
-	if worker.Content != "repo worker" {
-		t.Errorf("expected repo worker content, got %s", worker.Content)
+	// Should contain both local (base) and repo (custom) content
+	if !strings.Contains(worker.Content, "local worker") {
+		t.Errorf("merged worker should contain base content, got: %s", worker.Content)
 	}
-	if worker.Source != SourceRepo {
-		t.Errorf("expected source repo, got %s", worker.Source)
+	if !strings.Contains(worker.Content, "repo worker") {
+		t.Errorf("merged worker should contain custom content, got: %s", worker.Content)
+	}
+	if !strings.Contains(worker.Content, "## Custom Instructions") {
+		t.Errorf("merged worker should contain separator, got: %s", worker.Content)
+	}
+	if worker.Source != SourceMerged {
+		t.Errorf("expected source merged, got %s", worker.Source)
 	}
 
 	// Check that local-only definition is preserved
@@ -204,6 +212,42 @@ func TestMergeDefinitions(t *testing.T) {
 		t.Errorf("expected source local, got %s", reviewer.Source)
 	}
 }
+
+func TestMergeDefinitionsContentFormat(t *testing.T) {
+	local := []Definition{
+		{Name: "worker", Content: "Base instructions\n\n## Your Job\n\nDo things.\n", Source: SourceLocal},
+	}
+
+	repo := []Definition{
+		{Name: "worker", Content: "\n\nAlso do these extra things.\n", Source: SourceRepo},
+	}
+
+	merged := MergeDefinitions(local, repo)
+
+	worker := merged[0]
+
+	// Check that content is properly merged with separator
+	// Base content should come first
+	if !strings.Contains(worker.Content, "Base instructions") {
+		t.Error("merged content should start with base content")
+	}
+	// Separator should be present
+	if !strings.Contains(worker.Content, "---\n\n## Custom Instructions") {
+		t.Error("merged content should contain separator")
+	}
+	// Custom content should come after separator
+	if !strings.Contains(worker.Content, "Also do these extra things") {
+		t.Error("merged content should contain custom content")
+	}
+	// Verify order: base comes before separator, separator comes before custom
+	baseIdx := strings.Index(worker.Content, "Base instructions")
+	sepIdx := strings.Index(worker.Content, "---\n\n## Custom Instructions")
+	customIdx := strings.Index(worker.Content, "Also do these extra things")
+	if baseIdx >= sepIdx || sepIdx >= customIdx {
+		t.Errorf("content not in expected order (base < separator < custom): base=%d, sep=%d, custom=%d", baseIdx, sepIdx, customIdx)
+	}
+}
+
 
 func TestReadAllDefinitions(t *testing.T) {
 	// Create temp directory structure
@@ -262,10 +306,19 @@ func TestReadAllDefinitions(t *testing.T) {
 		}
 	}
 
-	// Verify worker is from repo
+	// Verify worker is merged (contains both local and repo content)
 	for _, def := range defs {
-		if def.Name == "worker" && def.Source != SourceRepo {
-			t.Errorf("expected worker to be from repo, got %s", def.Source)
+		if def.Name == "worker" {
+			if def.Source != SourceMerged {
+				t.Errorf("expected worker to be merged, got %s", def.Source)
+			}
+			// Check that both contents are present
+			if !strings.Contains(def.Content, "local worker") {
+				t.Errorf("merged worker should contain local base content")
+			}
+			if !strings.Contains(def.Content, "repo worker") {
+				t.Errorf("merged worker should contain repo custom content")
+			}
 		}
 	}
 }

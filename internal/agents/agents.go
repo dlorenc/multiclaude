@@ -34,6 +34,9 @@ const (
 
 	// SourceRepo indicates the definition came from <repo>/.multiclaude/agents/
 	SourceRepo DefinitionSource = "repo"
+
+	// SourceMerged indicates the definition is a merge of local (base) and repo (custom) content
+	SourceMerged DefinitionSource = "merged"
 )
 
 // Reader reads agent definitions from the filesystem.
@@ -92,7 +95,9 @@ func (r *Reader) ReadAllDefinitions() ([]Definition, error) {
 }
 
 // MergeDefinitions merges local and repo definitions.
-// Repo definitions take precedence over local definitions on filename conflict.
+// When a repo definition has the same name as a local definition, the repo content
+// is appended to the local content (preserving critical base instructions).
+// New repo-only definitions are added as-is.
 func MergeDefinitions(local, repo []Definition) []Definition {
 	// Build a map with local definitions first
 	merged := make(map[string]Definition, len(local)+len(repo))
@@ -101,9 +106,20 @@ func MergeDefinitions(local, repo []Definition) []Definition {
 		merged[def.Name] = def
 	}
 
-	// Repo definitions overwrite local ones
-	for _, def := range repo {
-		merged[def.Name] = def
+	// For repo definitions: append to local if exists, otherwise add as new
+	for _, repoDef := range repo {
+		if localDef, exists := merged[repoDef.Name]; exists {
+			// Append repo content to local base template
+			merged[repoDef.Name] = Definition{
+				Name:       repoDef.Name,
+				Content:    mergeContent(localDef.Content, repoDef.Content),
+				SourcePath: localDef.SourcePath, // Keep local path as primary
+				Source:     SourceMerged,
+			}
+		} else {
+			// New repo-only definition, add as-is
+			merged[repoDef.Name] = repoDef
+		}
 	}
 
 	// Convert to sorted slice
@@ -117,6 +133,15 @@ func MergeDefinitions(local, repo []Definition) []Definition {
 	})
 
 	return result
+}
+
+// mergeContent appends custom content to base content with a clear separator.
+func mergeContent(base, custom string) string {
+	// Trim trailing whitespace from base and leading whitespace from custom
+	base = strings.TrimRight(base, "\n\r\t ")
+	custom = strings.TrimLeft(custom, "\n\r\t ")
+
+	return base + "\n\n---\n\n## Custom Instructions\n\n" + custom
 }
 
 // readDefinitionsFromDir reads all .md files from a directory and returns them as definitions.
