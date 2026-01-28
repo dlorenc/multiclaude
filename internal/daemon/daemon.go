@@ -1229,15 +1229,251 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 		}
 	}
 
-	d.logger.Info("State repair completed: %d agents removed, %d issues fixed", agentsRemoved, issuesFixed)
+	// Ensure core agents exist for each repository
+	agentsCreated := 0
+	workspacesCreated := 0
+	for _, repoName := range d.state.ListRepos() {
+		// Ensure core agents (supervisor, merge-queue/pr-shepherd)
+		created, err := d.ensureCoreAgents(repoName)
+		if err != nil {
+			d.logger.Warn("Failed to ensure core agents for %s: %v", repoName, err)
+		} else {
+			agentsCreated += created
+		}
+
+		// Ensure default workspace exists
+		wsCreated, err := d.ensureDefaultWorkspace(repoName)
+		if err != nil {
+			d.logger.Warn("Failed to ensure default workspace for %s: %v", repoName, err)
+		} else if wsCreated {
+			workspacesCreated++
+		}
+	}
+
+	d.logger.Info("State repair completed: %d agents removed, %d issues fixed, %d agents created, %d workspaces created",
+		agentsRemoved, issuesFixed, agentsCreated, workspacesCreated)
 
 	return socket.Response{
 		Success: true,
 		Data: map[string]interface{}{
-			"agents_removed": agentsRemoved,
-			"issues_fixed":   issuesFixed,
+			"agents_removed":     agentsRemoved,
+			"issues_fixed":       issuesFixed,
+			"agents_created":     agentsCreated,
+			"workspaces_created": workspacesCreated,
 		},
 	}
+}
+
+// ensureCoreAgents ensures that all core agents (supervisor, merge-queue/pr-shepherd) exist
+// for a repository. Returns the count of agents created.
+func (d *Daemon) ensureCoreAgents(repoName string) (int, error) {
+	repo, exists := d.state.GetRepo(repoName)
+	if !exists {
+		return 0, fmt.Errorf("repository %s not found in state", repoName)
+	}
+
+	created := 0
+
+	// Check if session exists
+	hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession)
+	if err != nil || !hasSession {
+		d.logger.Debug("Tmux session %s not found, skipping core agent creation for %s", repo.TmuxSession, repoName)
+		return 0, nil
+	}
+
+	// Ensure supervisor exists
+	if _, exists := repo.Agents["supervisor"]; !exists {
+		d.logger.Info("Creating missing supervisor agent for %s", repoName)
+		if err := d.spawnCoreAgent(repoName, "supervisor", state.AgentTypeSupervisor); err != nil {
+			return created, fmt.Errorf("failed to create supervisor: %w", err)
+		}
+		created++
+	}
+
+	// Determine if we should have merge-queue or pr-shepherd
+	isFork := repo.ForkConfig.IsFork || repo.ForkConfig.ForceForkMode
+	mqConfig := repo.MergeQueueConfig
+	psConfig := repo.PRShepherdConfig
+
+	// Default configs if not set
+	if mqConfig.TrackMode == "" {
+		mqConfig = state.DefaultMergeQueueConfig()
+	}
+	if psConfig.TrackMode == "" {
+		psConfig = state.DefaultPRShepherdConfig()
+	}
+
+	if isFork {
+		// Fork mode: ensure pr-shepherd if enabled
+		if psConfig.Enabled {
+			if _, exists := repo.Agents["pr-shepherd"]; !exists {
+				d.logger.Info("Creating missing pr-shepherd agent for %s", repoName)
+				if err := d.spawnCoreAgent(repoName, "pr-shepherd", state.AgentTypePRShepherd); err != nil {
+					return created, fmt.Errorf("failed to create pr-shepherd: %w", err)
+				}
+				created++
+			}
+		}
+	} else {
+		// Non-fork mode: ensure merge-queue if enabled
+		if mqConfig.Enabled {
+			if _, exists := repo.Agents["merge-queue"]; !exists {
+				d.logger.Info("Creating missing merge-queue agent for %s", repoName)
+				if err := d.spawnCoreAgent(repoName, "merge-queue", state.AgentTypeMergeQueue); err != nil {
+					return created, fmt.Errorf("failed to create merge-queue: %w", err)
+				}
+				created++
+			}
+		}
+	}
+
+	return created, nil
+}
+
+// spawnCoreAgent spawns a core agent (supervisor, merge-queue, or pr-shepherd)
+func (d *Daemon) spawnCoreAgent(repoName, agentName string, agentType state.AgentType) error {
+	// This delegates to the existing spawnAgent logic used by the restart mechanism
+	// We'll use the socket handler internally
+	args := map[string]interface{}{
+		"repo":  repoName,
+		"agent": agentName,
+		"class": string(agentType),
+	}
+
+	resp := d.handleRestartAgent(socket.Request{
+		Command: "restart_agent",
+		Args:    args,
+	})
+
+	if !resp.Success {
+		return fmt.Errorf("failed to spawn agent: %s", resp.Error)
+	}
+
+	return nil
+}
+
+// ensureDefaultWorkspace ensures that at least one workspace exists for a repository.
+// If no workspaces exist, creates a default workspace named "my-default-2".
+// Returns true if a workspace was created.
+func (d *Daemon) ensureDefaultWorkspace(repoName string) (bool, error) {
+	repo, exists := d.state.GetRepo(repoName)
+	if !exists {
+		return false, fmt.Errorf("repository %s not found in state", repoName)
+	}
+
+	// Check if any workspace already exists
+	hasWorkspace := false
+	for _, agent := range repo.Agents {
+		if agent.Type == state.AgentTypeWorkspace {
+			hasWorkspace = true
+			break
+		}
+	}
+
+	if hasWorkspace {
+		return false, nil // Workspace already exists
+	}
+
+	// Check if session exists
+	hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession)
+	if err != nil || !hasSession {
+		d.logger.Debug("Tmux session %s not found, skipping workspace creation for %s", repo.TmuxSession, repoName)
+		return false, nil
+	}
+
+	// Create default workspace
+	workspaceName := "my-default-2"
+	d.logger.Info("Creating default workspace '%s' for %s", workspaceName, repoName)
+
+	// We need to manually create the workspace
+	repoPath := d.paths.RepoDir(repoName)
+	wt := worktree.NewManager(repoPath)
+	wtPath := d.paths.AgentWorktree(repoName, workspaceName)
+	branchName := fmt.Sprintf("workspace/%s", workspaceName)
+
+	// Create worktree
+	if err := wt.CreateNewBranch(wtPath, branchName, "HEAD"); err != nil {
+		return false, fmt.Errorf("failed to create worktree: %w", err)
+	}
+
+	// Create tmux window using exec.Command
+	cmd := exec.Command("tmux", "new-window", "-d", "-t", repo.TmuxSession, "-n", workspaceName, "-c", wtPath)
+	if err := cmd.Run(); err != nil {
+		return false, fmt.Errorf("failed to create tmux window: %w", err)
+	}
+
+	// Generate session ID
+	sessionID, err := claude.GenerateSessionID()
+	if err != nil {
+		return false, fmt.Errorf("failed to generate session ID: %w", err)
+	}
+
+	// Write prompt file
+	promptContent, err := prompts.GetPrompt(repoPath, state.AgentTypeWorkspace, "")
+	if err != nil {
+		return false, fmt.Errorf("failed to get workspace prompt: %w", err)
+	}
+
+	promptFile := filepath.Join(d.paths.Root, "prompts", workspaceName+".md")
+	if err := os.MkdirAll(filepath.Dir(promptFile), 0755); err != nil {
+		return false, fmt.Errorf("failed to create prompts directory: %w", err)
+	}
+	if err := os.WriteFile(promptFile, []byte(promptContent), 0644); err != nil {
+		return false, fmt.Errorf("failed to write prompt file: %w", err)
+	}
+
+	// Copy hooks configuration
+	if err := hooks.CopyConfig(repoPath, wtPath); err != nil {
+		d.logger.Warn("Failed to copy hooks config for workspace: %v", err)
+	}
+
+	// Start Claude (skip in test mode)
+	var pid int
+	if os.Getenv("MULTICLAUDE_TEST_MODE") != "1" {
+		// Find Claude binary
+		claudeBinary, err := exec.LookPath("claude")
+		if err != nil {
+			return false, fmt.Errorf("failed to find claude binary: %w", err)
+		}
+
+		// Build Claude command
+		claudeCmd := fmt.Sprintf("%s --session-id %s --dangerously-skip-permissions", claudeBinary, sessionID)
+		if promptFile != "" {
+			claudeCmd += fmt.Sprintf(" --append-system-prompt-file %s", promptFile)
+		}
+
+		// Send command to tmux window
+		target := fmt.Sprintf("%s:%s", repo.TmuxSession, workspaceName)
+		cmd = exec.Command("tmux", "send-keys", "-t", target, claudeCmd, "C-m")
+		if err := cmd.Run(); err != nil {
+			return false, fmt.Errorf("failed to start Claude in tmux: %w", err)
+		}
+
+		// Wait for Claude to start
+		time.Sleep(500 * time.Millisecond)
+
+		// Get PID
+		pid, err = d.tmux.GetPanePID(d.ctx, repo.TmuxSession, workspaceName)
+		if err != nil {
+			d.logger.Warn("Failed to get Claude PID for workspace: %v", err)
+			pid = 0
+		}
+	}
+
+	// Register workspace with state
+	agent := state.Agent{
+		Type:         state.AgentTypeWorkspace,
+		WorktreePath: wtPath,
+		TmuxWindow:   workspaceName,
+		SessionID:    sessionID,
+		PID:          pid,
+	}
+
+	if err := d.state.AddAgent(repoName, workspaceName, agent); err != nil {
+		return false, fmt.Errorf("failed to add workspace to state: %w", err)
+	}
+
+	return true, nil
 }
 
 // handleGetRepoConfig returns the configuration for a repository

@@ -1034,6 +1034,271 @@ func TestCLIRepairCommand(t *testing.T) {
 	}
 }
 
+func TestRepairEnsuringCoreAgents(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Load state
+	st, err := cli.loadState()
+	if err != nil {
+		t.Fatalf("Failed to load state: %v", err)
+	}
+
+	// Initialize a test repository
+	repoName := "test-repo"
+	repoPath := cli.paths.RepoDir(repoName)
+	tmuxSession := "mc-test-repo"
+
+	// Add repository to state
+	repo := &state.Repository{
+		GithubURL:        "https://github.com/test/repo",
+		TmuxSession:      tmuxSession,
+		Agents:           make(map[string]state.Agent),
+		MergeQueueConfig: state.DefaultMergeQueueConfig(),
+		PRShepherdConfig: state.DefaultPRShepherdConfig(),
+		ForkConfig:       state.ForkConfig{IsFork: false},
+	}
+	if err := st.AddRepo(repoName, repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Create tmux session for testing
+	if err := exec.Command("tmux", "new-session", "-d", "-s", tmuxSession).Run(); err != nil {
+		t.Skipf("Skipping test: tmux not available or session creation failed: %v", err)
+	}
+	defer exec.Command("tmux", "kill-session", "-t", tmuxSession).Run()
+
+	// Create repository directory and initialize git
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("Failed to create repo directory: %v", err)
+	}
+	setupTestRepo(t, repoPath)
+
+	// Run repair (should create supervisor and merge-queue)
+	err = cli.localRepair(false)
+	if err != nil {
+		t.Errorf("localRepair failed: %v", err)
+	}
+
+	// Reload state to get updated data
+	st, err = cli.loadState()
+	if err != nil {
+		t.Fatalf("Failed to reload state: %v", err)
+	}
+
+	// Verify supervisor was created
+	updatedRepo, exists := st.GetRepo(repoName)
+	if !exists {
+		t.Fatalf("Repository not found after repair")
+	}
+
+	if _, exists := updatedRepo.Agents["supervisor"]; !exists {
+		t.Errorf("Supervisor agent was not created by repair")
+	}
+
+	// Verify merge-queue was created (in non-fork mode)
+	if _, exists := updatedRepo.Agents["merge-queue"]; !exists {
+		t.Errorf("Merge-queue agent was not created by repair")
+	}
+
+	// Verify default workspace was created
+	hasWorkspace := false
+	for _, agent := range updatedRepo.Agents {
+		if agent.Type == state.AgentTypeWorkspace {
+			hasWorkspace = true
+			break
+		}
+	}
+	if !hasWorkspace {
+		t.Errorf("Default workspace was not created by repair")
+	}
+}
+
+func TestRepairEnsuringPRShepherdInForkMode(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Load state
+	st, err := cli.loadState()
+	if err != nil {
+		t.Fatalf("Failed to load state: %v", err)
+	}
+
+	// Initialize a test repository in fork mode
+	repoName := "test-fork-repo"
+	repoPath := cli.paths.RepoDir(repoName)
+	tmuxSession := "mc-test-fork-repo"
+
+	// Add repository to state (fork mode)
+	repo := &state.Repository{
+		GithubURL:        "https://github.com/test/fork",
+		TmuxSession:      tmuxSession,
+		Agents:           make(map[string]state.Agent),
+		MergeQueueConfig: state.MergeQueueConfig{Enabled: false},
+		PRShepherdConfig: state.DefaultPRShepherdConfig(),
+		ForkConfig: state.ForkConfig{
+			IsFork:        true,
+			UpstreamURL:   "https://github.com/upstream/repo",
+			UpstreamOwner: "upstream",
+			UpstreamRepo:  "repo",
+		},
+	}
+	if err := st.AddRepo(repoName, repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Create tmux session for testing
+	if err := exec.Command("tmux", "new-session", "-d", "-s", tmuxSession).Run(); err != nil {
+		t.Skipf("Skipping test: tmux not available or session creation failed: %v", err)
+	}
+	defer exec.Command("tmux", "kill-session", "-t", tmuxSession).Run()
+
+	// Create repository directory and initialize git
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("Failed to create repo directory: %v", err)
+	}
+	setupTestRepo(t, repoPath)
+
+	// Run repair (should create supervisor and pr-shepherd, NOT merge-queue)
+	err = cli.localRepair(false)
+	if err != nil {
+		t.Errorf("localRepair failed: %v", err)
+	}
+
+	// Reload state to get updated data
+	st, err = cli.loadState()
+	if err != nil {
+		t.Fatalf("Failed to reload state: %v", err)
+	}
+
+	// Verify supervisor was created
+	updatedRepo, exists := st.GetRepo(repoName)
+	if !exists {
+		t.Fatalf("Repository not found after repair")
+	}
+
+	if _, exists := updatedRepo.Agents["supervisor"]; !exists {
+		t.Errorf("Supervisor agent was not created by repair")
+	}
+
+	// Verify pr-shepherd was created (in fork mode)
+	if _, exists := updatedRepo.Agents["pr-shepherd"]; !exists {
+		t.Errorf("PR-shepherd agent was not created by repair in fork mode")
+	}
+
+	// Verify merge-queue was NOT created (fork mode)
+	if _, exists := updatedRepo.Agents["merge-queue"]; exists {
+		t.Errorf("Merge-queue agent should not be created in fork mode")
+	}
+}
+
+func TestRepairDoesNotDuplicateAgents(t *testing.T) {
+	cli, _, cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Load state
+	st, err := cli.loadState()
+	if err != nil {
+		t.Fatalf("Failed to load state: %v", err)
+	}
+
+	// Initialize a test repository
+	repoName := "test-repo"
+	repoPath := cli.paths.RepoDir(repoName)
+	tmuxSession := "mc-test-repo"
+
+	// Add repository with existing supervisor
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: tmuxSession,
+		Agents: map[string]state.Agent{
+			"supervisor": {
+				Type:         state.AgentTypeSupervisor,
+				WorktreePath: repoPath,
+				TmuxWindow:   "supervisor",
+				SessionID:    "existing-session-id",
+				PID:          12345,
+			},
+			"my-workspace": {
+				Type:         state.AgentTypeWorkspace,
+				WorktreePath: cli.paths.AgentWorktree(repoName, "my-workspace"),
+				TmuxWindow:   "my-workspace",
+				SessionID:    "workspace-session-id",
+				PID:          12346,
+			},
+		},
+		MergeQueueConfig: state.DefaultMergeQueueConfig(),
+		PRShepherdConfig: state.DefaultPRShepherdConfig(),
+		ForkConfig:       state.ForkConfig{IsFork: false},
+	}
+	if err := st.AddRepo(repoName, repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Create tmux session
+	if err := exec.Command("tmux", "new-session", "-d", "-s", tmuxSession, "-n", "supervisor").Run(); err != nil {
+		t.Skipf("Skipping test: tmux not available: %v", err)
+	}
+	defer exec.Command("tmux", "kill-session", "-t", tmuxSession).Run()
+
+	// Create workspace window
+	if err := exec.Command("tmux", "new-window", "-d", "-t", tmuxSession, "-n", "my-workspace").Run(); err != nil {
+		t.Fatalf("Failed to create workspace window: %v", err)
+	}
+
+	// Create repository directory and initialize git
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		t.Fatalf("Failed to create repo directory: %v", err)
+	}
+	setupTestRepo(t, repoPath)
+
+	// Create workspace worktree directory
+	wsPath := cli.paths.AgentWorktree(repoName, "my-workspace")
+	if err := os.MkdirAll(wsPath, 0755); err != nil {
+		t.Fatalf("Failed to create workspace directory: %v", err)
+	}
+
+	// Run repair
+	err = cli.localRepair(false)
+	if err != nil {
+		t.Errorf("localRepair failed: %v", err)
+	}
+
+	// Reload state to get updated data
+	st, err = cli.loadState()
+	if err != nil {
+		t.Fatalf("Failed to reload state: %v", err)
+	}
+
+	// Verify supervisor still exists with same session ID (not duplicated)
+	updatedRepo, _ := st.GetRepo(repoName)
+	supervisor, exists := updatedRepo.Agents["supervisor"]
+	if !exists {
+		t.Errorf("Supervisor agent was removed")
+	} else if supervisor.SessionID != "existing-session-id" {
+		t.Errorf("Supervisor was replaced instead of kept (session ID changed)")
+	}
+
+	// Verify merge-queue was created (since it was missing)
+	if _, exists := updatedRepo.Agents["merge-queue"]; !exists {
+		t.Errorf("Merge-queue agent was not created")
+	}
+
+	// Verify default workspace was NOT created (since one already exists)
+	workspaceCount := 0
+	for _, agent := range updatedRepo.Agents {
+		if agent.Type == state.AgentTypeWorkspace {
+			workspaceCount++
+		}
+	}
+	if workspaceCount != 1 {
+		t.Errorf("Expected 1 workspace, got %d", workspaceCount)
+	}
+	if _, exists := updatedRepo.Agents["my-default-2"]; exists {
+		t.Errorf("Default workspace should not be created when workspace already exists")
+	}
+}
+
 func TestCLIDocsCommand(t *testing.T) {
 	cli, _, cleanup := setupTestEnvironment(t)
 	defer cleanup()
