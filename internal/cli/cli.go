@@ -320,6 +320,14 @@ func (c *CLI) registerCommands() {
 		Run:         c.startDaemon,
 	}
 
+	// Root-level status command - comprehensive system overview
+	c.rootCmd.Subcommands["status"] = &Command{
+		Name:        "status",
+		Description: "Show system status overview",
+		Usage:       "multiclaude status",
+		Run:         c.systemStatus,
+	}
+
 	daemonCmd := &Command{
 		Name:        "daemon",
 		Description: "Manage the multiclaude daemon",
@@ -812,6 +820,112 @@ func (c *CLI) daemonStatus(args []string) error {
 		fmt.Println(string(jsonData))
 	}
 
+	return nil
+}
+
+// systemStatus shows a comprehensive system overview that gracefully handles
+// the daemon not running (unlike list commands which error).
+func (c *CLI) systemStatus(args []string) error {
+	// Check PID file first
+	pidFile := daemon.NewPIDFile(c.paths.DaemonPID)
+	running, pid, err := pidFile.IsRunning()
+	if err != nil {
+		return fmt.Errorf("failed to check daemon status: %w", err)
+	}
+
+	if !running {
+		format.Header("Multiclaude Status")
+		fmt.Println()
+		fmt.Printf("  Daemon: %s\n", format.Red.Sprint("not running"))
+		fmt.Println()
+		format.Dimmed("Start with: multiclaude daemon start")
+		return nil
+	}
+
+	// Try to connect to daemon and get rich status
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "list_repos",
+		Args:    map[string]interface{}{"rich": true},
+	})
+
+	if err != nil {
+		format.Header("Multiclaude Status")
+		fmt.Println()
+		fmt.Printf("  Daemon: %s (PID: %d, not responding)\n", format.Yellow.Sprint("unhealthy"), pid)
+		fmt.Println()
+		format.Dimmed("Try: multiclaude daemon stop && multiclaude daemon start")
+		return nil
+	}
+
+	if !resp.Success {
+		format.Header("Multiclaude Status")
+		fmt.Println()
+		fmt.Printf("  Daemon: %s (PID: %d)\n", format.Yellow.Sprint("error"), pid)
+		fmt.Printf("  Error: %s\n", resp.Error)
+		return nil
+	}
+
+	// Print status header
+	format.Header("Multiclaude Status")
+	fmt.Println()
+	fmt.Printf("  Daemon: %s (PID: %d)\n", format.Green.Sprint("running"), pid)
+
+	repos, ok := resp.Data.([]interface{})
+	if !ok || len(repos) == 0 {
+		fmt.Printf("  Repos:  %s\n", format.Dim.Sprint("none"))
+		fmt.Println()
+		format.Dimmed("Initialize a repo with: multiclaude init <github-url>")
+		return nil
+	}
+
+	fmt.Printf("  Repos:  %d\n", len(repos))
+	fmt.Println()
+
+	// Show each repo with agents
+	for _, repo := range repos {
+		repoMap, ok := repo.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		name, _ := repoMap["name"].(string)
+		totalAgents := 0
+		if v, ok := repoMap["total_agents"].(float64); ok {
+			totalAgents = int(v)
+		}
+		workerCount := 0
+		if v, ok := repoMap["worker_count"].(float64); ok {
+			workerCount = int(v)
+		}
+		sessionHealthy, _ := repoMap["session_healthy"].(bool)
+
+		// Repo line
+		repoStatus := format.Green.Sprint("●")
+		if !sessionHealthy {
+			repoStatus = format.Yellow.Sprint("○")
+		}
+		fmt.Printf("  %s %s\n", repoStatus, format.Bold.Sprint(name))
+
+		// Agent summary
+		coreAgents := totalAgents - workerCount
+		if coreAgents < 0 {
+			coreAgents = 0
+		}
+		fmt.Printf("      Agents: %d core, %d workers\n", coreAgents, workerCount)
+
+		// Show fork info if applicable
+		if isFork, _ := repoMap["is_fork"].(bool); isFork {
+			upstreamOwner, _ := repoMap["upstream_owner"].(string)
+			upstreamRepo, _ := repoMap["upstream_repo"].(string)
+			if upstreamOwner != "" && upstreamRepo != "" {
+				fmt.Printf("      Fork of: %s/%s\n", upstreamOwner, upstreamRepo)
+			}
+		}
+	}
+
+	fmt.Println()
+	format.Dimmed("Details: multiclaude repo list | multiclaude worker list")
 	return nil
 }
 
