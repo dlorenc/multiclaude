@@ -21,6 +21,23 @@ type Response struct {
 	Error   string      `json:"error,omitempty"`
 }
 
+// ErrorResponse creates a failure response with the given error message.
+// It supports printf-style formatting.
+func ErrorResponse(format string, args ...interface{}) Response {
+	return Response{
+		Success: false,
+		Error:   fmt.Sprintf(format, args...),
+	}
+}
+
+// SuccessResponse creates a successful response with optional data.
+func SuccessResponse(data interface{}) Response {
+	return Response{
+		Success: true,
+		Data:    data,
+	}
+}
+
 // Client connects to the daemon via Unix socket
 type Client struct {
 	socketPath string

@@ -176,12 +176,27 @@ func (d *Daemon) Stop() error {
 func getRequiredStringArg(args map[string]interface{}, key, description string) (string, socket.Response, bool) {
 	val, ok := args[key].(string)
 	if !ok || val == "" {
-		return "", socket.Response{
-			Success: false,
-			Error:   fmt.Sprintf("missing '%s': %s", key, description),
-		}, false
+		return "", socket.ErrorResponse("missing '%s': %s", key, description), false
 	}
 	return val, socket.Response{}, true
+}
+
+// getOptionalStringArg extracts an optional string argument from request Args.
+// Returns the value if present, or the default value if missing.
+func getOptionalStringArg(args map[string]interface{}, key, defaultVal string) string {
+	if val, ok := args[key].(string); ok {
+		return val
+	}
+	return defaultVal
+}
+
+// getOptionalBoolArg extracts an optional bool argument from request Args.
+// Returns the value if present, or the default value if missing.
+func getOptionalBoolArg(args map[string]interface{}, key string, defaultVal bool) bool {
+	if val, ok := args[key].(bool); ok {
+		return val
+	}
+	return defaultVal
 }
 
 // periodicLoop runs a function periodically at the specified interval.
@@ -577,7 +592,7 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 
 	switch req.Command {
 	case "ping":
-		return socket.Response{Success: true, Data: "pong"}
+		return socket.SuccessResponse("pong")
 
 	case "status":
 		return d.handleStatus(req)
@@ -587,7 +602,7 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 			time.Sleep(100 * time.Millisecond)
 			d.Stop()
 		}()
-		return socket.Response{Success: true, Data: "Daemon stopping"}
+		return socket.SuccessResponse("Daemon stopping")
 
 	case "list_repos":
 		return d.handleListRepos(req)
@@ -636,7 +651,7 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 
 	case "route_messages":
 		go d.routeMessages()
-		return socket.Response{Success: true, Data: "Message routing triggered"}
+		return socket.SuccessResponse("Message routing triggered")
 
 	case "task_history":
 		return d.handleTaskHistory(req)
@@ -648,10 +663,7 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 		return d.handleTriggerRefresh(req)
 
 	default:
-		return socket.Response{
-			Success: false,
-			Error:   fmt.Sprintf("unknown command: %q. Run 'multiclaude --help' for available commands", req.Command),
-		}
+		return socket.ErrorResponse("unknown command: %q. Run 'multiclaude --help' for available commands", req.Command)
 	}
 }
 
@@ -664,16 +676,13 @@ func (d *Daemon) handleStatus(req socket.Request) socket.Response {
 		agentCount += len(agents)
 	}
 
-	return socket.Response{
-		Success: true,
-		Data: map[string]interface{}{
-			"running":     true,
-			"pid":         os.Getpid(),
-			"repos":       len(repos),
-			"agents":      agentCount,
-			"socket_path": d.paths.DaemonSock,
-		},
-	}
+	return socket.SuccessResponse(map[string]interface{}{
+		"running":     true,
+		"pid":         os.Getpid(),
+		"repos":       len(repos),
+		"agents":      agentCount,
+		"socket_path": d.paths.DaemonSock,
+	})
 }
 
 // handleListRepos lists all repositories with detailed status
@@ -681,14 +690,14 @@ func (d *Daemon) handleListRepos(req socket.Request) socket.Response {
 	repos := d.state.GetAllRepos()
 
 	// Check if rich format is requested
-	rich, _ := req.Args["rich"].(bool)
+	rich := getOptionalBoolArg(req.Args, "rich", false)
 	if !rich {
 		// Return simple list for backward compatibility
 		repoNames := make([]string, 0, len(repos))
 		for name := range repos {
 			repoNames = append(repoNames, name)
 		}
-		return socket.Response{Success: true, Data: repoNames}
+		return socket.SuccessResponse(repoNames)
 	}
 
 	// Return detailed repo info
@@ -729,7 +738,7 @@ func (d *Daemon) handleListRepos(req socket.Request) socket.Response {
 		})
 	}
 
-	return socket.Response{Success: true, Data: repoDetails}
+	return socket.SuccessResponse(repoDetails)
 }
 
 // handleAddRepo adds a new repository
@@ -751,41 +760,34 @@ func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
 
 	// Parse merge queue configuration (optional, defaults to enabled with "all" tracking)
 	mqConfig := state.DefaultMergeQueueConfig()
-	if mqEnabled, ok := req.Args["mq_enabled"].(bool); ok {
+	if mqEnabled, hasMqEnabled := req.Args["mq_enabled"].(bool); hasMqEnabled {
 		mqConfig.Enabled = mqEnabled
 	}
-	if mqTrackMode, ok := req.Args["mq_track_mode"].(string); ok {
+	if mqTrackMode := getOptionalStringArg(req.Args, "mq_track_mode", ""); mqTrackMode != "" {
 		mode, err := state.ParseTrackMode(mqTrackMode)
 		if err != nil {
-			return socket.Response{Success: false, Error: err.Error()}
+			return socket.ErrorResponse("%s", err.Error())
 		}
 		mqConfig.TrackMode = mode
 	}
 
 	// Parse fork configuration (optional)
-	var forkConfig state.ForkConfig
-	if isFork, ok := req.Args["is_fork"].(bool); ok {
-		forkConfig.IsFork = isFork
-	}
-	if upstreamURL, ok := req.Args["upstream_url"].(string); ok {
-		forkConfig.UpstreamURL = upstreamURL
-	}
-	if upstreamOwner, ok := req.Args["upstream_owner"].(string); ok {
-		forkConfig.UpstreamOwner = upstreamOwner
-	}
-	if upstreamRepo, ok := req.Args["upstream_repo"].(string); ok {
-		forkConfig.UpstreamRepo = upstreamRepo
+	forkConfig := state.ForkConfig{
+		IsFork:        getOptionalBoolArg(req.Args, "is_fork", false),
+		UpstreamURL:   getOptionalStringArg(req.Args, "upstream_url", ""),
+		UpstreamOwner: getOptionalStringArg(req.Args, "upstream_owner", ""),
+		UpstreamRepo:  getOptionalStringArg(req.Args, "upstream_repo", ""),
 	}
 
 	// Parse PR shepherd configuration (optional, defaults for fork mode)
 	psConfig := state.DefaultPRShepherdConfig()
-	if psEnabled, ok := req.Args["ps_enabled"].(bool); ok {
+	if psEnabled, hasPsEnabled := req.Args["ps_enabled"].(bool); hasPsEnabled {
 		psConfig.Enabled = psEnabled
 	}
-	if psTrackMode, ok := req.Args["ps_track_mode"].(string); ok {
+	if psTrackMode := getOptionalStringArg(req.Args, "ps_track_mode", ""); psTrackMode != "" {
 		mode, err := state.ParseTrackMode(psTrackMode)
 		if err != nil {
-			return socket.Response{Success: false, Error: err.Error()}
+			return socket.ErrorResponse("%s", err.Error())
 		}
 		psConfig.TrackMode = mode
 	}
@@ -806,7 +808,7 @@ func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
 	}
 
 	if err := d.state.AddRepo(name, repo); err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+		return socket.ErrorResponse("%s", err.Error())
 	}
 
 	if forkConfig.IsFork {
@@ -814,7 +816,7 @@ func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
 	} else {
 		d.logger.Info("Added repository: %s (merge queue: enabled=%v, track=%s)", name, mqConfig.Enabled, mqConfig.TrackMode)
 	}
-	return socket.Response{Success: true}
+	return socket.SuccessResponse(nil)
 }
 
 // handleRemoveRepo removes a repository from state
@@ -825,11 +827,11 @@ func (d *Daemon) handleRemoveRepo(req socket.Request) socket.Response {
 	}
 
 	if err := d.state.RemoveRepo(name); err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+		return socket.ErrorResponse("%s", err.Error())
 	}
 
 	d.logger.Info("Removed repository: %s", name)
-	return socket.Response{Success: true}
+	return socket.SuccessResponse(nil)
 }
 
 // handleAddAgent adds a new agent
@@ -883,16 +885,14 @@ func (d *Daemon) handleAddAgent(req socket.Request) socket.Response {
 	}
 
 	// Optional task field for workers
-	if task, ok := req.Args["task"].(string); ok {
-		agent.Task = task
-	}
+	agent.Task = getOptionalStringArg(req.Args, "task", "")
 
 	if err := d.state.AddAgent(repoName, agentName, agent); err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+		return socket.ErrorResponse("%s", err.Error())
 	}
 
 	d.logger.Info("Added agent %s to repo %s", agentName, repoName)
-	return socket.Response{Success: true}
+	return socket.SuccessResponse(nil)
 }
 
 // handleRemoveAgent removes an agent
@@ -908,11 +908,11 @@ func (d *Daemon) handleRemoveAgent(req socket.Request) socket.Response {
 	}
 
 	if err := d.state.RemoveAgent(repoName, agentName); err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+		return socket.ErrorResponse("%s", err.Error())
 	}
 
 	d.logger.Info("Removed agent %s from repo %s", agentName, repoName)
-	return socket.Response{Success: true}
+	return socket.SuccessResponse(nil)
 }
 
 // handleListAgents lists agents for a repository
@@ -924,11 +924,11 @@ func (d *Daemon) handleListAgents(req socket.Request) socket.Response {
 
 	agents, err := d.state.ListAgents(repoName)
 	if err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+		return socket.ErrorResponse("%s", err.Error())
 	}
 
 	// Check if rich format is requested
-	rich, _ := req.Args["rich"].(bool)
+	rich := getOptionalBoolArg(req.Args, "rich", false)
 
 	// Get repository to check session
 	repo, repoExists := d.state.GetRepo(repoName)
@@ -992,7 +992,7 @@ func (d *Daemon) handleListAgents(req socket.Request) socket.Response {
 		agentDetails = append(agentDetails, detail)
 	}
 
-	return socket.Response{Success: true, Data: agentDetails}
+	return socket.SuccessResponse(agentDetails)
 }
 
 // handleCompleteAgent marks an agent as ready for cleanup
@@ -1009,22 +1009,22 @@ func (d *Daemon) handleCompleteAgent(req socket.Request) socket.Response {
 
 	agent, exists := d.state.GetAgent(repoName, agentName)
 	if !exists {
-		return socket.Response{Success: false, Error: fmt.Sprintf("agent '%s' not found in repository '%s' - check available agents with: multiclaude worker list --repo %s", agentName, repoName, repoName)}
+		return socket.ErrorResponse("agent '%s' not found in repository '%s' - check available agents with: multiclaude worker list --repo %s", agentName, repoName, repoName)
 	}
 
 	// Mark as ready for cleanup
 	agent.ReadyForCleanup = true
 
 	// Optional: capture summary and failure reason for task history
-	if summary, ok := req.Args["summary"].(string); ok && summary != "" {
+	if summary := getOptionalStringArg(req.Args, "summary", ""); summary != "" {
 		agent.Summary = summary
 	}
-	if failureReason, ok := req.Args["failure_reason"].(string); ok && failureReason != "" {
+	if failureReason := getOptionalStringArg(req.Args, "failure_reason", ""); failureReason != "" {
 		agent.FailureReason = failureReason
 	}
 
 	if err := d.state.UpdateAgent(repoName, agentName, agent); err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+		return socket.ErrorResponse("%s", err.Error())
 	}
 
 	d.logger.Info("Agent %s/%s marked as ready for cleanup", repoName, agentName)
@@ -1070,7 +1070,7 @@ func (d *Daemon) handleCompleteAgent(req socket.Request) socket.Response {
 	// Trigger immediate cleanup check
 	go d.checkAgentHealth()
 
-	return socket.Response{Success: true}
+	return socket.SuccessResponse(nil)
 }
 
 // handleRestartAgent restarts an agent that has crashed or exited
@@ -1085,56 +1085,53 @@ func (d *Daemon) handleRestartAgent(req socket.Request) socket.Response {
 		return errResp
 	}
 
-	force, _ := req.Args["force"].(bool)
+	force := getOptionalBoolArg(req.Args, "force", false)
 
 	agent, exists := d.state.GetAgent(repoName, agentName)
 	if !exists {
-		return socket.Response{Success: false, Error: fmt.Sprintf("agent '%s' not found in repository '%s' - check available agents with: multiclaude worker list --repo %s", agentName, repoName, repoName)}
+		return socket.ErrorResponse("agent '%s' not found in repository '%s' - check available agents with: multiclaude worker list --repo %s", agentName, repoName, repoName)
 	}
 
 	// Check if agent is marked for cleanup (completed)
 	if agent.ReadyForCleanup {
-		return socket.Response{Success: false, Error: fmt.Sprintf("agent '%s' is marked as complete and pending cleanup - cannot restart a completed agent", agentName)}
+		return socket.ErrorResponse("agent '%s' is marked as complete and pending cleanup - cannot restart a completed agent", agentName)
 	}
 
 	// Check if tmux window exists
 	repo, exists := d.state.GetRepo(repoName)
 	if !exists {
-		return socket.Response{Success: false, Error: fmt.Sprintf("repository '%s' not found in state", repoName)}
+		return socket.ErrorResponse("repository '%s' not found in state", repoName)
 	}
 
 	hasWindow, err := d.tmux.HasWindow(d.ctx, repo.TmuxSession, agentName)
 	if err != nil {
-		return socket.Response{Success: false, Error: fmt.Sprintf("failed to check tmux window: %v", err)}
+		return socket.ErrorResponse("failed to check tmux window: %v", err)
 	}
 	if !hasWindow {
-		return socket.Response{Success: false, Error: fmt.Sprintf("tmux window '%s' does not exist - the agent may need to be recreated", agentName)}
+		return socket.ErrorResponse("tmux window '%s' does not exist - the agent may need to be recreated", agentName)
 	}
 
 	// Check if agent is already running
 	if agent.PID > 0 && isProcessAlive(agent.PID) {
 		if !force {
-			return socket.Response{Success: false, Error: fmt.Sprintf("agent '%s' is already running with PID %d - use --force to restart anyway", agentName, agent.PID)}
+			return socket.ErrorResponse("agent '%s' is already running with PID %d - use --force to restart anyway", agentName, agent.PID)
 		}
 		d.logger.Info("Force restarting agent %s (PID %d was still running)", agentName, agent.PID)
 	}
 
 	// Restart the agent
 	if err := d.restartAgent(repoName, agentName, agent, repo); err != nil {
-		return socket.Response{Success: false, Error: fmt.Sprintf("failed to restart agent: %v", err)}
+		return socket.ErrorResponse("failed to restart agent: %v", err)
 	}
 
 	// Get updated PID from state
 	updatedAgent, _ := d.state.GetAgent(repoName, agentName)
-	return socket.Response{
-		Success: true,
-		Data: map[string]interface{}{
-			"agent":   agentName,
-			"repo":    repoName,
-			"pid":     updatedAgent.PID,
-			"message": fmt.Sprintf("Agent '%s' restarted successfully", agentName),
-		},
-	}
+	return socket.SuccessResponse(map[string]interface{}{
+		"agent":   agentName,
+		"repo":    repoName,
+		"pid":     updatedAgent.PID,
+		"message": fmt.Sprintf("Agent '%s' restarted successfully", agentName),
+	})
 }
 
 // handleTriggerCleanup manually triggers cleanup operations
@@ -1144,10 +1141,7 @@ func (d *Daemon) handleTriggerCleanup(req socket.Request) socket.Response {
 	// Run health check to find dead agents
 	d.checkAgentHealth()
 
-	return socket.Response{
-		Success: true,
-		Data:    "Cleanup triggered",
-	}
+	return socket.SuccessResponse("Cleanup triggered")
 }
 
 // handleTriggerRefresh manually triggers worktree refresh for all agents
@@ -1157,10 +1151,7 @@ func (d *Daemon) handleTriggerRefresh(req socket.Request) socket.Response {
 	// Run refresh in background so we can return immediately
 	go d.refreshWorktrees()
 
-	return socket.Response{
-		Success: true,
-		Data:    "Worktree refresh triggered",
-	}
+	return socket.SuccessResponse("Worktree refresh triggered")
 }
 
 // handleRepairState repairs state inconsistencies
@@ -1231,13 +1222,10 @@ func (d *Daemon) handleRepairState(req socket.Request) socket.Response {
 
 	d.logger.Info("State repair completed: %d agents removed, %d issues fixed", agentsRemoved, issuesFixed)
 
-	return socket.Response{
-		Success: true,
-		Data: map[string]interface{}{
-			"agents_removed": agentsRemoved,
-			"issues_fixed":   issuesFixed,
-		},
-	}
+	return socket.SuccessResponse(map[string]interface{}{
+		"agents_removed": agentsRemoved,
+		"issues_fixed":   issuesFixed,
+	})
 }
 
 // handleGetRepoConfig returns the configuration for a repository
@@ -1249,7 +1237,7 @@ func (d *Daemon) handleGetRepoConfig(req socket.Request) socket.Response {
 
 	repo, exists := d.state.GetRepo(name)
 	if !exists {
-		return socket.Response{Success: false, Error: fmt.Sprintf("repository %q not found", name)}
+		return socket.ErrorResponse("repository %q not found", name)
 	}
 
 	// Get merge queue config (use default if not set for backward compatibility)
@@ -1267,20 +1255,17 @@ func (d *Daemon) handleGetRepoConfig(req socket.Request) socket.Response {
 	// Get fork config
 	forkConfig := repo.ForkConfig
 
-	return socket.Response{
-		Success: true,
-		Data: map[string]interface{}{
-			"mq_enabled":      mqConfig.Enabled,
-			"mq_track_mode":   string(mqConfig.TrackMode),
-			"ps_enabled":      psConfig.Enabled,
-			"ps_track_mode":   string(psConfig.TrackMode),
-			"is_fork":         forkConfig.IsFork,
-			"upstream_url":    forkConfig.UpstreamURL,
-			"upstream_owner":  forkConfig.UpstreamOwner,
-			"upstream_repo":   forkConfig.UpstreamRepo,
-			"force_fork_mode": forkConfig.ForceForkMode,
-		},
-	}
+	return socket.SuccessResponse(map[string]interface{}{
+		"mq_enabled":      mqConfig.Enabled,
+		"mq_track_mode":   string(mqConfig.TrackMode),
+		"ps_enabled":      psConfig.Enabled,
+		"ps_track_mode":   string(psConfig.TrackMode),
+		"is_fork":         forkConfig.IsFork,
+		"upstream_url":    forkConfig.UpstreamURL,
+		"upstream_owner":  forkConfig.UpstreamOwner,
+		"upstream_repo":   forkConfig.UpstreamRepo,
+		"force_fork_mode": forkConfig.ForceForkMode,
+	})
 }
 
 // handleUpdateRepoConfig updates the configuration for a repository
@@ -1293,19 +1278,19 @@ func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
 	// Get current merge queue config
 	currentMQConfig, err := d.state.GetMergeQueueConfig(name)
 	if err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+		return socket.ErrorResponse("%s", err.Error())
 	}
 
 	// Update merge queue config with provided values
 	mqUpdated := false
-	if mqEnabled, ok := req.Args["mq_enabled"].(bool); ok {
+	if mqEnabled, hasMqEnabled := req.Args["mq_enabled"].(bool); hasMqEnabled {
 		currentMQConfig.Enabled = mqEnabled
 		mqUpdated = true
 	}
-	if mqTrackMode, ok := req.Args["mq_track_mode"].(string); ok {
+	if mqTrackMode := getOptionalStringArg(req.Args, "mq_track_mode", ""); mqTrackMode != "" {
 		mode, err := state.ParseTrackMode(mqTrackMode)
 		if err != nil {
-			return socket.Response{Success: false, Error: err.Error()}
+			return socket.ErrorResponse("%s", err.Error())
 		}
 		currentMQConfig.TrackMode = mode
 		mqUpdated = true
@@ -1313,7 +1298,7 @@ func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
 
 	if mqUpdated {
 		if err := d.state.UpdateMergeQueueConfig(name, currentMQConfig); err != nil {
-			return socket.Response{Success: false, Error: err.Error()}
+			return socket.ErrorResponse("%s", err.Error())
 		}
 		d.logger.Info("Updated merge queue config for repo %s: enabled=%v, track=%s", name, currentMQConfig.Enabled, currentMQConfig.TrackMode)
 	}
@@ -1321,19 +1306,19 @@ func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
 	// Get current PR shepherd config
 	currentPSConfig, err := d.state.GetPRShepherdConfig(name)
 	if err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+		return socket.ErrorResponse("%s", err.Error())
 	}
 
 	// Update PR shepherd config with provided values
 	psUpdated := false
-	if psEnabled, ok := req.Args["ps_enabled"].(bool); ok {
+	if psEnabled, hasPsEnabled := req.Args["ps_enabled"].(bool); hasPsEnabled {
 		currentPSConfig.Enabled = psEnabled
 		psUpdated = true
 	}
-	if psTrackMode, ok := req.Args["ps_track_mode"].(string); ok {
+	if psTrackMode := getOptionalStringArg(req.Args, "ps_track_mode", ""); psTrackMode != "" {
 		mode, err := state.ParseTrackMode(psTrackMode)
 		if err != nil {
-			return socket.Response{Success: false, Error: err.Error()}
+			return socket.ErrorResponse("%s", err.Error())
 		}
 		currentPSConfig.TrackMode = mode
 		psUpdated = true
@@ -1341,12 +1326,12 @@ func (d *Daemon) handleUpdateRepoConfig(req socket.Request) socket.Response {
 
 	if psUpdated {
 		if err := d.state.UpdatePRShepherdConfig(name, currentPSConfig); err != nil {
-			return socket.Response{Success: false, Error: err.Error()}
+			return socket.ErrorResponse("%s", err.Error())
 		}
 		d.logger.Info("Updated PR shepherd config for repo %s: enabled=%v, track=%s", name, currentPSConfig.Enabled, currentPSConfig.TrackMode)
 	}
 
-	return socket.Response{Success: true}
+	return socket.SuccessResponse(nil)
 }
 
 // handleSetCurrentRepo sets the current/default repository
@@ -1357,30 +1342,30 @@ func (d *Daemon) handleSetCurrentRepo(req socket.Request) socket.Response {
 	}
 
 	if err := d.state.SetCurrentRepo(name); err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+		return socket.ErrorResponse("%s", err.Error())
 	}
 
 	d.logger.Info("Set current repository to: %s", name)
-	return socket.Response{Success: true, Data: name}
+	return socket.SuccessResponse(name)
 }
 
 // handleGetCurrentRepo returns the current/default repository
 func (d *Daemon) handleGetCurrentRepo(req socket.Request) socket.Response {
 	currentRepo := d.state.GetCurrentRepo()
 	if currentRepo == "" {
-		return socket.Response{Success: false, Error: "no current repository set"}
+		return socket.ErrorResponse("no current repository set")
 	}
-	return socket.Response{Success: true, Data: currentRepo}
+	return socket.SuccessResponse(currentRepo)
 }
 
 // handleClearCurrentRepo clears the current/default repository
 func (d *Daemon) handleClearCurrentRepo(req socket.Request) socket.Response {
 	if err := d.state.ClearCurrentRepo(); err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+		return socket.ErrorResponse("%s", err.Error())
 	}
 
 	d.logger.Info("Cleared current repository")
-	return socket.Response{Success: true}
+	return socket.SuccessResponse(nil)
 }
 
 // cleanupDeadAgents removes dead agents from state
@@ -1491,7 +1476,7 @@ func (d *Daemon) handleTaskHistory(req socket.Request) socket.Response {
 
 	history, err := d.state.GetTaskHistory(repoName, limit)
 	if err != nil {
-		return socket.Response{Success: false, Error: err.Error()}
+		return socket.ErrorResponse("%s", err.Error())
 	}
 
 	// Convert to interface slice for JSON serialization
@@ -1511,7 +1496,7 @@ func (d *Daemon) handleTaskHistory(req socket.Request) socket.Response {
 		}
 	}
 
-	return socket.Response{Success: true, Data: result}
+	return socket.SuccessResponse(result)
 }
 
 // handleSpawnAgent spawns a new agent with an inline prompt (no hardcoded type).
@@ -1545,24 +1530,21 @@ func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
 
 	// Validate class
 	if agentClass != "persistent" && agentClass != "ephemeral" {
-		return socket.Response{
-			Success: false,
-			Error:   fmt.Sprintf("invalid agent class %q: must be 'persistent' or 'ephemeral'", agentClass),
-		}
+		return socket.ErrorResponse("invalid agent class %q: must be 'persistent' or 'ephemeral'", agentClass)
 	}
 
 	// Get optional task
-	task, _ := req.Args["task"].(string)
+	task := getOptionalStringArg(req.Args, "task", "")
 
 	// Get repository
 	repo, exists := d.state.GetRepo(repoName)
 	if !exists {
-		return socket.Response{Success: false, Error: fmt.Sprintf("repository %q not found", repoName)}
+		return socket.ErrorResponse("repository %q not found", repoName)
 	}
 
 	// Check if agent already exists
 	if _, exists := d.state.GetAgent(repoName, agentName); exists {
-		return socket.Response{Success: false, Error: fmt.Sprintf("agent %q already exists in repository %q", agentName, repoName)}
+		return socket.ErrorResponse("agent %q already exists in repository %q", agentName, repoName)
 	}
 
 	// Determine agent type based on class
@@ -1600,7 +1582,7 @@ func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
 		// Ephemeral agents get their own worktree with a new branch
 		branchName := fmt.Sprintf("work/%s", agentName)
 		if err := wt.CreateNewBranch(worktreePath, branchName, "HEAD"); err != nil {
-			return socket.Response{Success: false, Error: fmt.Sprintf("failed to create worktree: %v", err)}
+			return socket.ErrorResponse("failed to create worktree: %v", err)
 		}
 	}
 
@@ -1611,18 +1593,18 @@ func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
 		if agentClass != "persistent" {
 			wt.Remove(worktreePath, true)
 		}
-		return socket.Response{Success: false, Error: fmt.Sprintf("failed to create tmux window: %v", err)}
+		return socket.ErrorResponse("failed to create tmux window: %v", err)
 	}
 
 	// Write prompt to file
 	promptDir := filepath.Join(d.paths.Root, "prompts")
 	if err := os.MkdirAll(promptDir, 0755); err != nil {
-		return socket.Response{Success: false, Error: fmt.Sprintf("failed to create prompt directory: %v", err)}
+		return socket.ErrorResponse("failed to create prompt directory: %v", err)
 	}
 
 	promptPath := filepath.Join(promptDir, fmt.Sprintf("%s.md", agentName))
 	if err := os.WriteFile(promptPath, []byte(promptText), 0644); err != nil {
-		return socket.Response{Success: false, Error: fmt.Sprintf("failed to write prompt file: %v", err)}
+		return socket.ErrorResponse("failed to write prompt file: %v", err)
 	}
 
 	// Copy hooks config
@@ -1644,7 +1626,7 @@ func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
 		if agentClass != "persistent" {
 			wt.Remove(worktreePath, true)
 		}
-		return socket.Response{Success: false, Error: fmt.Sprintf("failed to start agent: %v", err)}
+		return socket.ErrorResponse("failed to start agent: %v", err)
 	}
 
 	// Update task if provided
@@ -1656,15 +1638,12 @@ func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
 
 	d.logger.Info("Spawned agent %s/%s (class=%s, type=%s)", repoName, agentName, agentClass, agentType)
 
-	return socket.Response{
-		Success: true,
-		Data: map[string]interface{}{
-			"name":          agentName,
-			"class":         agentClass,
-			"type":          string(agentType),
-			"worktree_path": worktreePath,
-		},
-	}
+	return socket.SuccessResponse(map[string]interface{}{
+		"name":          agentName,
+		"class":         agentClass,
+		"type":          string(agentType),
+		"worktree_path": worktreePath,
+	})
 }
 
 // cleanupOrphanedWorktrees removes worktree directories without git tracking
