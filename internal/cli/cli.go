@@ -23,6 +23,7 @@ import (
 	"github.com/dlorenc/multiclaude/internal/messages"
 	"github.com/dlorenc/multiclaude/internal/names"
 	"github.com/dlorenc/multiclaude/internal/prompts"
+	"github.com/dlorenc/multiclaude/internal/provider"
 	"github.com/dlorenc/multiclaude/internal/socket"
 	"github.com/dlorenc/multiclaude/internal/state"
 	"github.com/dlorenc/multiclaude/internal/templates"
@@ -197,6 +198,22 @@ func sanitizeTmuxSessionName(repoName string) string {
 		return r
 	}, repoName)
 	return fmt.Sprintf("mc-%s", tmuxSanitizer.Replace(sanitized))
+}
+
+// extractRepoNameFromPath extracts the repository name from a local file path.
+// Used for testing scenarios where a local git repo is used instead of a URL.
+func extractRepoNameFromPath(path string) string {
+	// Remove file:// prefix if present
+	path = strings.TrimPrefix(path, "file://")
+	// Remove trailing slashes and .git suffix
+	path = strings.TrimRight(path, "/")
+	path = strings.TrimSuffix(path, ".git")
+	// Get the last component of the path
+	parts := strings.Split(path, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return path
 }
 
 // Execute executes the CLI with the given arguments
@@ -1026,24 +1043,48 @@ func (c *CLI) initRepo(args []string) error {
 	flags, posArgs := ParseFlags(args)
 
 	if len(posArgs) < 1 {
-		return errors.InvalidUsage("usage: multiclaude init <github-url> [name] [--no-merge-queue] [--mq-track=all|author|assigned]")
+		return errors.InvalidUsage("usage: multiclaude init <repo-url> [name] [--no-merge-queue] [--mq-track=all|author|assigned]")
 	}
 
-	githubURL := strings.TrimRight(posArgs[0], "/")
+	repoURL := strings.TrimRight(posArgs[0], "/")
+
+	// Detect provider from URL - try provider detection first
+	repoInfo, err := fork.ParseRepoURL(repoURL)
+
+	// If provider detection fails, check if it's a local path (for testing)
+	// or fall back to legacy behavior for backward compatibility
+	var githubURL string
+	if err != nil {
+		// Check if it looks like a local path
+		if strings.HasPrefix(repoURL, "/") || strings.HasPrefix(repoURL, ".") || strings.HasPrefix(repoURL, "file://") {
+			// Local path - used for testing, default to GitHub provider
+			githubURL = repoURL
+			repoInfo = &provider.RepoInfo{
+				Provider: provider.TypeGitHub,
+				Repo:     extractRepoNameFromPath(repoURL),
+			}
+		} else {
+			return errors.InvalidUsage(fmt.Sprintf("unsupported repository URL: %s\nSupported providers: GitHub, Azure DevOps", repoURL))
+		}
+	} else {
+		// Use the normalized clone URL
+		githubURL = repoInfo.CloneURL
+	}
+
+	// Validate provider-specific requirements
+	if repoInfo.Provider == provider.TypeAzureDevOps {
+		if err := provider.ValidatePAT(); err != nil {
+			return fmt.Errorf("azure DevOps requires authentication: %w", err)
+		}
+	}
 
 	// Parse repository name from URL if not provided
 	var repoName string
 	if len(posArgs) >= 2 {
 		repoName = posArgs[1]
 	} else {
-		// Extract repo name from URL (e.g., github.com/user/repo -> repo)
-		// A valid GitHub URL has format: https://github.com/owner/repo
-		// When split by "/": ["https:", "", "github.com", "owner", "repo"] - 5+ parts
-		parts := strings.Split(githubURL, "/")
-		if len(parts) < 5 {
-			return errors.InvalidUsage("could not determine repository name from URL; please provide a name: multiclaude init <url> <name>")
-		}
-		repoName = strings.TrimSuffix(parts[len(parts)-1], ".git")
+		// Use the parsed repo name from the provider
+		repoName = repoInfo.Repo
 	}
 
 	// Validate repository name before any operations
@@ -1073,7 +1114,8 @@ func (c *CLI) initRepo(args []string) error {
 	}
 
 	fmt.Printf("Initializing repository: %s\n", repoName)
-	fmt.Printf("GitHub URL: %s\n", githubURL)
+	fmt.Printf("Provider: %s\n", repoInfo.Provider)
+	fmt.Printf("Repository URL: %s\n", githubURL)
 	if mqEnabled {
 		fmt.Printf("Merge queue: enabled (tracking: %s)\n", mqTrackMode)
 	} else {
@@ -1082,7 +1124,7 @@ func (c *CLI) initRepo(args []string) error {
 
 	// Check if daemon is running
 	client := socket.NewClient(c.paths.DaemonSock)
-	_, err := client.Send(socket.Request{Command: "ping"})
+	_, err = client.Send(socket.Request{Command: "ping"})
 	if err != nil {
 		return errors.DaemonNotRunning()
 	}
@@ -1112,8 +1154,19 @@ func (c *CLI) initRepo(args []string) error {
 		return errors.GitOperationFailed("clone", err)
 	}
 
-	// Detect if this is a fork
-	forkInfo, err := fork.DetectFork(repoPath)
+	// Detect if this is a fork using provider-aware detection
+	var forkInfo *fork.ForkInfo
+	prov, provErr := provider.GetProvider(repoInfo.Provider)
+	if provErr == nil {
+		// Use provider-specific configuration for ADO
+		if repoInfo.Provider == provider.TypeAzureDevOps {
+			prov = provider.NewAzureDevOpsWithConfig(repoInfo.Owner, repoInfo.Project, repoInfo.Repo)
+		}
+		forkInfo, err = fork.DetectForkWithProvider(repoPath, prov)
+	} else {
+		// Fallback to basic detection
+		forkInfo, err = fork.DetectFork(repoPath)
+	}
 	if err != nil {
 		fmt.Printf("Warning: Failed to detect fork status: %v\n", err)
 		forkInfo = &fork.ForkInfo{IsFork: false}
@@ -1282,7 +1335,12 @@ func (c *CLI) initRepo(args []string) error {
 	// Add repository to daemon state (with merge queue and fork config)
 	addRepoArgs := map[string]interface{}{
 		"name":          repoName,
-		"github_url":    githubURL,
+		"github_url":    githubURL, // Keep for backward compatibility
+		"repo_url":      githubURL, // New field
+		"provider":      string(repoInfo.Provider),
+		"provider_org":  repoInfo.Owner,
+		"provider_proj": repoInfo.Project,
+		"provider_repo": repoInfo.Repo,
 		"tmux_session":  tmuxSession,
 		"mq_enabled":    mqConfig.Enabled,
 		"mq_track_mode": string(mqConfig.TrackMode),
@@ -2094,6 +2152,9 @@ func (c *CLI) createWorker(args []string) error {
 			"name": repoName,
 		},
 	})
+	// Extract provider info from daemon response
+	var providerType state.ProviderType
+	var providerConfig *state.ProviderConfig
 	if err == nil && configResp.Success {
 		if configMap, ok := configResp.Data.(map[string]interface{}); ok {
 			if isFork, ok := configMap["is_fork"].(bool); ok && isFork {
@@ -2102,12 +2163,25 @@ func (c *CLI) createWorker(args []string) error {
 				forkConfig.UpstreamOwner, _ = configMap["upstream_owner"].(string)
 				forkConfig.UpstreamRepo, _ = configMap["upstream_repo"].(string)
 			}
+			// Extract provider type
+			if provider, ok := configMap["provider"].(string); ok {
+				providerType = state.ProviderType(provider)
+			}
+			// Extract provider config (for Azure DevOps repos)
+			if provConfigMap, ok := configMap["provider_config"].(map[string]interface{}); ok {
+				providerConfig = &state.ProviderConfig{}
+				providerConfig.Organization, _ = provConfigMap["organization"].(string)
+				providerConfig.Project, _ = provConfigMap["project"].(string)
+				providerConfig.RepoName, _ = provConfigMap["repo_name"].(string)
+			}
 		}
 	}
 
-	// Write prompt file for worker (with push-to config and fork config if applicable)
+	// Write prompt file for worker (with push-to config, fork config, and provider config if applicable)
 	workerConfig := WorkerConfig{
-		ForkConfig: forkConfig,
+		ForkConfig:     forkConfig,
+		ProviderType:   providerType,
+		ProviderConfig: providerConfig,
 	}
 	if hasPushTo {
 		workerConfig.PushToBranch = pushTo
@@ -5359,8 +5433,10 @@ func (c *CLI) writePRShepherdPromptFile(repoPath string, agentName string, psCon
 
 // WorkerConfig holds configuration for creating worker prompts
 type WorkerConfig struct {
-	PushToBranch string           // Branch to push to instead of creating a new PR (for iterating on existing PRs)
-	ForkConfig   state.ForkConfig // Fork configuration (if working in a fork)
+	PushToBranch   string                // Branch to push to instead of creating a new PR (for iterating on existing PRs)
+	ForkConfig     state.ForkConfig      // Fork configuration (if working in a fork)
+	ProviderType   state.ProviderType    // Git hosting provider type (github or ado)
+	ProviderConfig *state.ProviderConfig // Provider-specific configuration (for Azure DevOps)
 }
 
 // writeWorkerPromptFile writes a worker prompt file with optional configuration.
@@ -5376,14 +5452,22 @@ func (c *CLI) writeWorkerPromptFile(repoPath string, agentName string, config Wo
 	// Add CLI documentation and slash commands
 	promptText = c.appendDocsAndSlashCommands(promptText)
 
+	// Add provider-specific information if Azure DevOps (GitHub is assumed default)
+	if config.ProviderType == state.ProviderAzureDevOps && config.ProviderConfig != nil {
+		providerPrompt := prompts.GenerateProviderInfoPrompt(config.ProviderType, config.ProviderConfig)
+		promptText = providerPrompt + "\n---\n\n" + promptText
+	}
+
 	// Add fork workflow context if working in a fork
 	if config.ForkConfig.IsFork {
-		// Get the fork owner from the GitHub URL
+		// Get the fork owner from the repo URL
 		forkOwner := c.extractOwnerFromGitHubURL(repoPath)
-		forkWorkflow := prompts.GenerateForkWorkflowPrompt(
+		forkWorkflow := prompts.GenerateForkWorkflowPromptWithProvider(
 			config.ForkConfig.UpstreamOwner,
 			config.ForkConfig.UpstreamRepo,
 			forkOwner,
+			config.ProviderType,
+			config.ProviderConfig,
 		)
 		promptText = forkWorkflow + "\n---\n\n" + promptText
 	}
@@ -5544,9 +5628,10 @@ func (c *CLI) deleteBranch(repoPath, branch string) error {
 	return cmd.Run()
 }
 
-// extractOwnerFromGitHubURL extracts the owner from a repository's origin URL.
+// extractOwnerFromRepoURL extracts the owner from a repository's origin URL.
 // It first tries to get the origin URL from git remote, then parses it.
-func (c *CLI) extractOwnerFromGitHubURL(repoPath string) string {
+// Works with both GitHub and Azure DevOps URLs.
+func (c *CLI) extractOwnerFromRepoURL(repoPath string) string {
 	cmd := exec.Command("git", "remote", "get-url", "origin")
 	cmd.Dir = repoPath
 	output, err := cmd.Output()
@@ -5555,9 +5640,16 @@ func (c *CLI) extractOwnerFromGitHubURL(repoPath string) string {
 	}
 
 	originURL := strings.TrimSpace(string(output))
-	owner, _, err := fork.ParseGitHubURL(originURL)
+	// Use provider-aware URL parsing
+	repoInfo, err := provider.ParseURL(originURL)
 	if err != nil {
 		return ""
 	}
-	return owner
+	return repoInfo.Owner
+}
+
+// extractOwnerFromGitHubURL is deprecated, use extractOwnerFromRepoURL instead.
+// Kept for backwards compatibility.
+func (c *CLI) extractOwnerFromGitHubURL(repoPath string) string {
+	return c.extractOwnerFromRepoURL(repoPath)
 }

@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+
+	"github.com/dlorenc/multiclaude/internal/provider"
 )
 
 // ForkInfo contains information about whether a repository is a fork
@@ -173,4 +175,47 @@ func AddUpstreamRemote(repoPath, upstreamURL string) error {
 func HasUpstreamRemote(repoPath string) bool {
 	_, err := getRemoteURL(repoPath, "upstream")
 	return err == nil
+}
+
+// DetectForkWithProvider analyzes a git repository using the specified provider.
+// This is the preferred method when the provider type is known.
+func DetectForkWithProvider(repoPath string, prov provider.Provider) (*ForkInfo, error) {
+	provForkInfo, err := prov.DetectFork(repoPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get origin remote URL for additional info
+	originURL, _ := getRemoteURL(repoPath, "origin")
+	repoInfo, _ := prov.ParseURL(originURL)
+
+	info := &ForkInfo{
+		IsFork:    provForkInfo.IsFork,
+		OriginURL: originURL,
+	}
+
+	if repoInfo != nil {
+		info.OriginOwner = repoInfo.Owner
+		info.OriginRepo = repoInfo.Repo
+	}
+
+	if provForkInfo.IsFork {
+		info.UpstreamURL = provForkInfo.UpstreamURL
+		info.UpstreamOwner = provForkInfo.UpstreamOwner
+		info.UpstreamRepo = provForkInfo.UpstreamRepo
+	}
+
+	return info, nil
+}
+
+// ParseRepoURL parses any supported repository URL and returns repo information.
+// This is a convenience wrapper around provider.ParseURL.
+func ParseRepoURL(url string) (*provider.RepoInfo, error) {
+	return provider.ParseURL(url)
+}
+
+// GetProviderForURL returns the appropriate provider for the given URL.
+// This is a convenience wrapper around provider.GetProviderForURL.
+func GetProviderForURL(url string) (provider.Provider, error) {
+	return provider.GetProviderForURL(url)
 }

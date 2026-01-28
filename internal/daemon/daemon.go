@@ -793,8 +793,43 @@ func (d *Daemon) handleAddRepo(req socket.Request) socket.Response {
 		psConfig.Enabled = true
 	}
 
+	// Parse provider configuration (optional, defaults to GitHub for backward compatibility)
+	var providerType state.ProviderType
+	if prov, ok := req.Args["provider"].(string); ok {
+		providerType = state.ProviderType(prov)
+	}
+
+	var providerConfig *state.ProviderConfig
+	if provOrg, ok := req.Args["provider_org"].(string); ok {
+		if providerConfig == nil {
+			providerConfig = &state.ProviderConfig{}
+		}
+		providerConfig.Organization = provOrg
+	}
+	if provProj, ok := req.Args["provider_proj"].(string); ok {
+		if providerConfig == nil {
+			providerConfig = &state.ProviderConfig{}
+		}
+		providerConfig.Project = provProj
+	}
+	if provRepo, ok := req.Args["provider_repo"].(string); ok {
+		if providerConfig == nil {
+			providerConfig = &state.ProviderConfig{}
+		}
+		providerConfig.RepoName = provRepo
+	}
+
+	// Get repo_url if provided, otherwise fall back to github_url
+	repoURL := githubURL
+	if url, ok := req.Args["repo_url"].(string); ok && url != "" {
+		repoURL = url
+	}
+
 	repo := &state.Repository{
-		GithubURL:        githubURL,
+		RepoURL:          repoURL,
+		GithubURL:        githubURL, // Keep for backward compatibility
+		Provider:         providerType,
+		ProviderConfig:   providerConfig,
 		TmuxSession:      tmuxSession,
 		Agents:           make(map[string]state.Agent),
 		MergeQueueConfig: mqConfig,
@@ -1251,19 +1286,32 @@ func (d *Daemon) handleGetRepoConfig(req socket.Request) socket.Response {
 	// Get fork config
 	forkConfig := repo.ForkConfig
 
+	// Build response data
+	data := map[string]interface{}{
+		"mq_enabled":      mqConfig.Enabled,
+		"mq_track_mode":   string(mqConfig.TrackMode),
+		"ps_enabled":      psConfig.Enabled,
+		"ps_track_mode":   string(psConfig.TrackMode),
+		"is_fork":         forkConfig.IsFork,
+		"upstream_url":    forkConfig.UpstreamURL,
+		"upstream_owner":  forkConfig.UpstreamOwner,
+		"upstream_repo":   forkConfig.UpstreamRepo,
+		"force_fork_mode": forkConfig.ForceForkMode,
+		"provider":        string(repo.GetProvider()),
+	}
+
+	// Add provider config if present (for Azure DevOps repos)
+	if repo.ProviderConfig != nil {
+		data["provider_config"] = map[string]interface{}{
+			"organization": repo.ProviderConfig.Organization,
+			"project":      repo.ProviderConfig.Project,
+			"repo_name":    repo.ProviderConfig.RepoName,
+		}
+	}
+
 	return socket.Response{
 		Success: true,
-		Data: map[string]interface{}{
-			"mq_enabled":      mqConfig.Enabled,
-			"mq_track_mode":   string(mqConfig.TrackMode),
-			"ps_enabled":      psConfig.Enabled,
-			"ps_track_mode":   string(psConfig.TrackMode),
-			"is_fork":         forkConfig.IsFork,
-			"upstream_url":    forkConfig.UpstreamURL,
-			"upstream_owner":  forkConfig.UpstreamOwner,
-			"upstream_repo":   forkConfig.UpstreamRepo,
-			"force_fork_mode": forkConfig.ForceForkMode,
-		},
+		Data:    data,
 	}
 }
 
@@ -1947,6 +1995,13 @@ func (d *Daemon) sendAgentDefinitionsToSupervisor(repoName, repoPath string, mqC
 		}
 	}
 
+	// Add provider-specific information if Azure DevOps (GitHub is assumed default)
+	if repo.Provider == state.ProviderAzureDevOps && repo.ProviderConfig != nil {
+		providerPrompt := prompts.GenerateProviderInfoPrompt(repo.Provider, repo.ProviderConfig)
+		sb.WriteString(providerPrompt)
+		sb.WriteString("\n\n")
+	}
+
 	for i, def := range definitions {
 		// Skip merge-queue definition in fork mode
 		if isForkMode && def.Name == "merge-queue" {
@@ -1961,18 +2016,22 @@ func (d *Daemon) sendAgentDefinitionsToSupervisor(repoName, repoPath string, mqC
 
 		// For merge-queue, prepend the tracking mode configuration if enabled
 		if def.Name == "merge-queue" && mqConfig.Enabled {
-			trackModePrompt := prompts.GenerateTrackingModePrompt(string(mqConfig.TrackMode))
+			trackModePrompt := prompts.GenerateTrackingModePromptWithProvider(
+				string(mqConfig.TrackMode), repo.Provider, repo.ProviderConfig)
 			sb.WriteString(trackModePrompt)
 			sb.WriteString("\n\n")
 		}
 
 		// For pr-shepherd, prepend the tracking mode configuration if enabled
 		if def.Name == "pr-shepherd" && psConfig.Enabled {
-			trackModePrompt := prompts.GenerateTrackingModePrompt(string(psConfig.TrackMode))
+			trackModePrompt := prompts.GenerateTrackingModePromptWithProvider(
+				string(psConfig.TrackMode), repo.Provider, repo.ProviderConfig)
 			sb.WriteString(trackModePrompt)
 			sb.WriteString("\n\n")
 			// Also add fork workflow context
-			forkPrompt := prompts.GenerateForkWorkflowPrompt(forkConfig.UpstreamOwner, forkConfig.UpstreamRepo, forkConfig.UpstreamOwner)
+			forkPrompt := prompts.GenerateForkWorkflowPromptWithProvider(
+				forkConfig.UpstreamOwner, forkConfig.UpstreamRepo, forkConfig.UpstreamOwner,
+				repo.Provider, repo.ProviderConfig)
 			sb.WriteString(forkPrompt)
 			sb.WriteString("\n\n")
 		}

@@ -9,6 +9,26 @@ import (
 	"time"
 )
 
+// ProviderType represents the type of git hosting provider.
+type ProviderType string
+
+const (
+	// ProviderGitHub represents GitHub as the git hosting provider.
+	ProviderGitHub ProviderType = "github"
+	// ProviderAzureDevOps represents Azure DevOps as the git hosting provider.
+	ProviderAzureDevOps ProviderType = "ado"
+)
+
+// ProviderConfig holds provider-specific configuration for a repository.
+type ProviderConfig struct {
+	// Organization is the org (GitHub) or ADO organization.
+	Organization string `json:"organization,omitempty"`
+	// Project is the ADO project name (empty for GitHub).
+	Project string `json:"project,omitempty"`
+	// RepoName is the repository name.
+	RepoName string `json:"repo_name,omitempty"`
+}
+
 // AgentType represents the type of agent
 type AgentType string
 
@@ -157,7 +177,15 @@ type Agent struct {
 
 // Repository represents a tracked repository's state
 type Repository struct {
-	GithubURL        string             `json:"github_url"`
+	// RepoURL is the primary repository URL (generic, supports any provider).
+	RepoURL string `json:"repo_url,omitempty"`
+	// GithubURL is deprecated, kept for backward compatibility. Use RepoURL instead.
+	GithubURL string `json:"github_url,omitempty"`
+	// Provider is the git hosting provider type ("github" or "ado").
+	Provider ProviderType `json:"provider,omitempty"`
+	// ProviderConfig holds provider-specific configuration.
+	ProviderConfig *ProviderConfig `json:"provider_config,omitempty"`
+
 	TmuxSession      string             `json:"tmux_session"`
 	Agents           map[string]Agent   `json:"agents"`
 	TaskHistory      []TaskHistoryEntry `json:"task_history,omitempty"`
@@ -165,6 +193,23 @@ type Repository struct {
 	PRShepherdConfig PRShepherdConfig   `json:"pr_shepherd_config,omitempty"`
 	ForkConfig       ForkConfig         `json:"fork_config,omitempty"`
 	TargetBranch     string             `json:"target_branch,omitempty"` // Default branch for PRs (usually "main")
+}
+
+// GetRepoURL returns the repository URL, handling backward compatibility.
+func (r *Repository) GetRepoURL() string {
+	if r.RepoURL != "" {
+		return r.RepoURL
+	}
+	return r.GithubURL
+}
+
+// GetProvider returns the provider type, defaulting to GitHub for backward compatibility.
+func (r *Repository) GetProvider() ProviderType {
+	if r.Provider != "" {
+		return r.Provider
+	}
+	// Default to GitHub for backward compatibility
+	return ProviderGitHub
 }
 
 // State represents the entire daemon state
@@ -361,13 +406,23 @@ func (s *State) GetAllRepos() map[string]*Repository {
 	for name, repo := range s.Repos {
 		// Copy the repository
 		repoCopy := &Repository{
+			RepoURL:          repo.RepoURL,
 			GithubURL:        repo.GithubURL,
+			Provider:         repo.Provider,
 			TmuxSession:      repo.TmuxSession,
 			Agents:           make(map[string]Agent, len(repo.Agents)),
 			MergeQueueConfig: repo.MergeQueueConfig,
 			PRShepherdConfig: repo.PRShepherdConfig,
 			ForkConfig:       repo.ForkConfig,
 			TargetBranch:     repo.TargetBranch,
+		}
+		// Copy provider config if present
+		if repo.ProviderConfig != nil {
+			repoCopy.ProviderConfig = &ProviderConfig{
+				Organization: repo.ProviderConfig.Organization,
+				Project:      repo.ProviderConfig.Project,
+				RepoName:     repo.ProviderConfig.RepoName,
+			}
 		}
 		// Copy agents
 		for agentName, agent := range repo.Agents {
