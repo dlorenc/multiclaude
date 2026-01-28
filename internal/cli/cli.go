@@ -1082,8 +1082,7 @@ func (c *CLI) initRepo(args []string) error {
 
 	// Check if daemon is running
 	client := socket.NewClient(c.paths.DaemonSock)
-	_, err := client.Send(socket.Request{Command: "ping"})
-	if err != nil {
+	if _, err := client.Send(socket.Request{Command: "ping"}); err != nil {
 		return errors.DaemonNotRunning()
 	}
 
@@ -1094,6 +1093,22 @@ func (c *CLI) initRepo(args []string) error {
 	}
 	if _, exists := st.GetRepo(repoName); exists {
 		return fmt.Errorf("repository '%s' is already initialized\nUse 'multiclaude repo rm %s' to remove it first, or choose a different name", repoName, repoName)
+	}
+
+	// Check if tmux session already exists (stale session from previous incomplete init)
+	tmuxSession := sanitizeTmuxSessionName(repoName)
+	if tmuxSession == "mc-" {
+		return fmt.Errorf("invalid tmux session name: repository name cannot be empty")
+	}
+	tmuxClient := tmux.NewClient()
+	if exists, err := tmuxClient.HasSession(context.Background(), tmuxSession); err == nil && exists {
+		fmt.Printf("Warning: Tmux session '%s' already exists\n", tmuxSession)
+		fmt.Printf("This may be from a previous incomplete initialization.\n")
+		fmt.Printf("Auto-repairing: killing existing tmux session...\n")
+		if err := tmuxClient.KillSession(context.Background(), tmuxSession); err != nil {
+			return fmt.Errorf("failed to clean up existing tmux session: %w\nPlease manually kill it with: tmux kill-session -t %s", err, tmuxSession)
+		}
+		fmt.Println("✓ Cleaned up stale tmux session")
 	}
 
 	// Check if repository directory already exists
@@ -1154,18 +1169,7 @@ func (c *CLI) initRepo(args []string) error {
 		return fmt.Errorf("failed to copy agent templates: %w", err)
 	}
 
-	// Create tmux session
-	tmuxSession := sanitizeTmuxSessionName(repoName)
-	if tmuxSession == "mc-" {
-		return fmt.Errorf("invalid tmux session name: repository name cannot be empty")
-	}
-
-	// Check if tmux session already exists
-	checkCmd := exec.Command("tmux", "has-session", "-t", tmuxSession)
-	if checkCmd.Run() == nil {
-		return fmt.Errorf("tmux session '%s' already exists\nKill it with 'tmux kill-session -t %s' or use 'multiclaude repo rm %s'", tmuxSession, tmuxSession, repoName)
-	}
-
+	// Create tmux session (tmuxSession already defined and validated earlier)
 	fmt.Printf("Creating tmux session: %s\n", tmuxSession)
 
 	// Create session with supervisor window
@@ -2930,6 +2934,17 @@ func (c *CLI) addWorkspace(args []string) error {
 	wtPath := c.paths.AgentWorktree(repoName, workspaceName)
 	branchName := fmt.Sprintf("workspace/%s", workspaceName)
 
+	// Check if worktree path already exists (from previous incomplete workspace add)
+	if _, err := os.Stat(wtPath); err == nil {
+		fmt.Printf("Warning: Worktree path '%s' already exists\n", wtPath)
+		fmt.Printf("This may be from a previous incomplete workspace creation.\n")
+		fmt.Printf("Auto-repairing: removing existing worktree...\n")
+		if err := wt.Remove(wtPath, true); err != nil {
+			return fmt.Errorf("failed to clean up existing worktree: %w\nPlease manually remove it with: git worktree remove %s", err, wtPath)
+		}
+		fmt.Println("✓ Cleaned up stale worktree")
+	}
+
 	fmt.Printf("Creating worktree at: %s\n", wtPath)
 	if err := wt.CreateNewBranch(wtPath, branchName, startBranch); err != nil {
 		return errors.WorktreeCreationFailed(err)
@@ -2937,6 +2952,18 @@ func (c *CLI) addWorkspace(args []string) error {
 
 	// Get tmux session name
 	tmuxSession := sanitizeTmuxSessionName(repoName)
+
+	// Check if tmux window already exists (stale window from previous incomplete workspace add)
+	tmuxClient := tmux.NewClient()
+	if exists, err := tmuxClient.HasWindow(context.Background(), tmuxSession, workspaceName); err == nil && exists {
+		fmt.Printf("Warning: Tmux window '%s' already exists in session '%s'\n", workspaceName, tmuxSession)
+		fmt.Printf("This may be from a previous incomplete workspace creation.\n")
+		fmt.Printf("Auto-repairing: killing existing tmux window...\n")
+		if err := tmuxClient.KillWindow(context.Background(), tmuxSession, workspaceName); err != nil {
+			return fmt.Errorf("failed to clean up existing tmux window: %w\nPlease manually kill it with: tmux kill-window -t %s:%s", err, tmuxSession, workspaceName)
+		}
+		fmt.Println("✓ Cleaned up stale tmux window")
+	}
 
 	// Create tmux window for workspace (detached so it doesn't switch focus)
 	fmt.Printf("Creating tmux window: %s\n", workspaceName)
