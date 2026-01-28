@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/dlorenc/multiclaude/internal/agents"
@@ -5493,6 +5494,7 @@ func (c *CLI) localRepair(verbose bool) error {
 }
 
 // restartClaude restarts Claude in the current agent context.
+// It checks if Claude is already running and provides helpful error messages if so.
 // It auto-detects whether to use --resume or --session-id based on session history.
 func (c *CLI) restartClaude(args []string) error {
 	// Infer agent context from cwd
@@ -5514,6 +5516,41 @@ func (c *CLI) restartClaude(args []string) error {
 
 	if agent.SessionID == "" {
 		return fmt.Errorf("agent has no session ID - try removing and recreating the agent")
+	}
+
+	// Check if Claude is already running
+	if agent.PID > 0 {
+		// Check if the process is still alive
+		process, err := os.FindProcess(agent.PID)
+		if err == nil {
+			// Send signal 0 to check if process exists (doesn't actually signal, just checks)
+			err = process.Signal(syscall.Signal(0))
+			if err == nil {
+				// Process is still running - provide helpful error
+				return fmt.Errorf("Claude is already running (PID %d) in this context.\n\nTo restart:\n  1. Exit Claude first (Ctrl+D or /exit)\n  2. Then run 'multiclaude claude' again\n\nOr attach to the running session:\n  multiclaude attach %s", agent.PID, agentName)
+			}
+		}
+	}
+
+	// Get repo for tmux session info
+	repo, exists := st.GetRepo(repoName)
+	if !exists {
+		return fmt.Errorf("repo '%s' not found in state", repoName)
+	}
+
+	// Double-check: get the current PID in the tmux pane to detect any running process
+	tmuxClient := tmux.NewClient()
+	currentPID, err := tmuxClient.GetPanePID(context.Background(), repo.TmuxSession, agent.TmuxWindow)
+	if err == nil && currentPID > 0 {
+		// Check if this PID is alive and different from what we checked above
+		if currentPID != agent.PID {
+			if process, err := os.FindProcess(currentPID); err == nil {
+				if err := process.Signal(syscall.Signal(0)); err == nil {
+					// There's a different running process in the pane
+					return fmt.Errorf("A process (PID %d) is already running in this tmux pane.\n\nTo restart:\n  1. Exit the current process first\n  2. Then run 'multiclaude claude' again\n\nOr attach to view:\n  multiclaude attach %s", currentPID, agentName)
+				}
+			}
+		}
 	}
 
 	// Get the prompt file path (stored as ~/.multiclaude/prompts/<agent-name>.md)
