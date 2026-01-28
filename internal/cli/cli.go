@@ -1087,8 +1087,22 @@ func (c *CLI) initRepo(args []string) error {
 		return errors.DaemonNotRunning()
 	}
 
-	// Clone repository
+	// Check if repository is already initialized
+	st, err := state.Load(c.paths.StateFile)
+	if err != nil {
+		return fmt.Errorf("failed to load state: %w", err)
+	}
+	if _, exists := st.GetRepo(repoName); exists {
+		return fmt.Errorf("repository '%s' is already initialized\nUse 'multiclaude repo rm %s' to remove it first, or choose a different name", repoName, repoName)
+	}
+
+	// Check if repository directory already exists
 	repoPath := c.paths.RepoDir(repoName)
+	if _, err := os.Stat(repoPath); err == nil {
+		return fmt.Errorf("directory already exists: %s\nRemove it manually or choose a different name", repoPath)
+	}
+
+	// Clone repository
 	fmt.Printf("Cloning to: %s\n", repoPath)
 
 	cmd := exec.Command("git", "clone", githubURL, repoPath)
@@ -1144,6 +1158,12 @@ func (c *CLI) initRepo(args []string) error {
 	tmuxSession := sanitizeTmuxSessionName(repoName)
 	if tmuxSession == "mc-" {
 		return fmt.Errorf("invalid tmux session name: repository name cannot be empty")
+	}
+
+	// Check if tmux session already exists
+	checkCmd := exec.Command("tmux", "has-session", "-t", tmuxSession)
+	if checkCmd.Run() == nil {
+		return fmt.Errorf("tmux session '%s' already exists\nKill it with 'tmux kill-session -t %s' or use 'multiclaude repo rm %s'", tmuxSession, tmuxSession, repoName)
 	}
 
 	fmt.Printf("Creating tmux session: %s\n", tmuxSession)

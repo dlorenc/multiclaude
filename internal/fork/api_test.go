@@ -305,11 +305,13 @@ func TestParseGitHubURL_EdgeCases(t *testing.T) {
 			wantRepo:  "repo",
 			wantErr:   false,
 		},
-		// The current regex doesn't match dots in repo names
+		// Dots in repo names are now supported
 		{
-			name:    "dots in repo name - current impl returns error",
-			url:     "https://github.com/owner/my.dotted.repo",
-			wantErr: true,
+			name:      "dots in repo name",
+			url:       "https://github.com/owner/my.dotted.repo",
+			wantOwner: "owner",
+			wantRepo:  "my.dotted.repo",
+			wantErr:   false,
 		},
 	}
 

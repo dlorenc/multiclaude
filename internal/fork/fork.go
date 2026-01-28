@@ -104,13 +104,15 @@ func getRemoteURL(repoPath, remoteName string) (string, error) {
 // - git@github.com:owner/repo
 func ParseGitHubURL(url string) (owner, repo string, err error) {
 	// HTTPS format: https://github.com/owner/repo(.git)?
-	httpsRegex := regexp.MustCompile(`^https://github\.com/([^/]+)/([^/.]+)(?:\.git)?$`)
+	// Note: repo name can contain dots (e.g., demos.expanso.io)
+	httpsRegex := regexp.MustCompile(`^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?$`)
 	if matches := httpsRegex.FindStringSubmatch(url); matches != nil {
 		return matches[1], matches[2], nil
 	}
 
 	// SSH format: git@github.com:owner/repo(.git)?
-	sshRegex := regexp.MustCompile(`^git@github\.com:([^/]+)/([^/.]+)(?:\.git)?$`)
+	// Note: repo name can contain dots (e.g., demos.expanso.io)
+	sshRegex := regexp.MustCompile(`^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$`)
 	if matches := sshRegex.FindStringSubmatch(url); matches != nil {
 		return matches[1], matches[2], nil
 	}
