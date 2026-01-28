@@ -39,6 +39,7 @@ func setupTestDaemon(t *testing.T) (*Daemon, func()) {
 		MessagesDir:     filepath.Join(tmpDir, "messages"),
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
+		ArchiveDir:      filepath.Join(tmpDir, "archive"),
 	}
 
 	// Create directories

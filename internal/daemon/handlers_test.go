@@ -33,6 +33,7 @@ func setupTestDaemonWithState(t *testing.T, setupFn func(*state.State)) (*Daemon
 		MessagesDir:     filepath.Join(tmpDir, "messages"),
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
+		ArchiveDir:      filepath.Join(tmpDir, "archive"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {

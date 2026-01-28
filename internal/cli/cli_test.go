@@ -316,6 +316,7 @@ func setupTestEnvironment(t *testing.T) (*CLI, *daemon.Daemon, func()) {
 		MessagesDir:     filepath.Join(tmpDir, "messages"),
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
+		ArchiveDir:      filepath.Join(tmpDir, "archive"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -662,6 +663,7 @@ func TestCLISendMessageFallbackWhenDaemonUnavailable(t *testing.T) {
 		MessagesDir:     filepath.Join(tmpDir, "messages"),
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
+		ArchiveDir:      filepath.Join(tmpDir, "archive"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -1044,6 +1046,7 @@ func TestNewWithPaths(t *testing.T) {
 		MessagesDir:     filepath.Join(tmpDir, "messages"),
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
+		ArchiveDir:      filepath.Join(tmpDir, "archive"),
 	}
 
 	// Test CLI creation

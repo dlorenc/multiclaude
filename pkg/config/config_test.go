@@ -60,6 +60,7 @@ func TestEnsureDirectories(t *testing.T) {
 		MessagesDir:     filepath.Join(tmpDir, "test-multiclaude", "messages"),
 		OutputDir:       filepath.Join(tmpDir, "test-multiclaude", "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "test-multiclaude", "claude-config"),
+		ArchiveDir:      filepath.Join(tmpDir, "test-multiclaude", "archive"),
 	}
 
 	if err := paths.EnsureDirectories(); err != nil {
@@ -67,7 +68,7 @@ func TestEnsureDirectories(t *testing.T) {
 	}
 
 	// Verify directories were created
-	dirs := []string{paths.Root, paths.ReposDir, paths.WorktreesDir, paths.MessagesDir, paths.OutputDir, paths.ClaudeConfigDir}
+	dirs := []string{paths.Root, paths.ReposDir, paths.WorktreesDir, paths.MessagesDir, paths.OutputDir, paths.ClaudeConfigDir, paths.ArchiveDir}
 	for _, dir := range dirs {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			t.Errorf("Directory not created: %s", dir)

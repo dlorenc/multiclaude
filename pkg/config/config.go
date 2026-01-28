@@ -19,6 +19,7 @@ type Paths struct {
 	MessagesDir     string // messages/
 	OutputDir       string // output/
 	ClaudeConfigDir string // claude-config/
+	ArchiveDir      string // archive/ (for paused work)
 }
 
 // DefaultPaths returns the default paths for multiclaude
@@ -41,6 +42,7 @@ func DefaultPaths() (*Paths, error) {
 		MessagesDir:     filepath.Join(root, "messages"),
 		OutputDir:       filepath.Join(root, "output"),
 		ClaudeConfigDir: filepath.Join(root, "claude-config"),
+		ArchiveDir:      filepath.Join(root, "archive"),
 	}, nil
 }
 
@@ -53,6 +55,7 @@ func (p *Paths) EnsureDirectories() error {
 		p.MessagesDir,
 		p.OutputDir,
 		p.ClaudeConfigDir,
+		p.ArchiveDir,
 	}
 
 	for _, dir := range dirs {
@@ -138,5 +141,11 @@ func NewTestPaths(tmpDir string) *Paths {
 		MessagesDir:     filepath.Join(tmpDir, "messages"),
 		OutputDir:       filepath.Join(tmpDir, "output"),
 		ClaudeConfigDir: filepath.Join(tmpDir, "claude-config"),
+		ArchiveDir:      filepath.Join(tmpDir, "archive"),
 	}
+}
+
+// RepoArchiveDir returns the path for a repository's archived work
+func (p *Paths) RepoArchiveDir(repoName string) string {
+	return filepath.Join(p.ArchiveDir, repoName)
 }

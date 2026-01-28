@@ -426,6 +426,13 @@ func (c *CLI) registerCommands() {
 		Run:         c.showHistory,
 	}
 
+	repoCmd.Subcommands["hibernate"] = &Command{
+		Name:        "hibernate",
+		Description: "Hibernate a repository, archiving uncommitted changes",
+		Usage:       "multiclaude repo hibernate [--repo <repo>] [--all] [--yes]",
+		Run:         c.hibernateRepo,
+	}
+
 	c.rootCmd.Subcommands["repo"] = repoCmd
 
 	// Backward compatibility aliases for root-level repo commands
@@ -2856,6 +2863,245 @@ func (c *CLI) removeWorker(args []string) error {
 	}
 
 	fmt.Println("✓ Worker removed successfully")
+	return nil
+}
+
+// hibernateRepo stops all work in a repository and archives uncommitted changes
+func (c *CLI) hibernateRepo(args []string) error {
+	flags, _ := ParseFlags(args)
+	skipConfirm := flags["yes"] == "true"
+	hibernateAll := flags["all"] == "true" // Also hibernate persistent agents (supervisor, workspace)
+
+	// Determine repository
+	repoName, err := c.resolveRepo(flags)
+	if err != nil {
+		return errors.NotInRepo()
+	}
+
+	// Get agent list from daemon
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "list_agents",
+		Args: map[string]interface{}{
+			"repo": repoName,
+		},
+	})
+	if err != nil {
+		return errors.DaemonCommunicationFailed("getting agent info", err)
+	}
+	if !resp.Success {
+		return errors.Wrap(errors.CategoryRuntime, "failed to get agent info", fmt.Errorf("%s", resp.Error))
+	}
+
+	agents, _ := resp.Data.([]interface{})
+	if len(agents) == 0 {
+		fmt.Printf("No agents running in repository '%s'\n", repoName)
+		return nil
+	}
+
+	// Filter agents to hibernate (workers, review agents; optionally all)
+	var agentsToHibernate []map[string]interface{}
+	var agentsWithChanges []map[string]interface{}
+
+	for _, agent := range agents {
+		agentMap, ok := agent.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		agentType, _ := agentMap["type"].(string)
+		wtPath, _ := agentMap["worktree_path"].(string)
+
+		// Determine if this agent should be hibernated
+		shouldHibernate := false
+		switch agentType {
+		case "worker", "review":
+			shouldHibernate = true
+		case "supervisor", "merge-queue", "pr-shepherd", "workspace", "generic-persistent":
+			shouldHibernate = hibernateAll
+		}
+
+		if !shouldHibernate {
+			continue
+		}
+
+		agentsToHibernate = append(agentsToHibernate, agentMap)
+
+		// Check for uncommitted changes
+		if wtPath != "" {
+			hasUncommitted, err := worktree.HasUncommittedChanges(wtPath)
+			if err == nil && hasUncommitted {
+				agentsWithChanges = append(agentsWithChanges, agentMap)
+			}
+		}
+	}
+
+	if len(agentsToHibernate) == 0 {
+		fmt.Printf("No agents to hibernate in repository '%s'\n", repoName)
+		if !hibernateAll {
+			fmt.Println("Use --all to also hibernate persistent agents (supervisor, workspace, etc.)")
+		}
+		return nil
+	}
+
+	// Show summary and confirm
+	fmt.Printf("Hibernating %d agent(s) in repository '%s':\n", len(agentsToHibernate), repoName)
+	for _, agent := range agentsToHibernate {
+		name, _ := agent["name"].(string)
+		agentType, _ := agent["type"].(string)
+		hasChanges := false
+		for _, changed := range agentsWithChanges {
+			if changed["name"] == name {
+				hasChanges = true
+				break
+			}
+		}
+		changeMarker := ""
+		if hasChanges {
+			changeMarker = " [has uncommitted changes]"
+		}
+		fmt.Printf("  - %s (%s)%s\n", name, agentType, changeMarker)
+	}
+
+	if len(agentsWithChanges) > 0 {
+		fmt.Printf("\n%d agent(s) have uncommitted changes that will be archived.\n", len(agentsWithChanges))
+	}
+
+	if !skipConfirm {
+		fmt.Print("\nContinue? [y/N]: ")
+		var response string
+		fmt.Scanln(&response)
+		if response != "y" && response != "Y" {
+			fmt.Println("Cancelled")
+			return nil
+		}
+	}
+
+	// Create archive directory with timestamp
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	archiveDir := filepath.Join(c.paths.RepoArchiveDir(repoName), timestamp)
+	if len(agentsWithChanges) > 0 {
+		if err := os.MkdirAll(archiveDir, 0755); err != nil {
+			return fmt.Errorf("failed to create archive directory: %w", err)
+		}
+		fmt.Printf("\nArchiving to: %s\n", archiveDir)
+	}
+
+	// Archive uncommitted changes
+	var archivedAgents []string
+	for _, agent := range agentsWithChanges {
+		name, _ := agent["name"].(string)
+		wtPath, _ := agent["worktree_path"].(string)
+		branch, _ := agent["branch"].(string)
+		task, _ := agent["task"].(string)
+
+		fmt.Printf("Archiving changes from %s...\n", name)
+
+		// Create patch file with git diff
+		patchPath := filepath.Join(archiveDir, name+".patch")
+		cmd := exec.Command("git", "diff", "HEAD")
+		cmd.Dir = wtPath
+		output, err := cmd.Output()
+		if err != nil {
+			fmt.Printf("Warning: failed to create patch for %s: %v\n", name, err)
+			continue
+		}
+
+		// Include untracked files in the patch
+		untrackedCmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
+		untrackedCmd.Dir = wtPath
+		untrackedOutput, _ := untrackedCmd.Output()
+
+		// Write patch file
+		if err := os.WriteFile(patchPath, output, 0644); err != nil {
+			fmt.Printf("Warning: failed to write patch for %s: %v\n", name, err)
+			continue
+		}
+
+		// Write untracked files list if any
+		if len(untrackedOutput) > 0 {
+			untrackedPath := filepath.Join(archiveDir, name+".untracked")
+			os.WriteFile(untrackedPath, untrackedOutput, 0644)
+		}
+
+		// Write metadata for this agent
+		metaPath := filepath.Join(archiveDir, name+".json")
+		meta := map[string]interface{}{
+			"name":          name,
+			"type":          agent["type"],
+			"branch":        branch,
+			"task":          task,
+			"worktree_path": wtPath,
+			"archived_at":   time.Now().Format(time.RFC3339),
+		}
+		metaData, _ := json.MarshalIndent(meta, "", "  ")
+		os.WriteFile(metaPath, metaData, 0644)
+
+		archivedAgents = append(archivedAgents, name)
+	}
+
+	// Write summary metadata
+	if len(agentsWithChanges) > 0 {
+		summaryPath := filepath.Join(archiveDir, "hibernate-summary.json")
+		summary := map[string]interface{}{
+			"repo":              repoName,
+			"hibernated_at":     time.Now().Format(time.RFC3339),
+			"agents_hibernated": len(agentsToHibernate),
+			"agents_archived":   archivedAgents,
+		}
+		summaryData, _ := json.MarshalIndent(summary, "", "  ")
+		os.WriteFile(summaryPath, summaryData, 0644)
+	}
+
+	// Stop agents
+	tmuxSession := sanitizeTmuxSessionName(repoName)
+	repoPath := c.paths.RepoDir(repoName)
+	wt := worktree.NewManager(repoPath)
+
+	fmt.Println()
+	for _, agent := range agentsToHibernate {
+		name, _ := agent["name"].(string)
+		wtPath, _ := agent["worktree_path"].(string)
+		tmuxWindow, _ := agent["tmux_window"].(string)
+
+		fmt.Printf("Stopping %s...\n", name)
+
+		// Kill tmux window
+		if tmuxWindow != "" {
+			cmd := exec.Command("tmux", "kill-window", "-t", fmt.Sprintf("%s:%s", tmuxSession, tmuxWindow))
+			cmd.Run() // Ignore errors
+		}
+
+		// Remove worktree (force since we archived changes)
+		if wtPath != "" {
+			if err := wt.Remove(wtPath, true); err != nil {
+				// Try harder with force
+				cmd := exec.Command("git", "worktree", "remove", "--force", wtPath)
+				cmd.Dir = repoPath
+				cmd.Run()
+			}
+		}
+
+		// Unregister from daemon (ignore errors during cleanup)
+		_, _ = client.Send(socket.Request{
+			Command: "remove_agent",
+			Args: map[string]interface{}{
+				"repo":  repoName,
+				"agent": name,
+			},
+		})
+	}
+
+	fmt.Println()
+	fmt.Printf("✓ Hibernated %d agent(s) in '%s'\n", len(agentsToHibernate), repoName)
+	if len(archivedAgents) > 0 {
+		fmt.Printf("✓ Archived %d agent(s) with uncommitted changes to:\n", len(archivedAgents))
+		fmt.Printf("  %s\n", archiveDir)
+		fmt.Println("\nTo restore archived patches:")
+		fmt.Println("  cd <worktree>")
+		fmt.Printf("  git apply %s/<agent>.patch\n", archiveDir)
+	}
+
 	return nil
 }
 
