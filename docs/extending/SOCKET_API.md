@@ -1,154 +1,100 @@
-# Socket API Reference
+# Socket API (Current Implementation)
 
-> **NOTE: COMMAND VERIFICATION NEEDED**
->
-> Not all commands documented here have been verified against the current codebase.
-> Hook-related commands (`get_hook_config`, `update_hook_config`) are **not implemented**
-> as the event hooks system does not exist. Other commands should be verified against
-> `internal/daemon/daemon.go` before use.
+<!-- socket-commands:
+ping
+status
+stop
+list_repos
+add_repo
+remove_repo
+add_agent
+remove_agent
+list_agents
+complete_agent
+restart_agent
+trigger_cleanup
+repair_state
+get_repo_config
+update_repo_config
+set_current_repo
+get_current_repo
+clear_current_repo
+route_messages
+task_history
+spawn_agent
+-->
 
-**Extension Point:** Programmatic control via Unix socket IPC
-
-This guide documents the socket API for building custom control tools, automation scripts, and alternative CLIs. The socket API provides programmatic access to multiclaude state and operations.
-
-## Overview
-
-The multiclaude daemon exposes a Unix socket (`~/.multiclaude/daemon.sock`) for IPC. External tools can:
-- Query daemon status and state
-- Add/remove repositories and agents
-- Trigger operations (cleanup, message routing)
-- Configure hooks and settings
-
-**vs. State File:**
-- **State File**: Read-only monitoring
-- **Socket API**: Full programmatic control
-
-**vs. CLI:**
-- **CLI**: Human-friendly interface (wraps socket API)
-- **Socket API**: Machine-friendly interface (structured JSON)
-
-## Socket Location
-
-```bash
-# Default location
-~/.multiclaude/daemon.sock
-
-# Find programmatically
-multiclaude config --paths | jq -r .socket_path
-```
+The socket API is the only write-capable extension surface in multiclaude today. It is implemented in `internal/daemon/daemon.go` (`handleRequest`). This document tracks only the commands that exist in the code. Anything not listed here is **not implemented**.
 
 ## Protocol
+- Transport: Unix domain socket at `~/.multiclaude/daemon.sock`
+- Request type: JSON object `{ "command": "<name>", "args": { ... } }`
+- Response type: `{ "success": true|false, "data": any, "error": string }`
+- Client helper: `internal/socket.Client`
 
-### Request Format
+## Command Reference (source of truth)
+Each command below matches a `case` in `handleRequest`.
 
-```json
-{
-  "command": "status",
-  "args": {
-    "key": "value"
-  }
-}
-```
+| Command | Description | Args |
+|---------|-------------|------|
+| `ping` | Health check | none |
+| `status` | Daemon status summary | none |
+| `stop` | Stop the daemon | none |
+| `list_repos` | List tracked repos (optionally rich info) | `rich` (bool, optional) |
+| `add_repo` | Track a new repo | `path` (string) |
+| `remove_repo` | Stop tracking a repo | `name` (string) |
+| `add_agent` | Register an agent in state | `repo`, `name`, `type`, `worktree_path`, `tmux_window`, `session_id`, `pid` |
+| `remove_agent` | Remove agent from state | `repo`, `name` |
+| `list_agents` | List agents for a repo | `repo` |
+| `complete_agent` | Mark agent ready for cleanup | `repo`, `name`, `summary`, `failure_reason` |
+| `restart_agent` | Restart a persistent agent | `repo`, `name` |
+| `trigger_cleanup` | Force cleanup cycle | none |
+| `repair_state` | Run state repair routine | none |
+| `get_repo_config` | Get merge-queue / pr-shepherd config | `repo` |
+| `update_repo_config` | Update repo config | `repo`, `config` (JSON object) |
+| `set_current_repo` | Persist current repo selection | `repo` |
+| `get_current_repo` | Read current repo selection | none |
+| `clear_current_repo` | Clear current repo selection | none |
+| `route_messages` | Force message routing cycle | none |
+| `task_history` | Return task history for a repo | `repo` |
+| `spawn_agent` | Create a new agent worktree | `repo`, `type`, `task`, `name` (optional) |
 
-**Fields:**
-- `command` (string, required): Command name (see Command Reference)
-- `args` (object, optional): Command-specific arguments
-
-### Response Format
-
-```json
-{
-  "success": true,
-  "data": { /* command-specific data */ },
-  "error": ""
-}
-```
-
-**Fields:**
-- `success` (boolean): Whether command succeeded
-- `data` (any): Command response data (if successful)
-- `error` (string): Error message (if failed)
-
-## Client Libraries
+## Minimal client examples
 
 ### Go
-
 ```go
 package main
 
 import (
     "fmt"
+
     "github.com/dlorenc/multiclaude/internal/socket"
 )
 
 func main() {
-    client := socket.NewClient("~/.multiclaude/daemon.sock")
-
-    resp, err := client.Send(socket.Request{
-        Command: "status",
-    })
-
+    client := socket.NewClient("/home/user/.multiclaude/daemon.sock")
+    resp, err := client.Send(socket.Request{Command: "ping"})
     if err != nil {
         panic(err)
     }
-
-    if !resp.Success {
-        panic(resp.Error)
-    }
-
-    fmt.Printf("Status: %+v\n", resp.Data)
+    fmt.Printf("success=%v data=%v\n", resp.Success, resp.Data)
 }
 ```
 
 ### Python
-
 ```python
-import socket
 import json
-import os
+import socket
 
-class MulticlaudeClient:
-    def __init__(self, sock_path="~/.multiclaude/daemon.sock"):
-        self.sock_path = os.path.expanduser(sock_path)
+sock_path = "/home/user/.multiclaude/daemon.sock"
+req = {"command": "status", "args": {}}
 
-    def send(self, command, args=None):
-        # Connect to socket
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.connect(self.sock_path)
-
-        try:
-            # Send request
-            request = {"command": command}
-            if args:
-                request["args"] = args
-
-            sock.sendall(json.dumps(request).encode() + b'\n')
-
-            # Read response
-            data = b''
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-                try:
-                    response = json.loads(data.decode())
-                    break
-                except json.JSONDecodeError:
-                    continue
-
-            if not response['success']:
-                raise Exception(response['error'])
-
-            return response['data']
-
-        finally:
-            sock.close()
-
-# Usage
-client = MulticlaudeClient()
-status = client.send("status")
-print(f"Daemon running: {status['running']}")
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+    s.connect(sock_path)
+    s.sendall(json.dumps(req).encode("utf-8"))
+    raw = s.recv(8192)
+    resp = json.loads(raw.decode("utf-8"))
+    print(resp)
 ```
 
 ### Bash
@@ -677,62 +623,6 @@ class MulticlaudeClient {
 }
 ```
 
-### Hook Configuration
-
-#### get_hook_config
-
-**Description:** Get current hook configuration
-
-**Request:**
-```json
-{
-  "command": "get_hook_config"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "on_event": "",
-    "on_pr_created": "/usr/local/bin/notify-slack.sh",
-    "on_ci_failed": "",
-    "on_agent_idle": "",
-    "on_agent_started": "",
-    "on_agent_stopped": "",
-    "on_task_assigned": "",
-    "on_worker_stuck": "",
-    "on_message_sent": ""
-  }
-}
-```
-
-#### update_hook_config
-
-**Description:** Update hook configuration
-
-**Request:**
-```json
-{
-  "command": "update_hook_config",
-  "args": {
-    "on_pr_created": "/usr/local/bin/notify-slack.sh",
-    "on_ci_failed": "/usr/local/bin/alert.sh"
-  }
-}
-```
-
-**Args:** Any hook configuration fields (see [`EVENT_HOOKS.md`](EVENT_HOOKS.md))
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": "Hook configuration updated"
-}
-```
-
 ### Maintenance
 
 #### trigger_cleanup
@@ -1151,3 +1041,6 @@ When adding new socket commands:
 3. Update this document with command reference
 4. Add tests in `internal/daemon/daemon_test.go`
 5. Update CLI wrapper in `internal/cli/cli.go` if applicable
+6. Add/remove commands **only** when the `handleRequest` switch changes.
+7. Keep the `socket-commands` marker above in sync; `go run ./cmd/verify-docs` enforces alignment.
+8. If you add arguments, update the table here with the real fields used by the handler.
