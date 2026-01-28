@@ -1317,3 +1317,719 @@ func TestHandleClearCurrentRepo(t *testing.T) {
 		t.Errorf("Current repo not cleared, got: %s", d.state.GetCurrentRepo())
 	}
 }
+
+// TestHandleTriggerRefresh tests the trigger_refresh handler
+func TestHandleTriggerRefresh(t *testing.T) {
+	d, cleanup := setupTestDaemonWithState(t, nil)
+	defer cleanup()
+
+	resp := d.handleTriggerRefresh(socket.Request{
+		Command: "trigger_refresh",
+	})
+
+	if !resp.Success {
+		t.Errorf("Expected success, got error: %s", resp.Error)
+	}
+
+	data, ok := resp.Data.(string)
+	if !ok {
+		t.Error("Expected string data in response")
+	}
+	if data != "Worktree refresh triggered" {
+		t.Errorf("Unexpected response data: %s", data)
+	}
+}
+
+// TestHandleRestartAgentTableDriven tests handleRestartAgent with various scenarios
+func TestHandleRestartAgentTableDriven(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        map[string]interface{}
+		setupState  func(*state.State)
+		wantSuccess bool
+		wantError   string
+	}{
+		{
+			name:        "missing repo argument",
+			args:        map[string]interface{}{"agent": "test"},
+			wantSuccess: false,
+			wantError:   "repo",
+		},
+		{
+			name:        "empty repo argument",
+			args:        map[string]interface{}{"repo": "", "agent": "test"},
+			wantSuccess: false,
+			wantError:   "repo",
+		},
+		{
+			name:        "missing agent argument",
+			args:        map[string]interface{}{"repo": "test-repo"},
+			wantSuccess: false,
+			wantError:   "agent",
+		},
+		{
+			name:        "empty agent argument",
+			args:        map[string]interface{}{"repo": "test-repo", "agent": ""},
+			wantSuccess: false,
+			wantError:   "agent",
+		},
+		{
+			name: "agent does not exist",
+			args: map[string]interface{}{
+				"repo":  "test-repo",
+				"agent": "nonexistent",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+			},
+			wantSuccess: false,
+			wantError:   "not found",
+		},
+		{
+			name: "repo does not exist",
+			args: map[string]interface{}{
+				"repo":  "nonexistent-repo",
+				"agent": "test-agent",
+			},
+			wantSuccess: false,
+			wantError:   "not found",
+		},
+		{
+			name: "agent marked for cleanup",
+			args: map[string]interface{}{
+				"repo":  "test-repo",
+				"agent": "completed-agent",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+				s.AddAgent("test-repo", "completed-agent", state.Agent{
+					Type:            state.AgentTypeWorker,
+					TmuxWindow:      "completed-window",
+					ReadyForCleanup: true,
+					CreatedAt:       time.Now(),
+				})
+			},
+			wantSuccess: false,
+			wantError:   "complete",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, cleanup := setupTestDaemonWithState(t, tt.setupState)
+			defer cleanup()
+
+			resp := d.handleRestartAgent(socket.Request{
+				Command: "restart_agent",
+				Args:    tt.args,
+			})
+
+			if resp.Success != tt.wantSuccess {
+				t.Errorf("handleRestartAgent() success = %v, want %v (error: %s)", resp.Success, tt.wantSuccess, resp.Error)
+			}
+
+			if tt.wantError != "" && resp.Error == "" {
+				t.Errorf("handleRestartAgent() expected error containing %q, got empty error", tt.wantError)
+			}
+		})
+	}
+}
+
+// TestHandleSpawnAgentTableDriven tests handleSpawnAgent with various argument combinations
+func TestHandleSpawnAgentTableDriven(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        map[string]interface{}
+		setupState  func(*state.State)
+		wantSuccess bool
+		wantError   string
+	}{
+		{
+			name:        "missing repo argument",
+			args:        map[string]interface{}{"name": "test", "class": "ephemeral", "prompt": "test prompt"},
+			wantSuccess: false,
+			wantError:   "repo",
+		},
+		{
+			name:        "empty repo argument",
+			args:        map[string]interface{}{"repo": "", "name": "test", "class": "ephemeral", "prompt": "test prompt"},
+			wantSuccess: false,
+			wantError:   "repo",
+		},
+		{
+			name:        "missing name argument",
+			args:        map[string]interface{}{"repo": "test-repo", "class": "ephemeral", "prompt": "test prompt"},
+			wantSuccess: false,
+			wantError:   "name",
+		},
+		{
+			name:        "empty name argument",
+			args:        map[string]interface{}{"repo": "test-repo", "name": "", "class": "ephemeral", "prompt": "test prompt"},
+			wantSuccess: false,
+			wantError:   "name",
+		},
+		{
+			name:        "missing class argument",
+			args:        map[string]interface{}{"repo": "test-repo", "name": "test", "prompt": "test prompt"},
+			wantSuccess: false,
+			wantError:   "class",
+		},
+		{
+			name:        "empty class argument",
+			args:        map[string]interface{}{"repo": "test-repo", "name": "test", "class": "", "prompt": "test prompt"},
+			wantSuccess: false,
+			wantError:   "class",
+		},
+		{
+			name:        "missing prompt argument",
+			args:        map[string]interface{}{"repo": "test-repo", "name": "test", "class": "ephemeral"},
+			wantSuccess: false,
+			wantError:   "prompt",
+		},
+		{
+			name:        "empty prompt argument",
+			args:        map[string]interface{}{"repo": "test-repo", "name": "test", "class": "ephemeral", "prompt": ""},
+			wantSuccess: false,
+			wantError:   "prompt",
+		},
+		{
+			name: "invalid class argument",
+			args: map[string]interface{}{
+				"repo":   "test-repo",
+				"name":   "test",
+				"class":  "invalid-class",
+				"prompt": "test prompt",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+			},
+			wantSuccess: false,
+			wantError:   "invalid agent class",
+		},
+		{
+			name: "repo does not exist",
+			args: map[string]interface{}{
+				"repo":   "nonexistent",
+				"name":   "test",
+				"class":  "ephemeral",
+				"prompt": "test prompt",
+			},
+			wantSuccess: false,
+			wantError:   "not found",
+		},
+		{
+			name: "agent already exists",
+			args: map[string]interface{}{
+				"repo":   "test-repo",
+				"name":   "existing-agent",
+				"class":  "ephemeral",
+				"prompt": "test prompt",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+				s.AddAgent("test-repo", "existing-agent", state.Agent{
+					Type:       state.AgentTypeWorker,
+					TmuxWindow: "existing-window",
+					CreatedAt:  time.Now(),
+				})
+			},
+			wantSuccess: false,
+			wantError:   "already exists",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, cleanup := setupTestDaemonWithState(t, tt.setupState)
+			defer cleanup()
+
+			resp := d.handleSpawnAgent(socket.Request{
+				Command: "spawn_agent",
+				Args:    tt.args,
+			})
+
+			if resp.Success != tt.wantSuccess {
+				t.Errorf("handleSpawnAgent() success = %v, want %v (error: %s)", resp.Success, tt.wantSuccess, resp.Error)
+			}
+
+			if tt.wantError != "" && resp.Error == "" {
+				t.Errorf("handleSpawnAgent() expected error containing %q, got empty error", tt.wantError)
+			}
+		})
+	}
+}
+
+// TestHandleRepairStateBasic tests the repair_state handler with basic scenarios
+func TestHandleRepairStateBasic(t *testing.T) {
+	d, cleanup := setupTestDaemonWithState(t, func(s *state.State) {
+		s.AddRepo("test-repo", &state.Repository{
+			GithubURL:   "https://github.com/test/repo",
+			TmuxSession: "test-session",
+			Agents:      make(map[string]state.Agent),
+		})
+	})
+	defer cleanup()
+
+	resp := d.handleRepairState(socket.Request{
+		Command: "repair_state",
+	})
+
+	if !resp.Success {
+		t.Errorf("Expected success, got error: %s", resp.Error)
+	}
+
+	data, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		t.Error("Expected map data in response")
+		return
+	}
+
+	if _, exists := data["agents_removed"]; !exists {
+		t.Error("Response should contain agents_removed field")
+	}
+	if _, exists := data["issues_fixed"]; !exists {
+		t.Error("Response should contain issues_fixed field")
+	}
+}
+
+// TestHandleTaskHistoryTableDriven tests handleTaskHistory
+func TestHandleTaskHistoryTableDriven(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        map[string]interface{}
+		setupState  func(*state.State)
+		wantSuccess bool
+		wantError   string
+	}{
+		{
+			name:        "missing repo argument",
+			args:        map[string]interface{}{},
+			wantSuccess: false,
+			wantError:   "repo",
+		},
+		{
+			name:        "empty repo argument",
+			args:        map[string]interface{}{"repo": ""},
+			wantSuccess: false,
+			wantError:   "repo",
+		},
+		{
+			name: "repo does not exist",
+			args: map[string]interface{}{
+				"repo": "nonexistent",
+			},
+			wantSuccess: false,
+			wantError:   "not found",
+		},
+		{
+			name: "success with empty history",
+			args: map[string]interface{}{
+				"repo": "test-repo",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "success with limit",
+			args: map[string]interface{}{
+				"repo":  "test-repo",
+				"limit": float64(5),
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "success with status filter",
+			args: map[string]interface{}{
+				"repo":   "test-repo",
+				"status": "pending",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "success with search",
+			args: map[string]interface{}{
+				"repo":   "test-repo",
+				"search": "test query",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+			},
+			wantSuccess: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, cleanup := setupTestDaemonWithState(t, tt.setupState)
+			defer cleanup()
+
+			resp := d.handleTaskHistory(socket.Request{
+				Command: "task_history",
+				Args:    tt.args,
+			})
+
+			if resp.Success != tt.wantSuccess {
+				t.Errorf("handleTaskHistory() success = %v, want %v (error: %s)", resp.Success, tt.wantSuccess, resp.Error)
+			}
+
+			if tt.wantError != "" && resp.Error == "" {
+				t.Errorf("handleTaskHistory() expected error containing %q, got empty error", tt.wantError)
+			}
+		})
+	}
+}
+
+// TestHandleListAgentsTableDriven tests handleListAgents
+func TestHandleListAgentsTableDriven(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        map[string]interface{}
+		setupState  func(*state.State)
+		wantSuccess bool
+		wantAgents  int
+	}{
+		{
+			name:        "missing repo argument",
+			args:        map[string]interface{}{},
+			wantSuccess: false,
+		},
+		{
+			name: "empty repo returns empty list",
+			args: map[string]interface{}{
+				"repo": "test-repo",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+			},
+			wantSuccess: true,
+			wantAgents:  0,
+		},
+		{
+			name: "repo with multiple agents",
+			args: map[string]interface{}{
+				"repo": "test-repo",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+				s.AddAgent("test-repo", "worker1", state.Agent{
+					Type:       state.AgentTypeWorker,
+					TmuxWindow: "worker1-window",
+					CreatedAt:  time.Now(),
+				})
+				s.AddAgent("test-repo", "worker2", state.Agent{
+					Type:       state.AgentTypeWorker,
+					TmuxWindow: "worker2-window",
+					CreatedAt:  time.Now(),
+				})
+			},
+			wantSuccess: true,
+			wantAgents:  2,
+		},
+		{
+			name: "returns all agents regardless of type",
+			args: map[string]interface{}{
+				"repo": "test-repo",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+				s.AddAgent("test-repo", "worker1", state.Agent{
+					Type:       state.AgentTypeWorker,
+					TmuxWindow: "worker1-window",
+					CreatedAt:  time.Now(),
+				})
+				s.AddAgent("test-repo", "supervisor", state.Agent{
+					Type:       state.AgentTypeSupervisor,
+					TmuxWindow: "supervisor-window",
+					CreatedAt:  time.Now(),
+				})
+			},
+			wantSuccess: true,
+			wantAgents:  2, // Returns all agents
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, cleanup := setupTestDaemonWithState(t, tt.setupState)
+			defer cleanup()
+
+			resp := d.handleListAgents(socket.Request{
+				Command: "list_agents",
+				Args:    tt.args,
+			})
+
+			if resp.Success != tt.wantSuccess {
+				t.Errorf("handleListAgents() success = %v, want %v (error: %s)", resp.Success, tt.wantSuccess, resp.Error)
+			}
+
+			if tt.wantSuccess {
+				agents, ok := resp.Data.([]map[string]interface{})
+				if !ok {
+					t.Errorf("Expected []map[string]interface{} data in response, got %T", resp.Data)
+					return
+				}
+				if len(agents) != tt.wantAgents {
+					t.Errorf("Expected %d agents, got %d", tt.wantAgents, len(agents))
+				}
+			}
+		})
+	}
+}
+
+// TestHandleUpdateRepoConfigTableDriven tests handleUpdateRepoConfig
+func TestHandleUpdateRepoConfigTableDriven(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        map[string]interface{}
+		setupState  func(*state.State)
+		wantSuccess bool
+		wantError   string
+	}{
+		{
+			name:        "missing name argument",
+			args:        map[string]interface{}{},
+			wantSuccess: false,
+			wantError:   "name",
+		},
+		{
+			name:        "empty name argument",
+			args:        map[string]interface{}{"name": ""},
+			wantSuccess: false,
+			wantError:   "name",
+		},
+		{
+			name: "repo does not exist",
+			args: map[string]interface{}{
+				"name": "nonexistent",
+			},
+			wantSuccess: false,
+			wantError:   "not found",
+		},
+		{
+			name: "update merge queue enabled",
+			args: map[string]interface{}{
+				"name":       "test-repo",
+				"mq_enabled": false,
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+					MergeQueueConfig: state.MergeQueueConfig{
+						Enabled:   true,
+						TrackMode: state.TrackModeAll,
+					},
+				})
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "update merge queue track mode",
+			args: map[string]interface{}{
+				"name":          "test-repo",
+				"mq_track_mode": "author",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+					MergeQueueConfig: state.MergeQueueConfig{
+						Enabled:   true,
+						TrackMode: state.TrackModeAll,
+					},
+				})
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "update pr shepherd enabled",
+			args: map[string]interface{}{
+				"name":       "test-repo",
+				"ps_enabled": true,
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+					PRShepherdConfig: state.PRShepherdConfig{
+						Enabled:   false,
+						TrackMode: state.TrackModeAll,
+					},
+				})
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "invalid track mode",
+			args: map[string]interface{}{
+				"name":          "test-repo",
+				"mq_track_mode": "invalid",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+				})
+			},
+			wantSuccess: false,
+			wantError:   "invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, cleanup := setupTestDaemonWithState(t, tt.setupState)
+			defer cleanup()
+
+			resp := d.handleUpdateRepoConfig(socket.Request{
+				Command: "update_repo_config",
+				Args:    tt.args,
+			})
+
+			if resp.Success != tt.wantSuccess {
+				t.Errorf("handleUpdateRepoConfig() success = %v, want %v (error: %s)", resp.Success, tt.wantSuccess, resp.Error)
+			}
+
+			if tt.wantError != "" && resp.Error == "" {
+				t.Errorf("handleUpdateRepoConfig() expected error containing %q, got empty error", tt.wantError)
+			}
+		})
+	}
+}
+
+// TestHandleGetRepoConfigTableDriven tests handleGetRepoConfig
+func TestHandleGetRepoConfigTableDriven(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        map[string]interface{}
+		setupState  func(*state.State)
+		wantSuccess bool
+		wantError   string
+	}{
+		{
+			name:        "missing name argument",
+			args:        map[string]interface{}{},
+			wantSuccess: false,
+			wantError:   "name",
+		},
+		{
+			name:        "empty name argument",
+			args:        map[string]interface{}{"name": ""},
+			wantSuccess: false,
+			wantError:   "name",
+		},
+		{
+			name: "repo does not exist",
+			args: map[string]interface{}{
+				"name": "nonexistent",
+			},
+			wantSuccess: false,
+			wantError:   "not found",
+		},
+		{
+			name: "success",
+			args: map[string]interface{}{
+				"name": "test-repo",
+			},
+			setupState: func(s *state.State) {
+				s.AddRepo("test-repo", &state.Repository{
+					GithubURL:   "https://github.com/test/repo",
+					TmuxSession: "test-session",
+					Agents:      make(map[string]state.Agent),
+					MergeQueueConfig: state.MergeQueueConfig{
+						Enabled:   true,
+						TrackMode: state.TrackModeAll,
+					},
+				})
+			},
+			wantSuccess: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, cleanup := setupTestDaemonWithState(t, tt.setupState)
+			defer cleanup()
+
+			resp := d.handleGetRepoConfig(socket.Request{
+				Command: "get_repo_config",
+				Args:    tt.args,
+			})
+
+			if resp.Success != tt.wantSuccess {
+				t.Errorf("handleGetRepoConfig() success = %v, want %v (error: %s)", resp.Success, tt.wantSuccess, resp.Error)
+			}
+
+			if tt.wantError != "" && resp.Error == "" {
+				t.Errorf("handleGetRepoConfig() expected error containing %q, got empty error", tt.wantError)
+			}
+
+			if tt.wantSuccess {
+				data, ok := resp.Data.(map[string]interface{})
+				if !ok {
+					t.Error("Expected map data in response")
+					return
+				}
+				if _, exists := data["mq_enabled"]; !exists {
+					t.Error("Response should contain mq_enabled field")
+				}
+			}
+		})
+	}
+}
