@@ -247,8 +247,8 @@ func (d *Daemon) checkAgentHealth() {
 
 	deadAgents := make(map[string][]string) // repo -> []agent names
 
-	// Get a snapshot of repos to avoid concurrent map access
-	repos := d.state.GetAllRepos()
+	// Get a snapshot of active (non-paused) repos
+	repos := d.state.GetActiveRepos()
 	for repoName, repo := range repos {
 		// Check if tmux session exists
 		hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession)
@@ -335,8 +335,8 @@ func (d *Daemon) routeMessages() {
 	// Get messages manager
 	msgMgr := d.getMessageManager()
 
-	// Get a snapshot of repos to avoid concurrent map access
-	repos := d.state.GetAllRepos()
+	// Get a snapshot of active (non-paused) repos
+	repos := d.state.GetActiveRepos()
 
 	// Check each repository
 	for repoName, repo := range repos {
@@ -399,8 +399,8 @@ func (d *Daemon) wakeAgents() {
 
 	now := time.Now()
 
-	// Get a snapshot of repos to avoid concurrent map access
-	repos := d.state.GetAllRepos()
+	// Get a snapshot of active (non-paused) repos
+	repos := d.state.GetActiveRepos()
 	for repoName, repo := range repos {
 		for agentName, agent := range repo.Agents {
 			// Skip workspace agent - it should only receive direct user input
@@ -480,7 +480,8 @@ func (d *Daemon) worktreeRefreshLoop() {
 func (d *Daemon) refreshWorktrees() {
 	d.logger.Debug("Checking worker worktrees for refresh")
 
-	repos := d.state.GetAllRepos()
+	// Get active (non-paused) repos
+	repos := d.state.GetActiveRepos()
 	for repoName, repo := range repos {
 		repoPath := d.paths.RepoDir(repoName)
 
@@ -644,6 +645,12 @@ func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	case "spawn_agent":
 		return d.handleSpawnAgent(req)
 
+	case "pause_repo":
+		return d.handlePauseRepo(req)
+
+	case "resume_repo":
+		return d.handleResumeRepo(req)
+
 	default:
 		return socket.Response{
 			Success: false,
@@ -723,6 +730,7 @@ func (d *Daemon) handleListRepos(req socket.Request) socket.Response {
 			"upstream_owner":     repo.ForkConfig.UpstreamOwner,
 			"upstream_repo":      repo.ForkConfig.UpstreamRepo,
 			"pr_management_mode": prManagementMode,
+			"paused":             repo.Paused,
 		})
 	}
 
@@ -834,6 +842,14 @@ func (d *Daemon) handleAddAgent(req socket.Request) socket.Response {
 	repoName, errResp, ok := getRequiredStringArg(req.Args, "repo", "repository name is required")
 	if !ok {
 		return errResp
+	}
+
+	// Check if repo is paused
+	if d.state.IsPaused(repoName) {
+		return socket.Response{
+			Success: false,
+			Error:   fmt.Sprintf("repository %q is paused; resume it with 'multiclaude repo resume %s' or use --resume flag", repoName, repoName),
+		}
 	}
 
 	agentName, errResp, ok := getRequiredStringArg(req.Args, "agent", "agent name is required")
@@ -1367,6 +1383,36 @@ func (d *Daemon) handleClearCurrentRepo(req socket.Request) socket.Response {
 	return socket.Response{Success: true}
 }
 
+// handlePauseRepo pauses a repository (stops agent polling)
+func (d *Daemon) handlePauseRepo(req socket.Request) socket.Response {
+	name, errResp, ok := getRequiredStringArg(req.Args, "name", "repository name is required")
+	if !ok {
+		return errResp
+	}
+
+	if err := d.state.PauseRepo(name); err != nil {
+		return socket.Response{Success: false, Error: err.Error()}
+	}
+
+	d.logger.Info("Paused repository: %s", name)
+	return socket.Response{Success: true, Data: name}
+}
+
+// handleResumeRepo resumes a paused repository
+func (d *Daemon) handleResumeRepo(req socket.Request) socket.Response {
+	name, errResp, ok := getRequiredStringArg(req.Args, "name", "repository name is required")
+	if !ok {
+		return errResp
+	}
+
+	if err := d.state.ResumeRepo(name); err != nil {
+		return socket.Response{Success: false, Error: err.Error()}
+	}
+
+	d.logger.Info("Resumed repository: %s", name)
+	return socket.Response{Success: true, Data: name}
+}
+
 // cleanupDeadAgents removes dead agents from state
 func (d *Daemon) cleanupDeadAgents(deadAgents map[string][]string) {
 	for repoName, agentNames := range deadAgents {
@@ -1510,6 +1556,14 @@ func (d *Daemon) handleSpawnAgent(req socket.Request) socket.Response {
 	repoName, errResp, ok := getRequiredStringArg(req.Args, "repo", "repository name is required")
 	if !ok {
 		return errResp
+	}
+
+	// Check if repo is paused
+	if d.state.IsPaused(repoName) {
+		return socket.Response{
+			Success: false,
+			Error:   fmt.Sprintf("repository %q is paused; resume it with 'multiclaude repo resume %s' or use --resume flag", repoName, repoName),
+		}
 	}
 
 	agentName, errResp, ok := getRequiredStringArg(req.Args, "name", "agent name is required")
@@ -1718,11 +1772,12 @@ func (d *Daemon) cleanupMergedBranches() {
 }
 
 // restoreTrackedRepos restores agents for tracked repos that are missing their tmux sessions
-// or have dead Claude processes
+// or have dead Claude processes. Paused repos are skipped - their agents won't be restored.
 func (d *Daemon) restoreTrackedRepos() {
 	d.logger.Info("Checking tracked repos for restoration")
 
-	repos := d.state.GetAllRepos()
+	// Get active (non-paused) repos - paused repos won't have agents restored
+	repos := d.state.GetActiveRepos()
 	for repoName, repo := range repos {
 		// Check if tmux session exists
 		hasSession, err := d.tmux.HasSession(d.ctx, repo.TmuxSession)

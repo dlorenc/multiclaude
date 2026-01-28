@@ -426,6 +426,20 @@ func (c *CLI) registerCommands() {
 		Run:         c.showHistory,
 	}
 
+	repoCmd.Subcommands["pause"] = &Command{
+		Name:        "pause",
+		Description: "Pause a repository (stop agent polling)",
+		Usage:       "multiclaude repo pause [<name>]",
+		Run:         c.pauseRepo,
+	}
+
+	repoCmd.Subcommands["resume"] = &Command{
+		Name:        "resume",
+		Description: "Resume a paused repository",
+		Usage:       "multiclaude repo resume [<name>]",
+		Run:         c.resumeRepo,
+	}
+
 	c.rootCmd.Subcommands["repo"] = repoCmd
 
 	// Backward compatibility aliases for root-level repo commands
@@ -1534,9 +1548,14 @@ func (c *CLI) listRepos(args []string) error {
 				agentStr = fmt.Sprintf("%d (%d workers)", totalAgents, workerCount)
 			}
 
+			// Get paused status
+			paused, _ := repoMap["paused"].(bool)
+
 			// Format status
 			var statusCell format.ColoredCell
-			if sessionHealthy {
+			if paused {
+				statusCell = format.ColorCell("⏸ paused", format.Yellow)
+			} else if sessionHealthy {
 				statusCell = format.ColorCell(format.ColoredStatus(format.StatusHealthy), nil)
 			} else {
 				statusCell = format.ColorCell(format.ColoredStatus(format.StatusError), nil)
@@ -1747,6 +1766,56 @@ func (c *CLI) clearCurrentRepo(args []string) error {
 	return nil
 }
 
+func (c *CLI) pauseRepo(args []string) error {
+	var repoName string
+	var err error
+
+	if len(args) >= 1 {
+		repoName = args[0]
+	} else {
+		// Try to resolve from context
+		repoName, err = c.resolveRepo(nil)
+		if err != nil {
+			return errors.InvalidUsage("usage: multiclaude repo pause [<name>]\n\nProvide a repo name or run from within a multiclaude worktree")
+		}
+	}
+
+	_, err = c.sendDaemonRequest("pause_repo", map[string]interface{}{
+		"name": repoName,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Repository %s paused (agents will stop polling)\n", repoName)
+	return nil
+}
+
+func (c *CLI) resumeRepo(args []string) error {
+	var repoName string
+	var err error
+
+	if len(args) >= 1 {
+		repoName = args[0]
+	} else {
+		// Try to resolve from context
+		repoName, err = c.resolveRepo(nil)
+		if err != nil {
+			return errors.InvalidUsage("usage: multiclaude repo resume [<name>]\n\nProvide a repo name or run from within a multiclaude worktree")
+		}
+	}
+
+	_, err = c.sendDaemonRequest("resume_repo", map[string]interface{}{
+		"name": repoName,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Repository %s resumed (agents will resume polling)\n", repoName)
+	return nil
+}
+
 func (c *CLI) configRepo(args []string) error {
 	flags, posArgs := ParseFlags(args)
 
@@ -1954,6 +2023,11 @@ func (c *CLI) createWorker(args []string) error {
 	repoName, err := c.resolveRepo(flags)
 	if err != nil {
 		return errors.NotInRepo()
+	}
+
+	// Check if repo is paused
+	if err := c.checkRepoPausedWithResume(repoName, flags); err != nil {
+		return err
 	}
 
 	// Generate worker name (Docker-style)
@@ -2372,6 +2446,11 @@ func (c *CLI) spawnAgentFromFile(args []string) error {
 	repoName, err := c.resolveRepo(flags)
 	if err != nil {
 		return errors.NotInRepo()
+	}
+
+	// Check if repo is paused
+	if err := c.checkRepoPausedWithResume(repoName, flags); err != nil {
+		return err
 	}
 
 	// Read prompt from file
@@ -2888,6 +2967,11 @@ func (c *CLI) addWorkspace(args []string) error {
 	// Determine repository using standard resolution chain
 	repoName, err := c.resolveRepo(flags)
 	if err != nil {
+		return err
+	}
+
+	// Check if repo is paused
+	if err := c.checkRepoPausedWithResume(repoName, flags); err != nil {
 		return err
 	}
 
@@ -3658,6 +3742,64 @@ func (c *CLI) findRepoFromGitRemote() (string, error) {
 	return "", fmt.Errorf("no matching repository found for remote: %s", remoteURL)
 }
 
+// checkRepoPausedWithResume checks if a repository is paused and handles the --resume flag.
+// If the repo is paused and --resume flag is set, it automatically resumes the repo.
+// If the repo is paused and no --resume flag, it returns an error.
+// Returns nil if the repo is not paused or was successfully resumed.
+func (c *CLI) checkRepoPausedWithResume(repoName string, flags map[string]string) error {
+	// Check if repo is paused
+	client := socket.NewClient(c.paths.DaemonSock)
+	resp, err := client.Send(socket.Request{
+		Command: "list_repos",
+		Args: map[string]interface{}{
+			"rich": true,
+		},
+	})
+	if err != nil {
+		// If daemon is not running, let the command proceed
+		// (it will fail later with a more appropriate error)
+		return nil
+	}
+
+	repos, ok := resp.Data.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	// Find the repo and check if it's paused
+	var isPaused bool
+	for _, repo := range repos {
+		if repoMap, ok := repo.(map[string]interface{}); ok {
+			name, _ := repoMap["name"].(string)
+			if name == repoName {
+				isPaused, _ = repoMap["paused"].(bool)
+				break
+			}
+		}
+	}
+
+	if !isPaused {
+		return nil
+	}
+
+	// Repo is paused - check for --resume flag
+	if _, hasResume := flags["resume"]; hasResume {
+		// Resume the repo
+		_, err := c.sendDaemonRequest("resume_repo", map[string]interface{}{
+			"name": repoName,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to resume repository: %w", err)
+		}
+		fmt.Printf("Repository %s resumed automatically (was paused)\n", repoName)
+		return nil
+	}
+
+	// Repo is paused and no --resume flag
+	return errors.New(errors.CategoryRuntime,
+		fmt.Sprintf("repository %q is paused; resume it with 'multiclaude repo resume %s' or add --resume flag to this command", repoName, repoName))
+}
+
 // resolveRepo determines the repository to use based on:
 // 1. Explicit --repo flag (highest priority)
 // 2. Git remote URL matching (if in a git repo with origin pointing to a tracked repo)
@@ -3971,6 +4113,11 @@ func (c *CLI) reviewPR(args []string) error {
 		if repoName == "" {
 			return errors.NotInRepo()
 		}
+	}
+
+	// Check if repo is paused
+	if err := c.checkRepoPausedWithResume(repoName, flags); err != nil {
+		return err
 	}
 
 	// Generate review agent name

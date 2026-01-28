@@ -1928,6 +1928,31 @@ func TestRestoreTrackedReposExistingSession(t *testing.T) {
 	}
 }
 
+func TestRestoreTrackedReposSkipsPausedRepos(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a paused repo - should be skipped during restoration
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "mc-paused-repo",
+		Agents:      make(map[string]state.Agent),
+		Paused:      true,
+	}
+	if err := d.state.AddRepo("paused-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Call restore - should skip the paused repo entirely
+	// If it didn't skip, it would try to check the tmux session which doesn't exist
+	d.restoreTrackedRepos()
+
+	// Repo should still be paused and no tmux session should have been created
+	if !d.state.IsPaused("paused-repo") {
+		t.Error("Repo should still be paused after restore")
+	}
+}
+
 func TestRestoreRepoAgentsMissingRepoPath(t *testing.T) {
 	d, cleanup := setupTestDaemon(t)
 	defer cleanup()
@@ -3827,5 +3852,76 @@ func TestRecordTaskHistoryWithSummary(t *testing.T) {
 
 	if history[0].Summary != "Implemented the feature successfully" {
 		t.Errorf("History entry summary = %q, want 'Implemented the feature successfully'", history[0].Summary)
+	}
+}
+
+func TestHandleAddAgentPausedRepo(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a paused repo
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "test-session",
+		Agents:      make(map[string]state.Agent),
+		Paused:      true,
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Try to add agent to paused repo - should fail
+	resp := d.handleAddAgent(socket.Request{
+		Command: "add_agent",
+		Args: map[string]interface{}{
+			"repo":          "test-repo",
+			"agent":         "test-agent",
+			"type":          "worker",
+			"worktree_path": "/tmp/test",
+			"tmux_window":   "test-window",
+		},
+	})
+
+	if resp.Success {
+		t.Error("handleAddAgent() should fail for paused repo")
+	}
+
+	if !strings.Contains(resp.Error, "paused") {
+		t.Errorf("Error message should mention 'paused', got: %s", resp.Error)
+	}
+}
+
+func TestHandleSpawnAgentPausedRepo(t *testing.T) {
+	d, cleanup := setupTestDaemon(t)
+	defer cleanup()
+
+	// Add a paused repo
+	repo := &state.Repository{
+		GithubURL:   "https://github.com/test/repo",
+		TmuxSession: "test-session",
+		Agents:      make(map[string]state.Agent),
+		Paused:      true,
+	}
+	if err := d.state.AddRepo("test-repo", repo); err != nil {
+		t.Fatalf("Failed to add repo: %v", err)
+	}
+
+	// Try to spawn agent in paused repo - should fail
+	resp := d.handleSpawnAgent(socket.Request{
+		Command: "spawn_agent",
+		Args: map[string]interface{}{
+			"repo":   "test-repo",
+			"name":   "test-agent",
+			"class":  "ephemeral",
+			"prompt": "Test prompt",
+		},
+	})
+
+	if resp.Success {
+		t.Error("handleSpawnAgent() should fail for paused repo")
+	}
+
+	if !strings.Contains(resp.Error, "paused") {
+		t.Errorf("Error message should mention 'paused', got: %s", resp.Error)
 	}
 }
