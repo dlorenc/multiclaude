@@ -1173,19 +1173,12 @@ func (c *CLI) initRepo(args []string) error {
 	if len(posArgs) >= 2 {
 		repoName = posArgs[1]
 	} else {
-		// Extract repo name from URL (e.g., github.com/user/repo -> repo)
-		// A valid GitHub URL has format: https://github.com/owner/repo
-		// When split by "/": ["https:", "", "github.com", "owner", "repo"] - 5+ parts
-		parts := strings.Split(githubURL, "/")
-		if len(parts) < 5 {
+		// Extract repo name from URL
+		// Supports both SSH (git@github.com:user/repo) and HTTPS (https://github.com/user/repo) formats
+		repoName = extractRepoNameFromURL(githubURL)
+		if repoName == "" {
 			return errors.InvalidUsage("could not determine repository name from URL; please provide a name: multiclaude init <url> <name>")
 		}
-		repoName = strings.TrimSuffix(parts[len(parts)-1], ".git")
-	}
-
-	// Validate repository name before any operations
-	if repoName == "" {
-		return errors.InvalidUsage("could not determine repository name from URL; please provide a name: multiclaude init <url> <name>")
 	}
 
 	// Parse merge queue configuration flags
@@ -1258,10 +1251,68 @@ func (c *CLI) initRepo(args []string) error {
 	fmt.Printf("Cloning to: %s\n", repoPath)
 
 	cmd := exec.Command("git", "clone", githubURL, repoPath)
+	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return errors.GitOperationFailed("clone", err)
+	cloneErr := cmd.Run()
+	if cloneErr != nil {
+		// Check if this is a "repository not found" error by examining stderr
+		// Run the command again to capture stderr
+		checkCmd := exec.Command("git", "clone", githubURL, repoPath)
+		checkOutput, _ := checkCmd.CombinedOutput()
+		outputStr := string(checkOutput)
+
+		// If repository doesn't exist, offer to create it
+		if strings.Contains(outputStr, "Repository not found") || strings.Contains(outputStr, "repository not found") {
+			// Extract owner and repo from URL
+			owner, repo := parseGitHubURL(githubURL)
+			if owner != "" && repo != "" {
+				fmt.Printf("\n⚠ Repository %s/%s does not exist.\n", owner, repo)
+				fmt.Print("Would you like to create it? [y/N]: ")
+
+				var response string
+				fmt.Scanln(&response)
+				response = strings.ToLower(strings.TrimSpace(response))
+
+				if response == "y" || response == "yes" {
+					// Create the repository using gh CLI with a README to avoid empty repo
+					fmt.Printf("Creating repository %s/%s with initial commit...\n", owner, repo)
+					createCmd := exec.Command("gh", "repo", "create", fmt.Sprintf("%s/%s", owner, repo), "--private", "--add-readme")
+					createCmd.Stdin = os.Stdin
+					createCmd.Stdout = os.Stdout
+					createCmd.Stderr = os.Stderr
+					if err := createCmd.Run(); err != nil {
+						return fmt.Errorf("failed to create repository: %w", err)
+					}
+
+					// Retry the clone
+					fmt.Println("Retrying clone...")
+					retryCmd := exec.Command("git", "clone", githubURL, repoPath)
+					retryCmd.Stdin = os.Stdin
+					retryCmd.Stdout = os.Stdout
+					retryCmd.Stderr = os.Stderr
+					if err := retryCmd.Run(); err != nil {
+						return errors.GitOperationFailed("clone", err)
+					}
+				} else {
+					return fmt.Errorf("repository does not exist and was not created")
+				}
+			} else {
+				return errors.GitOperationFailed("clone", cloneErr)
+			}
+		} else {
+			return errors.GitOperationFailed("clone", cloneErr)
+		}
+	}
+
+	// Check if repository is empty (has no commits)
+	checkHeadCmd := exec.Command("git", "rev-parse", "--verify", "HEAD")
+	checkHeadCmd.Dir = repoPath
+	if err := checkHeadCmd.Run(); err != nil {
+		return errors.Wrap(errors.CategoryUsage,
+			"cannot initialize empty repository (no commits found)",
+			err).
+			WithSuggestion("push at least one commit to the repository before initializing with multiclaude")
 	}
 
 	// Detect if this is a fork
@@ -2119,6 +2170,7 @@ func (c *CLI) createWorker(args []string) error {
 	fmt.Println("Fetching latest from origin...")
 	fetchCmd := exec.Command("git", "fetch", "origin")
 	fetchCmd.Dir = repoPath
+	fetchCmd.Stdin = os.Stdin
 	if err := fetchCmd.Run(); err != nil {
 		// Best effort - don't fail if offline or fetch fails
 		fmt.Printf("Warning: failed to fetch from origin: %v (continuing with local refs)\n", err)
@@ -3992,6 +4044,49 @@ func normalizeGitHubURL(url string) string {
 	return ""
 }
 
+// parseGitHubURL extracts the owner and repository name from a GitHub URL.
+// It handles both SSH (git@github.com:user/repo.git) and HTTPS (https://github.com/user/repo) formats.
+// Returns (owner, repo) or ("", "") if URL format is invalid.
+func parseGitHubURL(url string) (string, string) {
+	url = strings.TrimSpace(url)
+	url = strings.TrimRight(url, "/")
+	lowerURL := strings.ToLower(url)
+
+	var path string
+
+	// Handle SSH format: git@github.com:user/repo.git
+	if strings.HasPrefix(lowerURL, "git@github.com:") {
+		path = url[len("git@github.com:"):]
+	} else {
+		// Handle HTTPS/HTTP/git:// formats
+		for _, prefix := range []string{"https://github.com/", "http://github.com/", "git://github.com/"} {
+			if strings.HasPrefix(lowerURL, prefix) {
+				path = url[len(prefix):]
+				break
+			}
+		}
+	}
+
+	if path == "" {
+		return "", ""
+	}
+
+	path = strings.TrimSuffix(path, ".git")
+	parts := strings.Split(path, "/")
+	if len(parts) >= 2 {
+		return parts[0], parts[1]
+	}
+	return "", ""
+}
+
+// extractRepoNameFromURL extracts the repository name from a GitHub URL.
+// It handles both SSH (git@github.com:user/repo.git) and HTTPS (https://github.com/user/repo) formats.
+// Returns the repo name (e.g., "repo") or empty string if URL format is invalid.
+func extractRepoNameFromURL(url string) string {
+	_, repo := parseGitHubURL(url)
+	return repo
+}
+
 // findRepoFromGitRemote looks for a git remote in the current directory
 // and tries to match it against known repositories in state.
 func (c *CLI) findRepoFromGitRemote() (string, error) {
@@ -4364,6 +4459,7 @@ func (c *CLI) reviewPR(args []string) error {
 	localRef := fmt.Sprintf("refs/multiclaude/pr-%s", prNumber)
 	cmd := exec.Command("git", "fetch", "origin", fmt.Sprintf("%s:%s", prRef, localRef))
 	cmd.Dir = repoPath
+	cmd.Stdin = os.Stdin
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return errors.Wrap(errors.CategoryRuntime, fmt.Sprintf("failed to fetch PR #%s: %s", prNumber, strings.TrimSpace(string(output))), err).
 			WithSuggestion("ensure the PR exists and you have access to the repository")
