@@ -611,7 +611,11 @@ func (d *Daemon) TriggerWorktreeRefresh() {
 	d.refreshWorktrees()
 }
 
-// handleRequest handles incoming socket requests
+// handleRequest handles incoming socket requests.
+// NOTE: This switch defines the socket API surface. When adding or changing
+// commands, update docs/extending/SOCKET_API.md and rerun
+// `go run ./cmd/verify-docs` so downstream tooling and OpenAPI consumers stay
+// in sync.
 func (d *Daemon) handleRequest(req socket.Request) socket.Response {
 	d.logger.Debug("Handling request: %s", req.Command)
 

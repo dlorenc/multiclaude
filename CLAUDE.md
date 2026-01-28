@@ -50,8 +50,8 @@ MULTICLAUDE_TEST_MODE=1 go test ./test/...  # Skip Claude startup
 │                          Daemon (internal/daemon)                │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │
 │  │ Health   │  │ Message  │  │ Wake/    │  │ Socket   │        │
-│  │ Check    │  │ Router   │  │ Nudge    │  │ Server   │        │
-│  │ (2min)   │  │ (2min)   │  │ (2min)   │  │          │        │
+│  │ Check    │  │ (2min)   │  │ (2min)   │  │ Server   │        │
+│  │ (2min)   │  │ Router   │  │ Nudge    │  │          │        │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘        │
 └────────────────────────────────┬────────────────────────────────┘
                                  │
@@ -211,6 +211,29 @@ External tools can integrate via:
 | **Socket API** | Custom CLIs, automation | [`docs/extending/SOCKET_API.md`](docs/extending/SOCKET_API.md) |
 
 **Note:** Web UIs, event hooks, and notification systems are explicitly out of scope per ROADMAP.md.
+
+### For LLMs: Keeping Extension Docs Updated
+
+**CRITICAL:** When modifying multiclaude core, keep extension documentation **code-first and drift-free**. Never document an API/command/event that does not exist on `main`. If something is planned, mark it `[PLANNED]` until it ships. Always run `go run ./cmd/verify-docs` on doc or API changes.
+
+1. **State Schema Changes** (`internal/state/state.go`)
+   - Update: [`docs/extending/STATE_FILE_INTEGRATION.md`](docs/extending/STATE_FILE_INTEGRATION.md)
+   - Update schema reference section
+   - Update all code examples showing state structure
+   - Run: `go run ./cmd/verify-docs`
+
+2. **Socket Command Changes** (`internal/daemon/daemon.go`)
+   - Update: [`docs/extending/SOCKET_API.md`](docs/extending/SOCKET_API.md)
+   - Add/update command reference entries
+   - Add code examples for new commands
+   - Update client library examples if needed
+
+**Pattern:** After any internal/* or pkg/* changes, search extension docs for outdated references:
+```bash
+# Find docs that might need updating
+grep -r "internal/state" docs/extending/
+grep -r "socket.Request" docs/extending/
+```
 
 ## Contributing Checklist
 

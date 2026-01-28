@@ -156,6 +156,10 @@ type Agent struct {
 }
 
 // Repository represents a tracked repository's state
+// NOTE: This schema is an extension surface. When adding or changing fields,
+// update docs/extending/STATE_FILE_INTEGRATION.md and rerun
+// `go run ./cmd/verify-docs` so downstream readers/LLMs and OpenAPI consumers
+// stay in sync.
 type Repository struct {
 	GithubURL        string             `json:"github_url"`
 	TmuxSession      string             `json:"tmux_session"`
