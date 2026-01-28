@@ -294,8 +294,8 @@ func TestWorktreeCreationFailed_SpecificSuggestions(t *testing.T) {
 	}{
 		{
 			name:         "branch already exists with name",
-			causeMsg:     "failed to create worktree: exit status 128\nOutput: fatal: a branch named 'work/nice-owl' already exists",
-			wantContains: []string{"work/nice-owl", "multiclaude cleanup", "git branch -D work/nice-owl"},
+			causeMsg:     "failed to create worktree: exit status 128\nOutput: fatal: a branch named 'multiclaude/nice-owl' already exists",
+			wantContains: []string{"multiclaude/nice-owl", "multiclaude cleanup", "git branch -D multiclaude/nice-owl"},
 		},
 		{
 			name:         "generic branch already exists",
@@ -363,7 +363,7 @@ func TestExtractQuotedValue(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"fatal: a branch named 'work/nice-owl' already exists", "work/nice-owl"},
+		{"fatal: a branch named 'multiclaude/nice-owl' already exists", "multiclaude/nice-owl"},
 		{"some error 'value' here", "value"},
 		{"no quotes here", ""},
 		{"'only-one-quote", ""},

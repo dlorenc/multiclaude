@@ -2104,7 +2104,7 @@ func (c *CLI) createWorker(args []string) error {
 	if hasPushTo {
 		// --push-to requires --branch to specify the remote branch to start from
 		if _, hasBranch := flags["branch"]; !hasBranch {
-			return errors.InvalidUsage("--push-to requires --branch to specify the remote branch (e.g., --branch origin/work/jolly-hawk --push-to work/jolly-hawk)")
+			return errors.InvalidUsage("--push-to requires --branch to specify the remote branch (e.g., --branch origin/multiclaude/jolly-hawk --push-to multiclaude/jolly-hawk)")
 		}
 	}
 
@@ -2175,7 +2175,7 @@ func (c *CLI) createWorker(args []string) error {
 		}
 	} else {
 		// Normal case: create a new branch for this worker
-		branchName = fmt.Sprintf("work/%s", workerName)
+		branchName = fmt.Sprintf("multiclaude/%s", workerName)
 		fmt.Printf("Creating worktree at: %s\n", wtPath)
 		if err := wt.CreateNewBranch(wtPath, branchName, startBranch); err != nil {
 			return errors.WorktreeCreationFailed(err)
@@ -5163,8 +5163,12 @@ func (c *CLI) localCleanup(dryRun bool, verbose bool) error {
 				}
 			}
 
-			// Clean up orphaned work/* and workspace/* branches
-			removed, issues := c.cleanupOrphanedBranchesWithPrefix(wt, "work/", repoName, dryRun, verbose)
+			// Clean up orphaned multiclaude/*, work/* (legacy), and workspace/* branches
+			removed, issues := c.cleanupOrphanedBranchesWithPrefix(wt, "multiclaude/", repoName, dryRun, verbose)
+			totalRemoved += removed
+			totalIssues += issues
+
+			removed, issues = c.cleanupOrphanedBranchesWithPrefix(wt, "work/", repoName, dryRun, verbose)
 			totalRemoved += removed
 			totalIssues += issues
 

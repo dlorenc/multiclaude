@@ -1194,7 +1194,7 @@ func TestFindMergedUpstreamBranches(t *testing.T) {
 		manager := NewManager(repoPath)
 
 		// Create a branch that is already merged (same as main)
-		createBranch(t, repoPath, "work/test-feature")
+		createBranch(t, repoPath, "multiclaude/test-feature")
 
 		// Add origin remote
 		cmd := exec.Command("git", "remote", "add", "origin", repoPath)
@@ -1206,7 +1206,7 @@ func TestFindMergedUpstreamBranches(t *testing.T) {
 		cmd.Run()
 
 		// Find merged branches
-		merged, err := manager.FindMergedUpstreamBranches("work/")
+		merged, err := manager.FindMergedUpstreamBranches("multiclaude/")
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -1214,7 +1214,7 @@ func TestFindMergedUpstreamBranches(t *testing.T) {
 		// The branch should be found since it's at the same commit as main
 		found := false
 		for _, b := range merged {
-			if b == "work/test-feature" {
+			if b == "multiclaude/test-feature" {
 				found = true
 				break
 			}
@@ -1231,7 +1231,7 @@ func TestFindMergedUpstreamBranches(t *testing.T) {
 		manager := NewManager(repoPath)
 
 		// Create a branch and add a commit to it
-		cmd := exec.Command("git", "checkout", "-b", "work/unmerged-feature")
+		cmd := exec.Command("git", "checkout", "-b", "multiclaude/unmerged-feature")
 		cmd.Dir = repoPath
 		cmd.Run()
 
@@ -1262,14 +1262,14 @@ func TestFindMergedUpstreamBranches(t *testing.T) {
 		cmd.Run()
 
 		// Find merged branches
-		merged, err := manager.FindMergedUpstreamBranches("work/")
+		merged, err := manager.FindMergedUpstreamBranches("multiclaude/")
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
 
 		// The unmerged branch should NOT be found
 		for _, b := range merged {
-			if b == "work/unmerged-feature" {
+			if b == "multiclaude/unmerged-feature" {
 				t.Error("Unmerged branch should not be in the merged list")
 			}
 		}
@@ -1282,8 +1282,8 @@ func TestFindMergedUpstreamBranches(t *testing.T) {
 		manager := NewManager(repoPath)
 
 		// Create branches with different prefixes
-		createBranch(t, repoPath, "work/test")
 		createBranch(t, repoPath, "multiclaude/test")
+		createBranch(t, repoPath, "workspace/test")
 		createBranch(t, repoPath, "feature/test")
 
 		// Add origin remote
@@ -1295,15 +1295,15 @@ func TestFindMergedUpstreamBranches(t *testing.T) {
 		cmd.Dir = repoPath
 		cmd.Run()
 
-		// Find merged branches with work/ prefix
-		merged, err := manager.FindMergedUpstreamBranches("work/")
+		// Find merged branches with multiclaude/ prefix
+		merged, err := manager.FindMergedUpstreamBranches("multiclaude/")
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
 
-		// Should only find work/test
+		// Should only find multiclaude/test
 		for _, b := range merged {
-			if !strings.HasPrefix(b, "work/") {
+			if !strings.HasPrefix(b, "multiclaude/") {
 				t.Errorf("Branch %s should not be included (wrong prefix)", b)
 			}
 		}
@@ -1484,13 +1484,13 @@ func TestListBranchesWithPrefix(t *testing.T) {
 		manager := NewManager(repoPath)
 
 		// Create branches with different prefixes
-		createBranch(t, repoPath, "work/feature-1")
-		createBranch(t, repoPath, "work/feature-2")
-		createBranch(t, repoPath, "multiclaude/agent-1")
+		createBranch(t, repoPath, "multiclaude/feature-1")
+		createBranch(t, repoPath, "multiclaude/feature-2")
+		createBranch(t, repoPath, "workspace/agent-1")
 		createBranch(t, repoPath, "other/branch")
 
-		// List work/ branches
-		branches, err := manager.ListBranchesWithPrefix("work/")
+		// List multiclaude/ branches
+		branches, err := manager.ListBranchesWithPrefix("multiclaude/")
 		if err != nil {
 			t.Fatalf("Failed to list branches: %v", err)
 		}
@@ -1499,19 +1499,19 @@ func TestListBranchesWithPrefix(t *testing.T) {
 			t.Errorf("Expected 2 branches, got %d: %v", len(branches), branches)
 		}
 
-		// Verify both work/ branches are in the list
+		// Verify both multiclaude/ branches are in the list
 		foundFeature1 := false
 		foundFeature2 := false
 		for _, b := range branches {
-			if b == "work/feature-1" {
+			if b == "multiclaude/feature-1" {
 				foundFeature1 = true
 			}
-			if b == "work/feature-2" {
+			if b == "multiclaude/feature-2" {
 				foundFeature2 = true
 			}
 		}
 		if !foundFeature1 || !foundFeature2 {
-			t.Errorf("Expected to find work/feature-1 and work/feature-2, got: %v", branches)
+			t.Errorf("Expected to find multiclaude/feature-1 and multiclaude/feature-2, got: %v", branches)
 		}
 	})
 
@@ -1557,19 +1557,19 @@ func TestFindOrphanedBranches(t *testing.T) {
 		manager := NewManager(repoPath)
 
 		// Create branches
-		createBranch(t, repoPath, "work/orphan-1")
-		createBranch(t, repoPath, "work/orphan-2")
-		createBranch(t, repoPath, "work/active")
+		createBranch(t, repoPath, "multiclaude/orphan-1")
+		createBranch(t, repoPath, "multiclaude/orphan-2")
+		createBranch(t, repoPath, "multiclaude/active")
 
 		// Create a worktree for one branch
 		wtPath := filepath.Join(repoPath, "wt-active")
-		if err := manager.Create(wtPath, "work/active"); err != nil {
+		if err := manager.Create(wtPath, "multiclaude/active"); err != nil {
 			t.Fatalf("Failed to create worktree: %v", err)
 		}
 		defer manager.Remove(wtPath, true)
 
 		// Find orphaned branches
-		orphaned, err := manager.FindOrphanedBranches("work/")
+		orphaned, err := manager.FindOrphanedBranches("multiclaude/")
 		if err != nil {
 			t.Fatalf("Failed to find orphaned branches: %v", err)
 		}
@@ -1580,7 +1580,7 @@ func TestFindOrphanedBranches(t *testing.T) {
 		}
 
 		for _, b := range orphaned {
-			if b == "work/active" {
+			if b == "multiclaude/active" {
 				t.Error("Active branch should not be in orphaned list")
 			}
 		}
@@ -1593,15 +1593,15 @@ func TestFindOrphanedBranches(t *testing.T) {
 		manager := NewManager(repoPath)
 
 		// Create a branch and a worktree for it
-		createBranch(t, repoPath, "work/active")
+		createBranch(t, repoPath, "multiclaude/active")
 
 		wtPath := filepath.Join(repoPath, "wt-active")
-		if err := manager.Create(wtPath, "work/active"); err != nil {
+		if err := manager.Create(wtPath, "multiclaude/active"); err != nil {
 			t.Fatalf("Failed to create worktree: %v", err)
 		}
 		defer manager.Remove(wtPath, true)
 
-		orphaned, err := manager.FindOrphanedBranches("work/")
+		orphaned, err := manager.FindOrphanedBranches("multiclaude/")
 		if err != nil {
 			t.Fatalf("Failed to find orphaned branches: %v", err)
 		}
@@ -1618,21 +1618,21 @@ func TestFindOrphanedBranches(t *testing.T) {
 		manager := NewManager(repoPath)
 
 		// Create branches with different prefixes
-		createBranch(t, repoPath, "work/orphan")
 		createBranch(t, repoPath, "multiclaude/orphan")
+		createBranch(t, repoPath, "workspace/orphan")
 
-		// Find orphaned branches with work/ prefix
-		orphaned, err := manager.FindOrphanedBranches("work/")
+		// Find orphaned branches with multiclaude/ prefix
+		orphaned, err := manager.FindOrphanedBranches("multiclaude/")
 		if err != nil {
 			t.Fatalf("Failed to find orphaned branches: %v", err)
 		}
 
-		// Should only find work/orphan
+		// Should only find multiclaude/orphan
 		if len(orphaned) != 1 {
 			t.Errorf("Expected 1 orphaned branch, got %d: %v", len(orphaned), orphaned)
 		}
-		if len(orphaned) > 0 && orphaned[0] != "work/orphan" {
-			t.Errorf("Expected work/orphan, got: %s", orphaned[0])
+		if len(orphaned) > 0 && orphaned[0] != "multiclaude/orphan" {
+			t.Errorf("Expected multiclaude/orphan, got: %s", orphaned[0])
 		}
 	})
 }
@@ -1765,10 +1765,10 @@ func TestCleanupMergedBranches(t *testing.T) {
 		manager := NewManager(repoPath)
 
 		// Create a merged branch
-		createBranch(t, repoPath, "work/merged-test")
+		createBranch(t, repoPath, "multiclaude/merged-test")
 
 		// Verify branch exists
-		exists, _ := manager.BranchExists("work/merged-test")
+		exists, _ := manager.BranchExists("multiclaude/merged-test")
 		if !exists {
 			t.Fatal("Branch should exist before cleanup")
 		}
@@ -1783,7 +1783,7 @@ func TestCleanupMergedBranches(t *testing.T) {
 		cmd.Run()
 
 		// Clean up merged branches
-		deleted, err := manager.CleanupMergedBranches("work/", false)
+		deleted, err := manager.CleanupMergedBranches("multiclaude/", false)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -1793,7 +1793,7 @@ func TestCleanupMergedBranches(t *testing.T) {
 		}
 
 		// Verify branch is deleted
-		exists, _ = manager.BranchExists("work/merged-test")
+		exists, _ = manager.BranchExists("multiclaude/merged-test")
 		if exists {
 			t.Error("Branch should be deleted after cleanup")
 		}
@@ -1806,12 +1806,12 @@ func TestCleanupMergedBranches(t *testing.T) {
 		manager := NewManager(repoPath)
 
 		// Create a branch and a worktree for it
-		createBranch(t, repoPath, "work/active-branch")
+		createBranch(t, repoPath, "multiclaude/active-branch")
 
 		wtPath := filepath.Join(repoPath, "worktrees", "active")
 		os.MkdirAll(filepath.Dir(wtPath), 0755)
 
-		err := manager.Create(wtPath, "work/active-branch")
+		err := manager.Create(wtPath, "multiclaude/active-branch")
 		if err != nil {
 			t.Fatalf("Failed to create worktree: %v", err)
 		}
@@ -1827,20 +1827,20 @@ func TestCleanupMergedBranches(t *testing.T) {
 		cmd.Run()
 
 		// Clean up merged branches
-		deleted, err := manager.CleanupMergedBranches("work/", false)
+		deleted, err := manager.CleanupMergedBranches("multiclaude/", false)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
 
 		// The active branch should NOT be deleted
 		for _, b := range deleted {
-			if b == "work/active-branch" {
+			if b == "multiclaude/active-branch" {
 				t.Error("Active branch should not be deleted")
 			}
 		}
 
 		// Verify branch still exists
-		exists, _ := manager.BranchExists("work/active-branch")
+		exists, _ := manager.BranchExists("multiclaude/active-branch")
 		if !exists {
 			t.Error("Active branch should still exist")
 		}
@@ -2845,21 +2845,21 @@ func TestDeleteRemoteBranch(t *testing.T) {
 		}
 
 		// Create and push a branch
-		createBranch(t, repoPath, "work/to-delete")
-		cmd = exec.Command("git", "push", "-u", "origin", "work/to-delete")
+		createBranch(t, repoPath, "multiclaude/to-delete")
+		cmd = exec.Command("git", "push", "-u", "origin", "multiclaude/to-delete")
 		cmd.Dir = repoPath
 		if err := cmd.Run(); err != nil {
 			t.Fatalf("Failed to push branch: %v", err)
 		}
 
 		// Delete the remote branch
-		err = manager.DeleteRemoteBranch("origin", "work/to-delete")
+		err = manager.DeleteRemoteBranch("origin", "multiclaude/to-delete")
 		if err != nil {
 			t.Fatalf("DeleteRemoteBranch failed: %v", err)
 		}
 
 		// Verify branch was deleted from remote
-		cmd = exec.Command("git", "ls-remote", "--heads", "origin", "work/to-delete")
+		cmd = exec.Command("git", "ls-remote", "--heads", "origin", "multiclaude/to-delete")
 		cmd.Dir = repoPath
 		output, _ := cmd.Output()
 		if len(output) > 0 {
@@ -2948,10 +2948,10 @@ func TestCleanupMergedBranchesWithRemoteDeletion(t *testing.T) {
 		}
 
 		// Create a merged branch
-		createBranch(t, repoPath, "work/merged-remote")
+		createBranch(t, repoPath, "multiclaude/merged-remote")
 
 		// Push the branch
-		cmd = exec.Command("git", "push", "-u", "origin", "work/merged-remote")
+		cmd = exec.Command("git", "push", "-u", "origin", "multiclaude/merged-remote")
 		cmd.Dir = repoPath
 		if err := cmd.Run(); err != nil {
 			t.Fatalf("Failed to push branch: %v", err)
@@ -2965,7 +2965,7 @@ func TestCleanupMergedBranchesWithRemoteDeletion(t *testing.T) {
 		}
 
 		// Clean up merged branches with remote deletion
-		deleted, err := manager.CleanupMergedBranches("work/", true)
+		deleted, err := manager.CleanupMergedBranches("multiclaude/", true)
 		if err != nil {
 			t.Fatalf("CleanupMergedBranches failed: %v", err)
 		}
@@ -2975,13 +2975,13 @@ func TestCleanupMergedBranchesWithRemoteDeletion(t *testing.T) {
 		}
 
 		// Verify local branch is deleted
-		exists, _ := manager.BranchExists("work/merged-remote")
+		exists, _ := manager.BranchExists("multiclaude/merged-remote")
 		if exists {
 			t.Error("Local branch should be deleted")
 		}
 
 		// Verify remote branch is deleted
-		cmd = exec.Command("git", "ls-remote", "--heads", "origin", "work/merged-remote")
+		cmd = exec.Command("git", "ls-remote", "--heads", "origin", "multiclaude/merged-remote")
 		cmd.Dir = repoPath
 		output, _ := cmd.Output()
 		if len(output) > 0 {

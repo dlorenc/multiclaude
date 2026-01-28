@@ -1109,7 +1109,7 @@ func TestTaskHistory(t *testing.T) {
 	entry1 := TaskHistoryEntry{
 		Name:        "worker-1",
 		Task:        "Implement feature A",
-		Branch:      "work/worker-1",
+		Branch:      "multiclaude/worker-1",
 		Status:      TaskStatusUnknown,
 		CreatedAt:   time.Now().Add(-2 * time.Hour),
 		CompletedAt: time.Now().Add(-1 * time.Hour),
@@ -1117,7 +1117,7 @@ func TestTaskHistory(t *testing.T) {
 	entry2 := TaskHistoryEntry{
 		Name:        "worker-2",
 		Task:        "Fix bug B",
-		Branch:      "work/worker-2",
+		Branch:      "multiclaude/worker-2",
 		PRURL:       "https://github.com/test/repo/pull/123",
 		PRNumber:    123,
 		Status:      TaskStatusMerged,
@@ -1226,7 +1226,7 @@ func TestUpdateTaskHistoryStatus(t *testing.T) {
 	entry := TaskHistoryEntry{
 		Name:        "worker-1",
 		Task:        "Implement feature A",
-		Branch:      "work/worker-1",
+		Branch:      "multiclaude/worker-1",
 		Status:      TaskStatusUnknown,
 		CreatedAt:   time.Now().Add(-1 * time.Hour),
 		CompletedAt: time.Now(),
@@ -1281,7 +1281,7 @@ func TestTaskHistoryPersistence(t *testing.T) {
 	entry := TaskHistoryEntry{
 		Name:        "worker-1",
 		Task:        "Implement feature A",
-		Branch:      "work/worker-1",
+		Branch:      "multiclaude/worker-1",
 		PRURL:       "https://github.com/test/repo/pull/789",
 		PRNumber:    789,
 		Status:      TaskStatusMerged,

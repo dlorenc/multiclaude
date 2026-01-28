@@ -425,7 +425,7 @@ func (m *Manager) FetchRemote(remote string) error {
 
 // FindMergedUpstreamBranches finds local branches that have been merged into the upstream default branch.
 // It fetches from the upstream remote first to ensure we have the latest state.
-// The branchPrefix filters which branches to check (e.g., "multiclaude/" or "work/").
+// The branchPrefix filters which branches to check (e.g., "multiclaude/" or "workspace/").
 // Returns a list of branch names that can be safely deleted.
 func (m *Manager) FindMergedUpstreamBranches(branchPrefix string) ([]string, error) {
 	// Get the upstream remote name

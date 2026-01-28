@@ -170,7 +170,7 @@ func TestPhase2Integration(t *testing.T) {
 
 		// Create worktree
 		wt := worktree.NewManager(repoPath)
-		if err := wt.CreateNewBranch(workerPath, "work/test-worker", "HEAD"); err != nil {
+		if err := wt.CreateNewBranch(workerPath, "multiclaude/test-worker", "HEAD"); err != nil {
 			t.Fatalf("Failed to create worktree: %v", err)
 		}
 
