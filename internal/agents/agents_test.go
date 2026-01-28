@@ -248,7 +248,6 @@ func TestMergeDefinitionsContentFormat(t *testing.T) {
 	}
 }
 
-
 func TestReadAllDefinitions(t *testing.T) {
 	// Create temp directory structure
 	tmpDir, err := os.MkdirTemp("", "agents-test-*")
